@@ -1,0 +1,5 @@
+(library
+ (name refined_core)
+ (public_name refined_ocaml.core)
+ (libraries compiler-libs.common unix))
+

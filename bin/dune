@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (public_name refined-ocaml)
+ (libraries refined_core compiler-libs.common unix))
+

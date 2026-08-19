@@ -1,0 +1,9 @@
+(test
+ (name test_runner)
+ (libraries refined_core)
+ (deps ../examples/valid.ml ../examples/invalid.ml))
+
+(executable
+ (name ppx_sample)
+ (preprocess (pps refined_ocaml.ppx)))
+
