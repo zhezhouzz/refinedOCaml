@@ -62,6 +62,16 @@ let () =
           prerr_endline "--emit-rmi requires exactly one .cmti input";
           exit 2)
   | None -> ());
+  List.iter
+    (fun file ->
+      if not (Filename.check_suffix file ".cmt") then (
+        Printf.eprintf
+          "%s: expected a typed .cmt implementation; compile the .ml file with \
+           -bin-annot first\n\
+           %!"
+          file;
+        exit 2))
+    !files;
   Option.iter
     (fun dir -> if not (Sys.file_exists dir) then Unix.mkdir dir 0o755)
     !emit_dir;
@@ -69,12 +79,7 @@ let () =
   List.rev !files
   |> List.iter (fun file ->
       try
-        (if
-           Filename.check_suffix file ".cmt"
-           || Filename.check_suffix file ".cmti"
-         then
-           obligations_of_cmt_with_theories ~theories:(List.rev !theories) file
-         else obligations_of_file file)
+        obligations_of_cmt_with_theories ~theories:(List.rev !theories) file
         |> List.iter (fun obligation ->
             Option.iter (fun dir -> write_smt dir obligation) !emit_dir;
             let verdict = solve obligation in

@@ -20,8 +20,6 @@ let require expected obligation =
       failwith (obligation.name ^ " should be invalid")
 
 let () =
-  obligations_of_file "../examples/valid.ml" |> List.iter (require `Valid);
-  obligations_of_file "../examples/invalid.ml" |> List.iter (require `Invalid);
   let compile source output =
     let command =
       Printf.sprintf "ocamlc -bin-annot -c %s -o %s.cmo" (Filename.quote source)

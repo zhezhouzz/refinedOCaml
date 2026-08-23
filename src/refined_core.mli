@@ -9,7 +9,6 @@ type obligation = {
   trusted_axioms : string list;
 }
 
-val obligations_of_file : string -> obligation list
 val obligations_of_cmt : string -> obligation list
 
 val obligations_of_cmt_with_theories :

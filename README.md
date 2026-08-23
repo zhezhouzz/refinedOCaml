@@ -41,7 +41,7 @@ dune exec refined-ocaml -- --emit-smt work/smt examples/valid.cmt
 dune build @refined
 ```
 
-仓库仍保留早期直接读取 `.ml/Parsetree` 的兼容入口；MVP 和自动测试的权威路径是 `.cmt`。
+CLI 只接受完成普通 OCaml typing 后生成的 `.cmt` implementation。
 
 ## PPX 的职责
 
