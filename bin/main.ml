@@ -2,13 +2,22 @@ open Refined_core
 
 let files = ref []
 let emit_dir = ref None
-
+let theories = ref []
+let rmi_output = ref None
 let add_file file = files := file :: !files
 
 let options =
-  [ ( "--emit-smt",
+  [
+    ( "--emit-smt",
       Arg.String (fun path -> emit_dir := Some path),
-      "DIR write every generated SMT-LIB obligation to DIR" ) ]
+      "DIR write every generated SMT-LIB obligation to DIR" );
+    ( "--theory",
+      Arg.String (fun path -> theories := path :: !theories),
+      "FILE.rmi import a separately compiled refinement theory" );
+    ( "--emit-rmi",
+      Arg.String (fun path -> rmi_output := Some path),
+      "FILE write the theory exported by one input .cmti and exit" );
+  ]
 
 let write_smt dir obligation =
   let mode = mode_name obligation.mode in
@@ -23,36 +32,61 @@ let report obligation verdict =
   let prefix =
     Printf.sprintf "%s:%d:%d: %s %s" pos.pos_fname pos.pos_lnum
       (pos.pos_cnum - pos.pos_bol + 1)
-      (mode_name obligation.mode) obligation.name
+      (mode_name obligation.mode)
+      obligation.name
   in
-  match verdict with
+  (match verdict with
   | Valid -> Printf.printf "%s: valid\n%!" prefix
-  | Invalid model ->
-      Printf.printf "%s: INVALID\n%s\n%!" prefix model
-  | Unknown reason -> Printf.printf "%s: unknown\n%s\n%!" prefix reason
+  | Invalid model -> Printf.printf "%s: INVALID\n%s\n%!" prefix model
+  | Unknown reason -> Printf.printf "%s: unknown\n%s\n%!" prefix reason);
+  if obligation.trusted_axioms <> [] then
+    Printf.printf "  trusted axioms: %s\n%!"
+      (String.concat ", " obligation.trusted_axioms)
 
 let () =
   Arg.parse options add_file
-    "refined-ocaml [--emit-smt DIR] FILE.ml ...\n\nChecks [@refined.over] and [@refined.under] contracts.";
-  if !files = [] then (Arg.usage options "refined-ocaml FILE.ml ..."; exit 2);
+    "refined-ocaml [--theory FILE.rmi] [--emit-smt DIR] FILE.cmt ...\n\n\
+     Checks [@refined.over] and [@refined.coverage] contracts after OCaml \
+     typing.";
+  if !files = [] then (
+    Arg.usage options "refined-ocaml FILE.cmt ...";
+    exit 2);
+  (match !rmi_output with
+  | Some output -> (
+      match List.rev !files with
+      | [ cmti ] ->
+          write_rmi ~cmti ~output;
+          Printf.printf "%s: wrote refinement interface %s\n%!" cmti output;
+          exit 0
+      | _ ->
+          prerr_endline "--emit-rmi requires exactly one .cmti input";
+          exit 2)
+  | None -> ());
   Option.iter
     (fun dir -> if not (Sys.file_exists dir) then Unix.mkdir dir 0o755)
     !emit_dir;
   let failures = ref 0 in
   List.rev !files
   |> List.iter (fun file ->
-         try
-           obligations_of_file file
-           |> List.iter (fun obligation ->
-                  Option.iter (fun dir -> write_smt dir obligation) !emit_dir;
-                  let verdict = solve obligation in
-                  report obligation verdict;
-                  match verdict with Valid -> () | Invalid _ | Unknown _ -> incr failures)
-         with
-         | Location.Error error ->
-             Location.print_report Format.err_formatter error;
-             incr failures
-         | Sys_error message ->
-             prerr_endline message;
-             incr failures);
+      try
+        (if
+           Filename.check_suffix file ".cmt"
+           || Filename.check_suffix file ".cmti"
+         then
+           obligations_of_cmt_with_theories ~theories:(List.rev !theories) file
+         else obligations_of_file file)
+        |> List.iter (fun obligation ->
+            Option.iter (fun dir -> write_smt dir obligation) !emit_dir;
+            let verdict = solve obligation in
+            report obligation verdict;
+            match verdict with
+            | Valid -> ()
+            | Invalid _ | Unknown _ -> incr failures)
+      with
+      | Location.Error error ->
+          Location.print_report Format.err_formatter error;
+          incr failures
+      | Sys_error message ->
+          prerr_endline message;
+          incr failures);
   if !failures <> 0 then exit 1

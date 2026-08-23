@@ -1,9 +1,30 @@
 (test
  (name test_runner)
  (libraries refined_core)
- (deps ../examples/valid.ml ../examples/invalid.ml))
+ (deps
+  ../examples/valid.ml
+  ../examples/invalid.ml
+  ../examples/theory.ml
+  ../examples/theory_missing.ml
+  ../examples/choice.ml
+  ../examples/choice_incomplete.ml
+  ../examples/polymorphic.ml
+  ../examples/tuple.ml
+  ../examples/unsupported.ml
+  ../examples/list_theory.mli
+  ../examples/list_theory_changed.mli
+  ../examples/list_theory.ml
+  ../examples/theory_client.ml
+  ../examples/theory_bool_client.ml
+  ../examples/theory_private_client.ml
+  ../examples/ill_typed.ml))
 
 (executable
  (name ppx_sample)
+ (modules ppx_sample)
  (preprocess (pps refined_ocaml.ppx)))
 
+(executable
+ (name ppx_theory_sample)
+ (modules ppx_theory_sample)
+ (preprocess (pps refined_ocaml.ppx)))

@@ -1,6 +1,11 @@
+maintainer: ["asukaminato0721"]
+authors: ["asukaminato0721"]
+homepage: "https://github.com/asukaminato0721/refinedOCaml"
+bug-reports: "https://github.com/asukaminato0721/refinedOCaml/issues"
+
 depends: [
-  "ocaml" {>= "5.2"}
+  "ocaml" {= "5.3.0"}
   "dune" {>= "3.18"}
   "ppxlib" {>= "0.35"}
+  "odoc" {with-doc}
 ]
-

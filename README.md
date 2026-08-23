@@ -1,59 +1,121 @@
 # refinedOCaml
 
-`refinedOCaml` 是一个把双向 refinement types 植入 OCaml 的研究原型。它同时表达：
+`refinedOCaml` 是一个把双向 refinement types 植入 OCaml 的研究原型：
 
 - **over-approximation**：所有实际结果都满足后置条件，用来证明 safety/correctness；
-- **under-approximation**：后置条件描述的每个结果都确实可达，用来证明 reachability/incorrectness。
+- **coverage/under-approximation**：后置条件中的每个结果都确实可达，用来证明 coverage、
+  reachability 或 incorrectness。
 
-它不会把用户 datatype 偷换成求解器内建 datatype。每个 OCaml ADT 默认编码为一个
-**uninterpreted sort**，构造器、recognizer 和 selector 都是 uninterpreted symbols，代数性质由
-生成的显式 axioms 给出。
+用户 datatype 不会被偷偷换成 SMT native datatype。每个 ADT 默认编码为 uninterpreted sort；
+constructor、recognizer 和 selector 都是 uninterpreted symbols，代数性质由可查看的 axioms 给出。
 
-## 当前可运行的原型
+当前 versioned frontend 针对 OCaml 5.3.0；运行验证还需要 `z3` 可执行文件。
+
+## 当前 MVP
+
+权威验证路径运行在 OCaml 普通类型检查之后：
+
+```text
+.ml → OCaml/PPX → Typedtree (.cmt/.cmti) → refined Core → SMT → Z3
+```
+
+因此 checker 使用的是 OCaml 已解析和实例化的 `Types.type_expr`、`Path.t`、`Ident.t` 以及
+constructor/field UID，不会重新猜普通 OCaml 类型。普通类型错误产生的 partial Typedtree 会被拒绝。
 
 ```ocaml
 let[@refined.over { pre = "x >= 0"; post = "result > x" }]
     succ (x : int) : int =
   x + 1
 
-let[@refined.under { pre = "x >= 0"; post = "result >= 1" }]
+let[@refined.coverage { pre = "x >= 0"; post = "result >= 1" }]
     positive_range (x : int) : int =
   x + 1
 ```
 
-验证：
+编译并验证：
 
 ```sh
-dune build
-dune exec refined-ocaml -- examples/valid.ml
-dune exec refined-ocaml -- --emit-smt work/smt examples/valid.ml
-dune runtest
+ocamlc -bin-annot -c examples/valid.ml
+dune exec refined-ocaml -- examples/valid.cmt
+dune exec refined-ocaml -- --emit-smt work/smt examples/valid.cmt
+dune build @refined
 ```
 
-PPX `refined_ocaml.ppx` 检查属性形状，并在真正编译 OCaml 时去掉验证专用属性：
+仓库仍保留早期直接读取 `.ml/Parsetree` 的兼容入口；MVP 和自动测试的权威路径是 `.cmt`。
+
+## PPX 的职责
+
+`refined_ocaml.ppx` 检查 contract attribute 的形状，并刻意保留 attributes，使其进入 Typedtree：
 
 ```lisp
 (preprocess (pps refined_ocaml.ppx))
 ```
 
-验证器仍应独立地在原始 `.ml` 文件上运行；PPX 不是可信验证核心，也不在编译过程中偷偷写
-sidecar 文件。
+PPX 不执行 refinement checking，也不写 sidecar 文件。
 
-## 两种 refinement 的精确定义
+## 两种 refinement
 
 对纯函数 `f : X -> Y`：
 
 ```text
-over  {P} f {Q}    ≜    ∀x. P(x) ⇒ Q(x, f(x))
-under [P] f [Q]    ≜    ∀y. Q(y) ⇒ ∃x. P(x) ∧ y = f(x)
+over     {P} f {Q} ≜ ∀x. P(x) ⇒ Q(x, f(x))
+coverage [P] f [Q] ≜ ∀y. Q(y) ⇒ ∃x. P(x) ∧ y = f(x)
 ```
 
-因此 under 合约描述的是函数 image 的一个下界。它不是把普通 Hoare triple 的蕴含方向机械
-反转。当前 under 的 `post` 只应引用 `result`；后续版本会加入显式 ghost variables，以表达输入/
-输出状态之间的可达关系。
+Coverage contract 描述函数 image 的一个下界，并不是机械反转普通 Hoare triple。当前 coverage
+`post` 只能引用 `result`；后续会加入 ghost variables 表达输入/输出状态关系。
 
-验证器把 over 的反例和 under 的“缺失结果”分别交给 Z3：两者都是查找否定公式是否
-`unsat`。`sat` 时输出模型。
+验证器把 safety 反例和 coverage 的缺失结果交给 Z3：`unsat` 表示 contract 成立；`sat` 时输出
+model。`unknown` 永远不是成功。
+
+## 同一个函数的 upper/lower bounds
+
+同一 binding 可以同时声明 safety 和 coverage：
+
+```ocaml
+external choose : int -> int -> int = "refined_choose" [@@refined.choose]
+
+let[@refined.over
+      { pre = "true"; post = "result = 0 || result = 1" }]
+   [@refined.coverage
+      { pre = "true"; post = "result = 0 || result = 1" }]
+    bit (_unit : unit) : int =
+  choose 0 1
+```
+
+如果实现改成恒定返回 `0`，safety 仍成立，但 coverage 会报告 `missing_result = 1`。
+`refined.under` 是 `refined.coverage` 的兼容别名。
+
+## Module theories 与 separate compilation
+
+Module signature 可以导出 uninterpreted predicates 和 trusted axioms：
+
+```ocaml
+val mem : 'a list -> 'a -> bool [@@refined.predicate]
+val hd : 'a list -> 'a -> bool [@@refined.predicate]
+
+[@@@refined.axiom
+  {
+    name = "hd_mem";
+    vars = [ ("l", "'a list"); ("x", "'a") ];
+    body = "implies (hd l x) (mem l x)";
+  }]
+```
+
+从 `.cmti` 生成带 `.cmi` digest 的 refinement interface：
+
+```sh
+refined-ocaml --emit-rmi list_theory.rmi list_theory.cmti
+refined-ocaml --theory list_theory.rmi client.cmt
+```
+
+客户端只能获得 `.mli/.rmi` 导出的 theory；实现文件里的 private axiom 不会泄漏。验证结果会列出
+本次信任的用户 axioms；过期或不属于客户端 imports 的 `.rmi` 会被拒绝。
+
+这里的 `'a` 在每个 obligation 中根据 Typedtree use-site type 实例化；例如两个客户端会分别得到
+`mem$int : int list × int → Bool` 和 `mem$bool : bool list × Bool → Bool`，而不是一个全局 `Any` sort。
+
+目前 `axiom` 属于 trusted computing base。后续的 `lemma` 会先验证再导出。
 
 ## ADT 编码
 
@@ -63,7 +125,7 @@ under [P] f [Q]    ≜    ∀y. Q(y) ⇒ ∃x. P(x) ∧ y = f(x)
 type nat = Z | S of nat
 ```
 
-会产生形如下面的 SMT 签名：
+产生形如：
 
 ```smt2
 (declare-sort T_nat 0)
@@ -74,47 +136,43 @@ type nat = Z | S of nat
 (declare-fun sel_C_nat_S_0 (T_nat) T_nat)
 ```
 
-以及显式 axioms：
+自动 axioms 提供 recognition、cross-constructor exclusion、selector reduction、reconstruction 和
+constructor coverage，从而得到 disjointness、injectivity 与 exhaustiveness。
 
-- 构造结果满足相应 recognizer；
-- 不同构造器互斥；
-- selector 在对应构造结果上返回参数；
-- recognizer 蕴含用 selectors 重建原值；
-- 每个 carrier 元素至少属于一个构造器。
+默认**没有 induction axiom**，所以模型仍可能包含非标准或循环元素。需要归纳时必须通过
+well-founded measure、checked lemma 或有限展开显式引入。
 
-这些 axioms 给出 disjointness、injectivity、exhaustiveness，但**默认没有 induction axiom**。
-因此模型仍可包含非标准或循环元素。需要归纳证明时，计划通过 well-founded measure、用户 lemma
-或有限展开显式加入；不会假装一阶 axioms 已经完整刻画 least fixed point。
-
-## 当前支持范围
-
-第一版刻意是 first-order、pure、monomorphic 的闭环：
+## 支持范围
 
 | 特性 | 状态 | 编码 |
 |---|---:|---|
+| OCaml normal typing + use-site instantiation | 支持 | `.cmt` Typedtree |
 | `int` / `bool`、算术、比较、布尔连接 | 支持 | SMT Int/Bool |
-| `if`、局部简单 `let` | 支持 | `ite` / substitution |
-| 单态 variant、构造器、`match` | 支持 | uninterpreted sort + axioms |
-| 单态 immutable record、读取字段 | 支持 | 单构造器 + selectors |
-| over / under 合约 | 支持 | validity / image coverage |
-| 反例模型、导出 SMT-LIB | 支持 | Z3 model / `--emit-smt` |
-| 多态 ADT、高阶函数、递归、跨函数调用 | 明确拒绝 | 下一阶段需要 monomorphisation / summaries |
-| mutable state、exception、algebraic effects | 明确拒绝 | relational state transition theory |
-| GADT、first-class module、object | 明确拒绝 | typed frontend + feature-specific theory |
+| `if`、简单局部 `let` | 支持 | `ite` / substitution |
+| tuple | 支持 | uninterpreted product + selectors |
+| 单态 variant、constructor、exhaustive `match` | 支持 | uninterpreted sort + axioms |
+| immutable record、字段读取 | 支持 | 单 constructor + selectors |
+| 普通多态函数的 first-order 调用 | 支持 | Typedtree + inlining |
+| module predicate/axiom 与 `.rmi` | 支持 | scoped FOL theory + digest |
+| over / coverage contract | 支持 | upper validity / lower image coverage |
+| 二选一 nondeterministic `choose` | 支持 | demonic upper / angelic lower |
+| 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
+| 多态用户 ADT、高阶值、递归 | 明确拒绝 | 需要 monomorphisation/closure/measure |
+| functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
+| mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
+| GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 
-未支持的构造会报错，不会被当成 unconstrained term 后继续“证明”。
+未支持的 Typedtree node 会报错，不会被当成 unconstrained value 后继续“证明”。
 
-## 完整语言路线
+## 下一阶段
 
-详细设计见 [`docs/design.md`](docs/design.md)。推荐的实施顺序是：
+详细语义见 `docs/design.md`。推荐顺序：
 
-1. 接入 Typedtree，消除当前依赖显式参数/返回类型以及默认 `int` 的限制；
-2. 加入函数 summary、SCC 递归验证、termination/measure 和 lemma；
-3. 对参数化类型做按使用点 monomorphisation，仍保持 uninterpreted-sort 编码；
-4. 用关系语义统一 mutation、exception、effect handler 与 under-approximation；
-5. 加入 module signature 中的 refinement、抽象类型封装和 separate compilation；
-6. 最后处理 GADT equality witnesses、polymorphic variants、objects 和并发内存模型。
+1. 函数 summary、递归 SCC、termination measure 与 checked lemma；
+2. 参数化用户 ADT 的按使用点 monomorphisation；
+3. functor/theory transformer 与 generativity；
+4. 关系化 mutation、exception 和 effect handler；
+5. GADT、polymorphic variants、objects 和并发内存模型。
 
-`src/refined_core.ml` 目前是可替换的小型可信核心；PPX、Typedtree 前端和模型展示都不应成为
-soundness 的隐式依赖。
-
+当前 library 已包含 Typed frontend、typed Core 和独立的 Safety/Coverage semantic modules；下一步会
+把它们从单一实现文件拆成 versioned frontend、stable Core 和 semantic interpreters。

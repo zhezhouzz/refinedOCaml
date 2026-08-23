@@ -26,7 +26,7 @@ Under(P, e, Q) = ∀σ' r. Q(σ',r) ⇒ ∃σ. P(σ) ∧ Eval(e,σ,r,σ')
 over-partial   over-total   under-may   under-must
 ```
 
-当前原型实现 `over-partial` 的无循环片段和确定性纯函数的 `under-may`。
+当前 MVP 实现 `over-partial` 的无循环片段，以及确定性或有限 `choose` 纯函数的 `under-may`。
 
 ## 3. 合约表面语法
 
@@ -34,7 +34,7 @@ over-partial   over-total   under-may   under-must
 
 ```ocaml
 let[@refined.over  { pre = "..."; post = "..." }] f ... = ...
-let[@refined.under { pre = "..."; post = "..." }] g ... = ...
+let[@refined.coverage { pre = "..."; post = "..." }] g ... = ...
 ```
 
 后续兼容语法：
@@ -79,8 +79,9 @@ monomorphise；真正无法有限实例化的 polymorphic recursion 需要显式
 
 ### Modules 与抽象类型
 
-`.mli` refinement 是模块边界的 summary。抽象类型只暴露其 sort 和 signature 中公开的 measures/
-axioms；实现侧构造器 axioms 不得泄漏。Functor 产生参数化 theory，应用时实例化并保持 generativity。
+MVP 将 `.mli` 中公开的 predicates/axioms 编译成带 `.cmi` digest 的 `.rmi`；客户端不会看到实现侧
+private axioms。抽象类型的 sort/measure 导出以及 Functor 的 parameterized theory/generativity 是
+下一阶段工作。
 
 ### Mutation
 
@@ -127,13 +128,15 @@ under 合约需要可构造的 closure witness，不能只靠 over-style univers
 
 ## 7. 分阶段里程碑
 
-### M0（本仓库）
+### MVP（本仓库）
 
-PPX 属性、纯一阶算术、单态 ADT/record、over/under VC、Z3、模型与 SMT 导出。
+保留 PPX 属性的 Typedtree frontend、typed Core、纯一阶算术、tuple、单态 ADT/record、
+first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation、over/coverage VC、
+有限 choice、Z3、模型与 SMT 导出。
 
 ### M1
 
-Typedtree、`.mli` 合约、函数 summary、递归 SCC、measure、参数类型实例化、增量缓存。
+函数 summary、递归 SCC、measure、checked lemma、用户 ADT monomorphisation、增量缓存。
 
 ### M2
 
@@ -141,9 +144,8 @@ Typedtree、`.mli` 合约、函数 summary、递归 SCC、measure、参数类型
 
 ### M3
 
-modules/functors、GADT、polymorphic variants、higher-order contracts、algebraic effect handlers。
+functor/theory transformers、GADT、polymorphic variants、higher-order contracts、algebraic effect handlers。
 
 ### M4
 
 proof artifacts、IDE/LSP、dune rule、并发语义、标准库 refinement signatures。
-
