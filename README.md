@@ -6,7 +6,7 @@
 - **coverage/under-approximation**：后置条件中的每个结果都确实可达，用来证明 coverage、
   reachability 或 incorrectness。
 
-用户 datatype 不会被偷偷换成 SMT native datatype。每个 ADT 默认编码为 uninterpreted sort；
+每个 ADT 默认编码为 uninterpreted sort；
 constructor、recognizer 和 selector 都是 uninterpreted symbols，代数性质由可查看的 axioms 给出。
 
 当前 versioned frontend 针对 OCaml 5.3.0；运行验证还需要 `z3` 可执行文件。
@@ -20,7 +20,7 @@ constructor、recognizer 和 selector 都是 uninterpreted symbols，代数性�
 ```
 
 因此 checker 使用的是 OCaml 已解析和实例化的 `Types.type_expr`、`Path.t`、`Ident.t` 以及
-constructor/field UID，不会重新猜普通 OCaml 类型。普通类型错误产生的 partial Typedtree 会被拒绝。
+constructor/field UID。普通类型错误产生的 partial Typedtree 会被拒绝。
 
 ```ocaml
 let[@refined.over { pre = "x >= 0"; post = "result > x" }]
@@ -51,8 +51,6 @@ CLI 只接受完成普通 OCaml typing 后生成的 `.cmt` implementation。
 (preprocess (pps refined_ocaml.ppx))
 ```
 
-PPX 不执行 refinement checking，也不写 sidecar 文件。
-
 ## 两种 refinement
 
 对纯函数 `f : X -> Y`：
@@ -62,11 +60,11 @@ over     {P} f {Q} ≜ ∀x. P(x) ⇒ Q(x, f(x))
 coverage [P] f [Q] ≜ ∀y. Q(y) ⇒ ∃x. P(x) ∧ y = f(x)
 ```
 
-Coverage contract 描述函数 image 的一个下界，并不是机械反转普通 Hoare triple。当前 coverage
+Coverage contract 描述函数 image 的一个下界。当前 coverage
 `post` 只能引用 `result`；后续会加入 ghost variables 表达输入/输出状态关系。
 
 验证器把 safety 反例和 coverage 的缺失结果交给 Z3：`unsat` 表示 contract 成立；`sat` 时输出
-model。`unknown` 永远不是成功。
+model。
 
 ## 同一个函数的 upper/lower bounds
 
@@ -109,11 +107,11 @@ refined-ocaml --emit-rmi list_theory.rmi list_theory.cmti
 refined-ocaml --theory list_theory.rmi client.cmt
 ```
 
-客户端只能获得 `.mli/.rmi` 导出的 theory；实现文件里的 private axiom 不会泄漏。验证结果会列出
+客户端只能获得 `.mli/.rmi` 导出的 theory。验证结果会列出
 本次信任的用户 axioms；过期或不属于客户端 imports 的 `.rmi` 会被拒绝。
 
 这里的 `'a` 在每个 obligation 中根据 Typedtree use-site type 实例化；例如两个客户端会分别得到
-`mem$int : int list × int → Bool` 和 `mem$bool : bool list × Bool → Bool`，而不是一个全局 `Any` sort。
+`mem$int : int list × int → Bool` 和 `mem$bool : bool list × Bool → Bool`。
 
 目前 `axiom` 属于 trusted computing base。后续的 `lemma` 会先验证再导出。
 
@@ -162,7 +160,7 @@ well-founded measure、checked lemma 或有限展开显式引入。
 | mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 
-未支持的 Typedtree node 会报错，不会被当成 unconstrained value 后继续“证明”。
+未支持的 Typedtree node 会报错。
 
 ## 下一阶段
 
