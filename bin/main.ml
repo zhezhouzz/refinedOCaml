@@ -28,10 +28,10 @@ let write_smt dir obligation =
     (fun () -> output_string channel obligation.smt)
 
 let report obligation verdict =
-  let pos = obligation.location.loc_start in
+  let pos = obligation.location.Source_span.start in
   let prefix =
-    Printf.sprintf "%s:%d:%d: %s %s" pos.pos_fname pos.pos_lnum
-      (pos.pos_cnum - pos.pos_bol + 1)
+    Printf.sprintf "%s:%d:%d: %s %s" obligation.location.file pos.line
+      (pos.column + 1)
       (mode_name obligation.mode)
       obligation.name
   in

@@ -11,6 +11,22 @@ constructor、recognizer 和 selector 都是 uninterpreted symbols，代数性�
 
 当前 versioned frontend 针对 OCaml 5.3.0；运行验证还需要 `z3` 可执行文件。
 
+可复现环境：
+
+```sh
+dev/setup-switch.sh .
+eval "$(opam env --switch=. --set-switch)"
+dune build @refined
+```
+
+脚本使用 `refined_ocaml.opam.locked` 安装经过测试的直接依赖。CI 在 Ubuntu/OCaml 5.3.0 上安装
+Z3，并运行 build、install、完整 refinement tests 和 formatting gate。compiler-libs 升级规则见
+`docs/versioning.md`。
+
+`autofix.ci` workflow 会在 pull request 和 `main` push 上运行 `dune fmt`，并把格式修复提交回来源
+分支。仓库管理员需要先为该仓库安装 [autofix.ci GitHub App](https://autofix.ci/setup)；workflow
+自身只申请 `contents: read`，上传修复时使用固定 commit 的官方 action。
+
 ## 当前 MVP
 
 权威验证路径运行在 OCaml 普通类型检查之后：
@@ -166,11 +182,18 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 函数 summary、递归 SCC、termination measure 与 checked lemma；
-2. 参数化用户 ADT 的按使用点 monomorphisation；
-3. functor/theory transformer 与 generativity；
-4. 关系化 mutation、exception 和 effect handler；
-5. GADT、polymorphic variants、objects 和并发内存模型。
+1. 基于 Generic Refinement Types 明确 denotation/refinement-domain/typing-algorithm 接口；
+2. 函数 summary、递归 SCC、termination measure 与 checked lemma；
+3. 参数化用户 ADT 的按使用点 monomorphisation；
+4. functor/theory transformer 与 generativity；
+5. 关系化 mutation、exception 和 effect handler。
 
-当前 library 已包含 Typed frontend、typed Core 和独立的 Safety/Coverage semantic modules；下一步会
-把它们从单一实现文件拆成 versioned frontend、stable Core 和 semantic interpreters。
+当前模块边界：
+
+| 模块 | 职责 |
+|---|---|
+| `refined_ocaml.ir` | 不依赖 compiler-libs 的 source span、stable Core 与 VC semantics |
+| `Ocaml_5_3_frontend` | 唯一接触 Typedtree/Types/Path/Ident/Shape/Cmt_format 的版本层 |
+| `Vc_backend` | Core/logic 到 SMT obligation 的编码与 use-site specialization |
+| `Solver_backend` | 有 timeout 的 Z3 process 与 verdict 解释 |
+| `Refined_core` | 保持现有公共 API 的薄 façade |

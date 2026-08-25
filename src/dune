@@ -1,5 +1,15 @@
 (library
+ (name refined_ir)
+ (public_name refined_ocaml.ir)
+ (modules source_span refined_types typed_core vc_semantics))
+
+(library
  (name refined_core)
  (public_name refined_ocaml.core)
- (libraries compiler-libs.common unix))
-
+ (modules
+  refined_common
+  ocaml_5_3_frontend
+  solver_backend
+  vc_backend
+  refined_core)
+ (libraries refined_ir compiler-libs.common unix))

@@ -3,4 +3,3 @@
  (public_name refined_ocaml.ppx)
  (kind ppx_rewriter)
  (libraries ppxlib))
-

@@ -22,9 +22,11 @@
 (executable
  (name ppx_sample)
  (modules ppx_sample)
- (preprocess (pps refined_ocaml.ppx)))
+ (preprocess
+  (pps refined_ocaml.ppx)))
 
 (executable
  (name ppx_theory_sample)
  (modules ppx_theory_sample)
- (preprocess (pps refined_ocaml.ppx)))
+ (preprocess
+  (pps refined_ocaml.ppx)))
