@@ -15,8 +15,6 @@ type context = {
 let declare buffer (name, sort) =
   Buffer.add_string buffer (Printf.sprintf "(declare-const %s %s)\n" name sort)
 
-let binder (name, sort) = Printf.sprintf "(%s %s)" name sort
-
 module type S = sig
   val mode : mode
   val encode : context -> unit
@@ -28,11 +26,19 @@ module Safety : S = struct
   let encode context =
     List.iter (declare context.buffer) context.arguments;
     List.iter (declare context.buffer) context.choices;
-    Buffer.add_string context.buffer
-      (Printf.sprintf "(assert %s)\n" context.pre);
+    let actual = Refinement_domain.Smt.equality "result" context.body in
+    let judgment =
+      Typing_judgment.Safety.synthesize ~rule:Function_body ~predicate:actual
+        ~children:[]
+    in
+    let checked =
+      Typing_judgment.Safety.check ~assumptions:[ context.pre ]
+        ~expected:context.post judgment
+    in
+    let obligation = Typing_judgment.Safety.obligation checked in
     Buffer.add_string context.buffer
       (Printf.sprintf "(assert (not (let ((result %s)) %s)))\n" context.body
-         context.post)
+         obligation)
 end
 
 module Coverage : S = struct
@@ -40,19 +46,25 @@ module Coverage : S = struct
 
   let encode context =
     let missing = "missing_result" in
-    let quantified =
-      "("
-      ^ String.concat " "
-          (List.map binder context.arguments @ List.map binder context.choices)
-      ^ ")"
+    let witnesses = context.arguments @ context.choices in
+    let actual =
+      Refinement_domain.Smt.exists witnesses
+        (Refinement_domain.Smt.conjunction
+           [ context.pre; Refinement_domain.Smt.equality missing context.body ])
     in
+    let judgment =
+      Typing_judgment.Coverage.synthesize ~rule:Function_body ~predicate:actual
+        ~children:[]
+    in
+    let checked =
+      Typing_judgment.Coverage.check ~assumptions:[] ~expected:context.post
+        judgment
+    in
+    let obligation = Typing_judgment.Coverage.obligation checked in
     Buffer.add_string context.buffer
       (Printf.sprintf "(declare-const %s %s)\n" missing context.result_sort);
     Buffer.add_string context.buffer
-      (Printf.sprintf "(assert %s)\n" context.post);
-    Buffer.add_string context.buffer
-      (Printf.sprintf "(assert (forall %s (not (and %s (= %s %s)))))\n"
-         quantified context.pre missing context.body)
+      (Printf.sprintf "(assert (not %s))\n" obligation)
 end
 
 let semantics = function
