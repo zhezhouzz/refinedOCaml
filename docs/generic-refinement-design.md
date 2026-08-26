@@ -47,26 +47,30 @@ Coverage: expected ⇒ assumptions ∧ actual
 `Vc_semantics` uses these judgments in the production verification path. It is no longer responsible for
 hard-coding the direction of refinement implication.
 
-### Hindley evar context
+### Hindley schemes and evar context
 
 `Evar_context.Make` provides first-order syntactic unification, recursive substitution, completeness queries and
-an occurs-check. `Vc_backend` uses it for obligation-local polymorphic predicate/axiom instantiation. This is the
-foundation corresponding to the paper's FA-hdl and ≡inst rules.
+an occurs-check. `Generic_refinement` adds base/function refinement sorts, first-order refinement lambdas and
+applications, `Hindley`/`Horn` generic modes, refined function schemes, well-formedness checking and explicit
+application elaboration. Hindley applications create evars, unify them from value-dependent input indices,
+require a complete context, emit ghost instantiations, substitute the result, and beta-reduce before returning it.
+
+`Vc_backend` also uses the generic evar context for obligation-local polymorphic predicate/axiom instantiation.
+Together these pieces correspond to the paper's FA-hdl and ≡inst rules.
 
 ## Current boundary
 
-This step establishes the compositional interface and migrates existing behavior onto it. It does not yet expose
-surface syntax for higher-sorted generic refinement parameters and does not implement Horn-variable solving.
+This step establishes the compositional interface and implements higher-sorted Hindley schemes in the public IR.
+It does not yet expose those schemes through OCaml attributes/module signatures and does not implement
+Horn-variable solving.
 
-The next implementation slice should add:
+The next implementation slice should:
 
-1. refinement sorts and refinement terms, including first-order lambdas/applications;
-2. schemes `forall generic. type` with explicit `Hindley` and `Horn` modes;
-3. well-sortedness and polarity checking for the four invariants above;
-4. function-application elaboration that introduces evars, checks arguments and requires a complete context;
-5. beta reduction before SMT emission;
-6. Horn constraint syntax and a solver only after Hindley schemes work end-to-end.
+1. expose Hindley schemes in `.mli` theory syntax and `.rmi`;
+2. connect resolved OCaml calls to `Generic_refinement.elaborate_application`;
+3. translate elaborated refinement terms to the SMT logic AST;
+4. add Horn constraint syntax, positivity checking and a solver;
+5. preserve explicit ghost instantiations in diagnostics/proof artifacts.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
-
