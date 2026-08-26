@@ -16,6 +16,9 @@
   ../examples/list_theory.ml
   ../examples/theory_client.ml
   ../examples/theory_bool_client.ml
+  ../examples/generic_client.ml
+  ../examples/generic_client_invalid.ml
+  ../examples/generic_client_missing.ml
   ../examples/theory_private_client.ml
   ../examples/ill_typed.ml))
 

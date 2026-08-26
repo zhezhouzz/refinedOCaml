@@ -397,11 +397,74 @@ let typed_pattern_smt env scrutinee pattern =
   in
   translate env scrutinee pattern
 
+type generic_call_state = {
+  runtime_declarations : (string, string list * string) Hashtbl.t;
+  mutable side_conditions : string list;
+  mutable ghost_instantiations : string list;
+}
+
+let new_generic_call_state () =
+  {
+    runtime_declarations = Hashtbl.create 8;
+    side_conditions = [];
+    ghost_instantiations = [];
+  }
+
+let rec generic_term_smt =
+  let open Generic_refinement in
+  function
+  | Integer integer -> string_of_int integer
+  | Boolean boolean -> string_of_bool boolean
+  | Variable variable -> smt_identifier variable
+  | Not term -> app "not" [ generic_term_smt term ]
+  | And terms -> and_ (List.map generic_term_smt terms)
+  | Or terms -> or_ (List.map generic_term_smt terms)
+  | Equal (left, right) ->
+      app "=" [ generic_term_smt left; generic_term_smt right ]
+  | Add (left, right) ->
+      app "+" [ generic_term_smt left; generic_term_smt right ]
+  | Greater (left, right) ->
+      app ">" [ generic_term_smt left; generic_term_smt right ]
+  | Apply (function_, argument) ->
+      app (generic_term_smt function_) [ generic_term_smt argument ]
+  | Generic generic -> invalid_arg ("unelaborated generic refinement " ^ generic)
+  | Evar evar -> invalid_arg ("unsolved generic refinement " ^ evar)
+  | Lambda _ -> invalid_arg "refinement lambda escaped beta-reduction"
+
+let generic_error ~loc =
+  let open Generic_refinement in
+  function
+  | Ill_sorted message | Type_mismatch message ->
+      typed_error_at loc "%s" message
+  | Ill_formed_hindley generic ->
+      typed_error_at loc "Hindley generic `%s` is not value-dependent" generic
+  | Horn_not_supported generic ->
+      typed_error_at loc "Horn generic `%s` requires the Horn solver" generic
+  | Arity_mismatch ->
+      typed_error_at loc "generic scheme application arity mismatch"
+  | Unsolved_hindley generic ->
+      typed_error_at loc "Hindley generic `%s` was not solved by its arguments"
+        generic
+  | Cyclic_instantiation evar ->
+      typed_error_at loc "cyclic Hindley instantiation `%s`" evar
+
+let generic_constraint_smt ~loc (constraint_ : Generic_refinement.constraint_) =
+  try
+    app "=>"
+      [
+        generic_term_smt constraint_.assumption;
+        generic_term_smt constraint_.requirement;
+      ]
+  with Invalid_argument message ->
+    typed_error_at loc "generic call constraint is not first-order: %s" message
+
 let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
-    choices env expression =
+    choices generic_calls env expression =
   let registry = program.registry in
   let _sort = expression.Typed_core.sort in
-  let recurse = typed_expr_smt_with_choices program call_stack choices env in
+  let recurse =
+    typed_expr_smt_with_choices program call_stack choices generic_calls env
+  in
   match expression.Typed_core.desc with
   | Var symbol -> (
       match List.assoc_opt symbol.key env with
@@ -422,6 +485,48 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
   | Choose _ ->
       typed_error_at expression.loc
         "the MVP choose primitive currently requires exactly two alternatives"
+  | Apply (symbol, arguments)
+    when Hashtbl.mem program.registry.generic_schemes_by_name symbol.key ->
+      let scheme =
+        Hashtbl.find program.registry.generic_schemes_by_name symbol.key
+      in
+      let actual_types =
+        List.map
+          (fun (argument : Typed_core.expr) ->
+            match argument.refinement with
+            | Some refinement -> refinement
+            | None ->
+                typed_error_at argument.loc
+                  "argument to generic `%s` needs [@refined.type]"
+                  symbol.display)
+          arguments
+      in
+      let elaboration =
+        match Generic_refinement.elaborate_application scheme actual_types with
+        | Ok elaboration -> elaboration
+        | Error error -> generic_error ~loc:expression.loc error
+      in
+      let runtime_name = "F_" ^ smt_identifier symbol.key in
+      Hashtbl.replace generic_calls.runtime_declarations runtime_name
+        ( List.map
+            (fun (argument : Typed_core.expr) -> typed_smt_sort argument.sort)
+            arguments,
+          typed_smt_sort expression.sort );
+      generic_calls.side_conditions <-
+        List.rev_append
+          (List.map
+             (generic_constraint_smt ~loc:expression.loc)
+             elaboration.constraints)
+          generic_calls.side_conditions;
+      generic_calls.ghost_instantiations <-
+        List.rev_append
+          (List.map
+             (fun (instantiation : Generic_refinement.instantiation) ->
+               Printf.sprintf "%s.%s=%s" symbol.display instantiation.generic
+                 (Generic_refinement.string_of_term instantiation.refinement))
+             elaboration.instantiations)
+          generic_calls.ghost_instantiations;
+      app runtime_name (List.map recurse arguments)
   | Apply (symbol, [ left; right ]) -> (
       match binary_operator symbol.display with
       | Some operator -> app operator [ recurse left; recurse right ]
@@ -436,8 +541,8 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
                 (typed_logic_name logic_symbol)
                 [ recurse left; recurse right ]
           | None ->
-              typed_inline_call program call_stack choices env expression symbol
-                [ left; right ]))
+              typed_inline_call program call_stack choices generic_calls env
+                expression symbol [ left; right ]))
   | Apply (symbol, [ argument ]) when symbol.display = "not" ->
       app "not" [ recurse argument ]
   | Apply (symbol, _) -> (
@@ -454,13 +559,13 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
               symbol.display;
           app (typed_logic_name logic_symbol) (List.map recurse arguments)
       | None ->
-          typed_inline_call program call_stack choices env expression symbol
-            arguments)
+          typed_inline_call program call_stack choices generic_calls env
+            expression symbol arguments)
   | If (condition, if_true, if_false) ->
       app "ite" [ recurse condition; recurse if_true; recurse if_false ]
   | Let (symbol, value, body) ->
       let value = recurse value in
-      typed_expr_smt_with_choices program call_stack choices
+      typed_expr_smt_with_choices program call_stack choices generic_calls
         ((symbol.key, value) :: env)
         body
   | Match (scrutinee, cases) ->
@@ -470,8 +575,8 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
           (fun (pattern, body) ->
             let guard, case_env = typed_pattern_smt env scrutinee pattern in
             ( guard,
-              typed_expr_smt_with_choices program call_stack choices case_env
-                body ))
+              typed_expr_smt_with_choices program call_stack choices
+                generic_calls case_env body ))
           cases
       in
       let rec tree = function
@@ -485,8 +590,8 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
   | Tuple elements ->
       app (typed_tuple_constructor expression.sort) (List.map recurse elements)
 
-and typed_inline_call program call_stack choices env expression symbol arguments
-    =
+and typed_inline_call program call_stack choices generic_calls env expression
+    symbol arguments =
   let function_def =
     List.find_opt
       (fun (function_def : Typed_core.function_def) ->
@@ -506,7 +611,8 @@ and typed_inline_call program call_stack choices env expression symbol arguments
           "call to `%s` has unsupported partial arity" symbol.display;
       let terms =
         List.map
-          (typed_expr_smt_with_choices program call_stack choices env)
+          (typed_expr_smt_with_choices program call_stack choices generic_calls
+             env)
           arguments
       in
       let call_env =
@@ -515,12 +621,15 @@ and typed_inline_call program call_stack choices env expression symbol arguments
           function_def.arguments terms
       in
       typed_expr_smt_with_choices program (symbol.key :: call_stack) choices
-        call_env function_def.body
+        generic_calls call_env function_def.body
 
 let typed_expr_smt program env expression =
   let choices = ref [] in
-  let term = typed_expr_smt_with_choices program [] choices env expression in
-  (term, List.rev !choices)
+  let generic_calls = new_generic_call_state () in
+  let term =
+    typed_expr_smt_with_choices program [] choices generic_calls env expression
+  in
+  (term, List.rev !choices, generic_calls)
 
 let typed_collect_sorts program function_def =
   let module Set = Set.Make (String) in
@@ -812,7 +921,9 @@ let typed_obligation (program : Typed_core.program)
   let program =
     typed_specialize_program program function_def pre_expression post_expression
   in
-  let body, choices = typed_expr_smt program env function_def.body in
+  let body, choices, generic_calls =
+    typed_expr_smt program env function_def.body
+  in
   let pre = typed_formula program.registry formula_env pre_expression in
   let result_name =
     match contract.mode with Over -> "result" | Under -> "missing_result"
@@ -826,6 +937,13 @@ let typed_obligation (program : Typed_core.program)
   Buffer.add_string buffer
     "(set-option :produce-models true)\n(set-logic ALL)\n";
   Buffer.add_string buffer (typed_datatype_prelude program function_def);
+  Hashtbl.iter
+    (fun name (arguments, result) ->
+      Buffer.add_string buffer
+        (Printf.sprintf "(declare-fun %s (%s) %s)\n" name
+           (String.concat " " arguments)
+           result))
+    generic_calls.runtime_declarations;
   Vc_semantics.encode contract.mode
     {
       buffer;
@@ -840,6 +958,7 @@ let typed_obligation (program : Typed_core.program)
       body;
       pre;
       post;
+      side_conditions = List.rev generic_calls.side_conditions;
     };
   Buffer.add_string buffer "(check-sat)\n(get-model)\n";
   {
@@ -851,6 +970,7 @@ let typed_obligation (program : Typed_core.program)
       List.rev_map
         (fun (axiom : Typed_core.axiom) -> axiom.axiom_name)
         program.registry.axioms;
+    ghost_instantiations = List.rev generic_calls.ghost_instantiations;
   }
 
 let obligations_of_cmt_with_theories ~theories filename =

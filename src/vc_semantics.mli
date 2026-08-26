@@ -8,6 +8,7 @@ type context = {
   body : string;
   pre : string;
   post : string;
+  side_conditions : string list;
 }
 
 module type S = sig

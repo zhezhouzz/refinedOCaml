@@ -9,6 +9,7 @@ type obligation = {
   location : Source_span.t;
   smt : string;
   trusted_axioms : string list;
+  ghost_instantiations : string list;
 }
 
 let mode_name = function Over -> "over" | Under -> "coverage"

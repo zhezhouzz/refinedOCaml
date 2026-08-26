@@ -10,6 +10,7 @@ type context = {
   body : string;
   pre : string;
   post : string;
+  side_conditions : string list;
 }
 
 let declare buffer (name, sort) =
@@ -35,7 +36,17 @@ module Safety : S = struct
       Typing_judgment.Safety.check ~assumptions:[ context.pre ]
         ~expected:context.post judgment
     in
-    let obligation = Typing_judgment.Safety.obligation checked in
+    let contract_obligation = Typing_judgment.Safety.obligation checked in
+    let side_obligation =
+      Refinement_domain.Smt.implies context.pre
+        (Refinement_domain.Smt.conjunction context.side_conditions)
+    in
+    let obligation =
+      if context.side_conditions = [] then contract_obligation
+      else
+        Refinement_domain.Smt.conjunction
+          [ side_obligation; contract_obligation ]
+    in
     Buffer.add_string context.buffer
       (Printf.sprintf "(assert (not (let ((result %s)) %s)))\n" context.body
          obligation)
@@ -60,7 +71,20 @@ module Coverage : S = struct
       Typing_judgment.Coverage.check ~assumptions:[] ~expected:context.post
         judgment
     in
-    let obligation = Typing_judgment.Coverage.obligation checked in
+    let contract_obligation = Typing_judgment.Coverage.obligation checked in
+    let side_obligation =
+      Refinement_domain.Smt.implies context.pre
+        (Refinement_domain.Smt.conjunction context.side_conditions)
+    in
+    let obligation =
+      if context.side_conditions = [] then contract_obligation
+      else
+        Refinement_domain.Smt.conjunction
+          [ side_obligation; contract_obligation ]
+    in
+    if context.side_conditions <> [] then (
+      List.iter (declare context.buffer) context.arguments;
+      List.iter (declare context.buffer) context.choices);
     Buffer.add_string context.buffer
       (Printf.sprintf "(declare-const %s %s)\n" missing context.result_sort);
     Buffer.add_string context.buffer

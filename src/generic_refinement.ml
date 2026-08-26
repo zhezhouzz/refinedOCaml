@@ -1,4 +1,5 @@
-type sort = Base of Typed_core.sort | Arrow of sort * sort
+type base_sort = Int | Bool | Unit | Named of string
+type sort = Base of base_sort | Arrow of sort * sort
 
 type term =
   | Integer of int
@@ -46,21 +47,14 @@ type error =
   | Unsolved_hindley of string
   | Cyclic_instantiation of string
 
-let rec string_of_core_sort = function
-  | Typed_core.S_int -> "int"
-  | S_bool -> "bool"
-  | S_unit -> "unit"
-  | S_var variable -> "'" ^ variable
-  | S_tuple sorts ->
-      "(" ^ String.concat " * " (List.map string_of_core_sort sorts) ^ ")"
-  | S_app (symbol, []) -> symbol.display
-  | S_app (symbol, arguments) ->
-      "("
-      ^ String.concat ", " (List.map string_of_core_sort arguments)
-      ^ ") " ^ symbol.display
+let string_of_base_sort = function
+  | Int -> "int"
+  | Bool -> "bool"
+  | Unit -> "unit"
+  | Named name -> name
 
 let rec string_of_sort = function
-  | Base sort -> string_of_core_sort sort
+  | Base sort -> string_of_base_sort sort
   | Arrow (input, output) ->
       "(" ^ string_of_sort input ^ " -> " ^ string_of_sort output ^ ")"
 
@@ -203,8 +197,8 @@ let rec value_dependent name polarity = function
 let rec infer_term_sort generics variables evars term =
   let infer = infer_term_sort generics variables evars in
   match term with
-  | Integer _ -> Ok (Base Typed_core.S_int)
-  | Boolean _ -> Ok (Base S_bool)
+  | Integer _ -> Ok (Base Int)
+  | Boolean _ -> Ok (Base Bool)
   | Variable variable -> (
       match List.assoc_opt variable variables with
       | Some sort -> Ok sort
@@ -232,32 +226,32 @@ let rec infer_term_sort generics variables evars term =
         | Base _ -> Error (Ill_sorted "applied a base-sorted refinement"))
   | Not term ->
       Result.bind (infer term) (fun sort ->
-          if equal_sort sort (Base S_bool) then Ok sort
+          if equal_sort sort (Base Bool) then Ok sort
           else Error (Ill_sorted "not expects bool"))
   | And terms | Or terms ->
       List.fold_left
         (fun result term ->
           Result.bind result (fun () ->
               Result.bind (infer term) (fun sort ->
-                  if equal_sort sort (Base S_bool) then Ok ()
+                  if equal_sort sort (Base Bool) then Ok ()
                   else Error (Ill_sorted "boolean connective expects bool"))))
         (Ok ()) terms
-      |> Result.map (fun () -> Base S_bool)
+      |> Result.map (fun () -> Base Bool)
   | Equal (left, right) ->
       Result.bind (infer left) (fun left_sort ->
           Result.bind (infer right) (fun right_sort ->
-              if equal_sort left_sort right_sort then Ok (Base S_bool)
+              if equal_sort left_sort right_sort then Ok (Base Bool)
               else Error (Ill_sorted "equality sort mismatch")))
   | Add (left, right) | Greater (left, right) ->
       Result.bind (infer left) (fun left_sort ->
           Result.bind (infer right) (fun right_sort ->
               if
-                equal_sort left_sort (Base S_int)
-                && equal_sort right_sort (Base S_int)
+                equal_sort left_sort (Base Int)
+                && equal_sort right_sort (Base Int)
               then
                 match term with
-                | Add _ -> Ok (Base S_int)
-                | Greater _ -> Ok (Base S_bool)
+                | Add _ -> Ok (Base Int)
+                | Greater _ -> Ok (Base Bool)
                 | _ -> assert false
               else Error (Ill_sorted "arithmetic expects int")))
 
@@ -270,7 +264,7 @@ let rec check_type_sort generics = function
           else
             Result.bind (infer_term_sort generics [] [] predicate)
               (fun predicate_sort ->
-                if equal_sort predicate_sort (Base Typed_core.S_bool) then Ok ()
+                if equal_sort predicate_sort (Base Bool) then Ok ()
                 else Error (Ill_sorted "refinement predicate must be bool")))
   | Function (input, output) ->
       Result.bind (check_type_sort generics input) (fun () ->

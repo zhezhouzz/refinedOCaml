@@ -99,8 +99,8 @@ let rec random_boolean_term random variable depth =
 
 let fuzz_hindley random case =
   let open Refined_ir.Generic_refinement in
-  let int_sort = Base Refined_ir.Typed_core.S_int in
-  let predicate_sort = Arrow (int_sort, Base S_bool) in
+  let int_sort = Base Int in
+  let predicate_sort = Arrow (int_sort, Base Bool) in
   let indexed index =
     Refined
       {

@@ -1,4 +1,5 @@
-type sort = Base of Typed_core.sort | Arrow of sort * sort
+type base_sort = Int | Bool | Unit | Named of string
+type sort = Base of base_sort | Arrow of sort * sort
 
 type term =
   | Integer of int

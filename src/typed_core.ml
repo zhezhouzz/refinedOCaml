@@ -34,7 +34,12 @@ type pattern =
   | Pat_tuple of sort * pattern list
   | Pat_construct of constructor * pattern list
 
-type expr = { desc : expr_desc; sort : sort; loc : Source_span.t }
+type expr = {
+  desc : expr_desc;
+  sort : sort;
+  refinement : Generic_refinement.type_ option;
+  loc : Source_span.t;
+}
 
 and expr_desc =
   | Var of symbol
@@ -71,6 +76,7 @@ type registry = {
   fields_by_uid : (string, constructor * int) Hashtbl.t;
   fields_by_name : (string, constructor * int) Hashtbl.t;
   logic_by_name : (string, logic_symbol) Hashtbl.t;
+  generic_schemes_by_name : (string, Generic_refinement.scheme) Hashtbl.t;
   mutable axioms : axiom list;
   mutable datatypes : datatype list;
 }

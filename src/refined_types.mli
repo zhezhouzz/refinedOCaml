@@ -9,6 +9,7 @@ type obligation = {
   location : Source_span.t;
   smt : string;
   trusted_axioms : string list;
+  ghost_instantiations : string list;
 }
 
 val mode_name : mode -> string

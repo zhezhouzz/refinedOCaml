@@ -141,6 +141,42 @@ refined-ocaml --theory list_theory.rmi client.cmt
 
 目前 `axiom` 属于 trusted computing base。后续的 `lemma` 会先验证再导出。
 
+### Hindley generic schemes
+
+Module signature 可以导出 higher-sorted Hindley generic：
+
+```ocaml
+val complement : int -> int
+[@@refined.hindley
+  {
+    generics = [ ("property", "int -> bool") ];
+    parameters = [ ("Predicate", "int -> bool", "property", "true") ];
+    result =
+      ( "Predicate",
+        "int -> bool",
+        "fun value -> not (property value)",
+        "true" );
+  }]
+```
+
+调用点给出实参当前的 refinement type，而不是 generic instantiation：
+
+```ocaml
+List_theory.complement
+  (value
+  [@refined.type
+    {
+      base = "Predicate";
+      sort = "int -> bool";
+      index = "fun item -> item > 0";
+      predicate = "true";
+    }])
+```
+
+Checker 根据 parameter index 自动求出 `property`，对 result 做替换和 beta-reduction，并验证 generic
+parameter 的 refinement precondition。`.rmi` 保存 scheme，CLI 显示求得的 ghost instantiation。缺少
+`[@refined.type]`、未解 evar、类型不匹配或非 first-order constraint 都会拒绝验证。
+
 ## ADT 编码
 
 例如：
@@ -193,11 +229,11 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 在 `.mli/.rmi` theory surface 暴露 Hindley generic schemes；
-2. 将 resolved OCaml calls 接入 generic application elaboration；
-3. 加入 Horn generic constraints 和 solver；
-4. 函数 summary、递归 SCC、termination measure 与 checked lemma；
-5. 参数化用户 ADT 的按使用点 monomorphisation。
+1. 加入 Horn generic constraint syntax、positivity checking 和 solver；
+2. 将 Hindley result refinements 继续传播给后续表达式，减少调用点 annotation；
+3. 函数 summary、递归 SCC、termination measure 与 checked lemma；
+4. 参数化用户 ADT 的按使用点 monomorphisation；
+5. functor/theory transformer 与 generativity。
 
 当前模块边界：
 

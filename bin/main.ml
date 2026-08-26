@@ -41,7 +41,10 @@ let report obligation verdict =
   | Unknown reason -> Printf.printf "%s: unknown\n%s\n%!" prefix reason);
   if obligation.trusted_axioms <> [] then
     Printf.printf "  trusted axioms: %s\n%!"
-      (String.concat ", " obligation.trusted_axioms)
+      (String.concat ", " obligation.trusted_axioms);
+  if obligation.ghost_instantiations <> [] then
+    Printf.printf "  ghost instantiations: %s\n%!"
+      (String.concat ", " obligation.ghost_instantiations)
 
 let () =
   Arg.parse options add_file

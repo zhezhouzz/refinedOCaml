@@ -87,8 +87,8 @@ let test_hindley_evars () =
 
 let test_higher_sorted_hindley_application () =
   let open Refined_ir.Generic_refinement in
-  let int_sort = Base Refined_ir.Typed_core.S_int in
-  let predicate_sort = Arrow (int_sort, Base S_bool) in
+  let int_sort = Base Int in
+  let predicate_sort = Arrow (int_sort, Base Bool) in
   let indexed predicate =
     Refined
       {
@@ -206,6 +206,15 @@ let () =
     "ocamlc -bin-annot -I . -c ../examples/theory_bool_client.ml -o \
      theory_bool_client.cmo";
   run
+    "ocamlc -bin-annot -I . -c ../examples/generic_client.ml -o \
+     generic_client.cmo";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/generic_client_invalid.ml -o \
+     generic_client_invalid.cmo";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/generic_client_missing.ml -o \
+     generic_client_missing.cmo";
+  run
     "ocamlc -bin-annot -I . -c ../examples/theory_private_client.ml -o \
      theory_private_client.cmo";
   write_rmi ~cmti:"list_theory.cmti" ~output:"list_theory.rmi";
@@ -223,6 +232,28 @@ let () =
       if not (contains obligation.smt "T_list_Bool") then
         failwith "polymorphic theory was not instantiated at bool list";
       require `Valid obligation);
+  obligations_of_cmt_with_theories ~theories:[ "list_theory.rmi" ]
+    "generic_client.cmt"
+  |> List.iter (fun obligation ->
+      if
+        not
+          (List.exists
+             (fun ghost -> contains ghost "complement.property=(fun")
+             obligation.ghost_instantiations)
+      then
+        failwith "resolved generic call did not report its ghost instantiation";
+      if not (contains obligation.smt "declare-fun F_List_theory_complement")
+      then failwith "generic runtime summary was not emitted to SMT";
+      require `Valid obligation);
+  obligations_of_cmt_with_theories ~theories:[ "list_theory.rmi" ]
+    "generic_client_invalid.cmt"
+  |> List.iter (require `Invalid);
+  (match
+     obligations_of_cmt_with_theories ~theories:[ "list_theory.rmi" ]
+       "generic_client_missing.cmt"
+   with
+  | _ -> failwith "generic call without an argument refinement was accepted"
+  | exception Location.Error _ -> ());
   obligations_of_cmt_with_theories ~theories:[ "list_theory.rmi" ]
     "theory_private_client.cmt"
   |> List.iter (require `Invalid);

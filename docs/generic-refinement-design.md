@@ -60,17 +60,14 @@ Together these pieces correspond to the paper's FA-hdl and ≡inst rules.
 
 ## Current boundary
 
-This step establishes the compositional interface and implements higher-sorted Hindley schemes in the public IR.
-It does not yet expose those schemes through OCaml attributes/module signatures and does not implement
-Horn-variable solving.
+Higher-sorted Hindley schemes are now exposed through `[@@refined.hindley]` in `.mli` files and serialized in
+`.rmi` version 2. Call arguments carry their current type through `[@refined.type]`. The versioned frontend parses
+both attributes, and the VC backend runs elaboration for the resolved OCaml `Path`, emits an uninterpreted runtime
+summary and checks elaborated side conditions. Ghost instantiations are retained in diagnostics.
 
-The next implementation slice should:
-
-1. expose Hindley schemes in `.mli` theory syntax and `.rmi`;
-2. connect resolved OCaml calls to `Generic_refinement.elaborate_application`;
-3. translate elaborated refinement terms to the SMT logic AST;
-4. add Horn constraint syntax, positivity checking and a solver;
-5. preserve explicit ghost instantiations in diagnostics/proof artifacts.
+The next implementation slice should add Horn constraint syntax, top-level positivity checking, Horn-variable
+generation at application sites and a solver. Hindley result refinements should also be propagated to later Core
+expressions so common call chains need fewer explicit `[@refined.type]` annotations.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
