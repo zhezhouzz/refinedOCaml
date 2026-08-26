@@ -1,0 +1,31 @@
+opam-version: "2.0"
+name: "refined_ocaml"
+version: "dev"
+synopsis: "Bidirectional refinement types for OCaml"
+description:
+  "An experimental over- and under-approximate refinement verifier for OCaml."
+maintainer: "asukaminato0721"
+authors: "asukaminato0721"
+homepage: "https://github.com/asukaminato0721/refinedOCaml"
+bug-reports: "https://github.com/asukaminato0721/refinedOCaml/issues"
+depends: [
+  "dune" {= "3.23.0"}
+  "ocaml" {= "5.3.0"}
+  "ocamlformat" {= "0.28.1" & with-test}
+  "ppxlib" {= "0.35.0"}
+]
+build: [
+  ["dune" "subst"] {dev}
+  [
+    "dune"
+    "build"
+    "-p"
+    name
+    "-j"
+    jobs
+    "@install"
+    "@runtest" {with-test}
+    "@doc" {with-doc}
+  ]
+]
+x-maintenance-intent: ["(latest)"]
