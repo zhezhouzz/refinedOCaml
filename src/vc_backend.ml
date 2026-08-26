@@ -4,6 +4,44 @@ open Refined_common
 open Parsetree
 open Asttypes
 
+module Sort_term = struct
+  type t = Typed_core.sort
+
+  type head =
+    | Integer
+    | Boolean
+    | Unit
+    | Tuple
+    | Application of Typed_core.symbol
+
+  let view = function
+    | Typed_core.S_var variable -> `Variable variable
+    | S_int -> `Node (Integer, [])
+    | S_bool -> `Node (Boolean, [])
+    | S_unit -> `Node (Unit, [])
+    | S_tuple elements -> `Node (Tuple, elements)
+    | S_app (symbol, arguments) -> `Node (Application symbol, arguments)
+
+  let make_node head children =
+    match (head, children) with
+    | Integer, [] -> Typed_core.S_int
+    | Boolean, [] -> S_bool
+    | Unit, [] -> S_unit
+    | Tuple, elements -> S_tuple elements
+    | Application symbol, arguments -> S_app (symbol, arguments)
+    | (Integer | Boolean | Unit), _ -> invalid_arg "base sort with arguments"
+
+  let equal_head left right =
+    match (left, right) with
+    | Integer, Integer | Boolean, Boolean | Unit, Unit | Tuple, Tuple -> true
+    | Application left, Application right -> left.key = right.key
+    | _ -> false
+
+  let equal = ( = )
+end
+
+module Sort_evars = Evar_context.Make (Sort_term)
+
 let typed_smt_sort =
   let rec translate = function
     | Typed_core.S_int -> "Int"
@@ -63,35 +101,15 @@ let typed_lookup_logic registry scope name =
 let typed_specialize_program (program : Typed_core.program)
     (function_def : Typed_core.function_def) pre_expression post_expression =
   let open Typed_core in
-  let substitutions = Hashtbl.create 8 in
-  let rec substitute = function
-    | Typed_core.S_var name as sort -> (
-        match Hashtbl.find_opt substitutions name with
-        | Some sort -> sort
-        | None -> sort)
-    | S_tuple sorts -> S_tuple (List.map substitute sorts)
-    | S_app (symbol, sorts) -> S_app (symbol, List.map substitute sorts)
-    | (S_int | S_bool | S_unit) as sort -> sort
-  in
-  let rec unify ~loc formal actual =
-    match (formal, actual) with
-    | Typed_core.S_var name, actual -> (
-        match Hashtbl.find_opt substitutions name with
-        | None -> Hashtbl.add substitutions name actual
-        | Some previous when previous = actual -> ()
-        | Some previous ->
-            typed_error ~loc
-              "one obligation instantiates type variable `%s` as both %s and %s"
-              name (typed_smt_sort previous) (typed_smt_sort actual))
-    | S_tuple formals, S_tuple actuals
-      when List.length formals = List.length actuals ->
-        List.iter2 (unify ~loc) formals actuals
-    | S_app (formal_symbol, formals), S_app (actual_symbol, actuals)
-      when formal_symbol.key = actual_symbol.key
-           && List.length formals = List.length actuals ->
-        List.iter2 (unify ~loc) formals actuals
-    | S_int, S_int | S_bool, S_bool | S_unit, S_unit -> ()
-    | _ ->
+  let substitutions = Sort_evars.create () in
+  let substitute = Sort_evars.substitute substitutions in
+  let unify ~loc formal actual =
+    match Sort_evars.unify substitutions ~formal ~actual with
+    | Ok () -> ()
+    | Error (Occurs (variable, actual)) ->
+        typed_error ~loc "cyclic instantiation for `%s` in %s" variable
+          (typed_smt_sort actual)
+    | Error (Shape_mismatch (formal, actual)) ->
         typed_error ~loc
           "logical predicate type mismatch: expected %s but got %s"
           (typed_smt_sort formal) (typed_smt_sort actual)
@@ -218,7 +236,7 @@ let typed_specialize_program (program : Typed_core.program)
        (("result", function_def.result) :: formula_env)
        post_expression);
   infer_core function_def.body;
-  if Hashtbl.length substitutions = 0 then program
+  if not (Sort_evars.has_solutions substitutions) then program
   else
     let logic_by_name =
       Hashtbl.create (Hashtbl.length program.registry.logic_by_name)

@@ -1,6 +1,6 @@
 (test
  (name test_runner)
- (libraries refined_core)
+ (libraries refined_core refined_ir)
  (deps
   ../examples/valid.ml
   ../examples/invalid.ml

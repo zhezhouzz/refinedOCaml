@@ -13,7 +13,7 @@
 | B. Axioms vs lemmas | 当前允许 trusted axioms；未来希望支持 checked lemmas | 当前 axiom 全部进入 TCB，并在结果中列出 trusted axiom 名称 | 部分完成 | 加入 `lemma` 语法、lemma VC、导出已检查 lemma |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态 variant/record 已支持；constructor、recognizer、selector 和基本代数 axioms 已生成 | MVP 已完成 | 支持参数化用户 ADT 的 use-site monomorphisation；加入 axiom slicing |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
-| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | 已拆出 compiler-independent `refined_ocaml.ir`、`Typed_core`、`Vc_semantics`、`Vc_backend`、`Solver_backend`；Safety/Coverage 共享纯 context 接口 | 架构基础完成 | 参考 Generic Refinement Types，将 VC-level 参数化提升为 compositional typing judgment |
+| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | `Refinement_domain.S`、`Typing_judgment.Make` 和 `Evar_context.Make` 已进入 compiler-independent IR；生产 VC 通过 compositional Safety/Coverage subsumption；use-site specialization 使用通用 evar unifier | compositional skeleton 完成 | 增加 higher-sorted Hindley scheme/application elaboration，再实现 Horn constraints |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 当前 coverage 是 `forall result. post(result) => exists input. pre(input) /\ result = f(input)` 的 SMT obligation | 未完成 | 设计 coverage judgment、subtyping/entailment、witness/inverse 支持 |
 | 函数调用 | 支持 first-order 函数调用 | 当前通过 inlining 处理本文件中的 first-order 函数；递归调用被拒绝 | 部分完成 | 加入函数 summary、递归 SCC、termination measure |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 的 type variable 可按 obligation 实例化；普通多态函数可 first-order inlining | 部分完成 | 用户参数化 ADT 的 monomorphisation；处理 polymorphic recursion 的拒绝/抽象机制 |
@@ -25,7 +25,7 @@
 
 | 论文 | 相关方向 | 为什么相关 | 阅读优先级 |
 |---|---|---|---|
-| `ranjit-2025-generic-refinement-types.pdf` | C | 最直接对应 checker parameterized over denotation / refinement logic / typing algorithm | 高 |
+| `ranjit-2025-generic-refinement-types.pdf` | C | 已完成精读；提取 bidirectional judgment、subtyping constraints、Hindley evar 与 Horn generic 结构 | 已落实第一阶段 |
 | `ranjit-2017-local-refinement-typing.pdf` | C | 适合研究局部化 refinement checking/inference，避免全局 constraint generation 过重 | 中 |
 | `ranjit-2024-mechanizing-refinement-types.pdf` | B / TCB | 对 formalization 和可信 checker 很有启发，但当前阶段暂不实现 mechanization | 低，暂缓 |
 
@@ -47,7 +47,9 @@
 
 ### 3. 参数化 checker 是下一阶段的核心
 
-当前代码已经完成工程层拆分，但 Safety/Coverage 仍然只是两个 whole-function VC interpreters。真正要实现目标 C，还需要把这些模块边界提升成可组合 typing framework：
+当前代码已经完成工程层拆分，并加入由 refinement domain 与 denotation 参数化的 compositional
+checking/synthesis/subtyping skeleton。Safety/Coverage 的生产 VC 已通过这一 skeleton 生成；完整设计与
+论文映射记录在 `docs/generic-refinement-design.md`。
 
 | 层 | 职责 |
 |---|---|
@@ -57,7 +59,9 @@
 | Typing algorithm | 语法导向的 checking/inference/subtyping 规则 |
 | VC backend | SMT obligation、solver 调用、model 解释、proof artifact |
 
-`Generic Refinement Types` 应该重点看它如何抽象 refinement domain 和 checking framework。我们的目标不是照搬，而是判断 refinedOCaml 的 `Vc_semantics.Safety` / `Vc_semantics.Coverage` 应该升级成什么接口。
+论文实际重点是 generic refinement parameters，而不是直接统一 Safety/Coverage。我们采用其
+bidirectional/subtyping/evar 结构，同时保留 Safety 与 Coverage 的 denotation 差异。下一 slice 是
+higher-sorted Hindley schemes 和 application elaboration；Horn solving 后置。
 
 ### 4. Coverage 目前只是 VC，不是真正的 coverage type system
 
@@ -80,5 +84,5 @@ forall result. post(result) => exists input. pre(input) /\ result = f(input)
 Actions 运行 `@all/@install/@refined/@fmt`，autofix.ci 自动提交 `dune fmt` 修复。`refined_ocaml.ir` 不依赖 compiler-libs；所有版本敏感 API
 集中在 `Ocaml_5_3_frontend`。升级流程记录在 `docs/versioning.md`。
 
-因此 roadmap 的下一研究步骤正式切换为：阅读 `Generic Refinement Types`，设计 compositional
-denotation/refinement-domain/typing-algorithm interface，而不是继续扩展 whole-function VC 特例。
+Generic Refinement Types 的第一阶段已经落实。roadmap 的下一实现步骤切换为 higher-sorted Hindley
+generic scheme/application elaboration，并要求在调用结束时 evar context 完整；之后才加入 Horn solver。

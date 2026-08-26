@@ -1,7 +1,14 @@
 (library
  (name refined_ir)
  (public_name refined_ocaml.ir)
- (modules source_span refined_types typed_core vc_semantics))
+ (modules
+  source_span
+  refined_types
+  typed_core
+  evar_context
+  refinement_domain
+  typing_judgment
+  vc_semantics))
 
 (library
  (name refined_core)

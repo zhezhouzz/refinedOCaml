@@ -19,7 +19,75 @@ let require expected obligation =
   | `Invalid, (Valid | Unknown _) ->
       failwith (obligation.name ^ " should be invalid")
 
+let test_compositional_judgment () =
+  let module Typing = Refined_ir.Typing_judgment in
+  let left =
+    Typing.Safety.synthesize ~rule:Constant ~predicate:"left" ~children:[]
+  in
+  let right =
+    Typing.Safety.synthesize ~rule:Constant ~predicate:"right" ~children:[]
+  in
+  let branch =
+    Typing.Safety.branch ~guard:"guard" ~if_true:left ~if_false:right
+  in
+  if
+    Typing.Safety.predicate branch
+    <> "(or (and guard left) (and (not guard) right))"
+  then failwith "branch refinements were not composed structurally";
+  if Typing.Safety.derivation branch <> [ Branch; Constant; Constant ] then
+    failwith "typing derivation did not retain syntax-directed rules";
+  let safety =
+    Typing.Safety.check ~assumptions:[ "pre" ] ~expected:"post" left
+    |> Typing.Safety.obligation
+  in
+  if safety <> "(=> (and pre left) post)" then
+    failwith "safety subsumption has the wrong direction";
+  let coverage_left =
+    Typing.Coverage.synthesize ~rule:Constant ~predicate:"left" ~children:[]
+  in
+  let coverage =
+    Typing.Coverage.check ~assumptions:[ "pre" ] ~expected:"post" coverage_left
+    |> Typing.Coverage.obligation
+  in
+  if coverage <> "(=> post (and pre left))" then
+    failwith "coverage subsumption has the wrong direction"
+
+let test_hindley_evars () =
+  let module Term = struct
+    type head = Atom | List
+    type t = Variable of string | Node of head * t list
+
+    let view = function
+      | Variable variable -> `Variable variable
+      | Node (head, children) -> `Node (head, children)
+
+    let make_node head children = Node (head, children)
+    let equal_head = ( = )
+    let equal = ( = )
+  end in
+  let module Evars = Refined_ir.Evar_context.Make (Term) in
+  let context = Evars.create () in
+  let formal = Term.Node (List, [ Variable "element" ]) in
+  let actual = Term.Node (List, [ Node (Atom, []) ]) in
+  (match Evars.unify context ~formal ~actual with
+  | Ok () -> ()
+  | Error _ -> failwith "value-dependent evar did not unify at the call site");
+  if Evars.substitute context formal <> actual then
+    failwith "Hindley substitution was not applied recursively";
+  if not (Evars.is_complete context ~variables:[ "element" ]) then
+    failwith "solved Hindley evar context was reported as incomplete";
+  let cyclic = Evars.create () in
+  match
+    Evars.unify cyclic ~formal:(Term.Variable "a")
+      ~actual:(Term.Node (List, [ Variable "a" ]))
+  with
+  | Error (Occurs _) -> ()
+  | Ok () | Error (Shape_mismatch _) ->
+      failwith "Hindley evar occurs-check did not reject a cyclic solution"
+
 let () =
+  test_compositional_judgment ();
+  test_hindley_evars ();
   let compile source output =
     let command =
       Printf.sprintf "ocamlc -bin-annot -c %s -o %s.cmo" (Filename.quote source)
