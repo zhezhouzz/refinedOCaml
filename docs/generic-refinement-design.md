@@ -74,3 +74,11 @@ The next implementation slice should:
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
+
+## Property fuzzing
+
+`test/fuzz_runner.ml` recursively generates ground/template term trees and higher-sorted predicate lambdas. It
+checks that successful unification reconstructs the ground term, solved contexts are complete, recursive
+solutions fail the occurs-check, Hindley application elaboration returns the expected ghost argument, and result
+substitution/beta-reduction preserve the generated scheme. The default seed and case count are deterministic;
+both can be overridden through `REFINED_FUZZ_SEED` and `REFINED_FUZZ_CASES`.

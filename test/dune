@@ -30,3 +30,13 @@
  (modules ppx_theory_sample)
  (preprocess
   (pps refined_ocaml.ppx)))
+
+(executable
+ (name fuzz_runner)
+ (modules fuzz_runner)
+ (libraries refined_ir))
+
+(rule
+ (alias fuzz)
+ (action
+  (run %{exe:fuzz_runner.exe})))

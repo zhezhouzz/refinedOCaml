@@ -49,5 +49,11 @@ jobs:
       - name: Build and test
         run: opam exec -- dune build @all @install @refined
 
+      - name: Property fuzz tests
+        env:
+          REFINED_FUZZ_CASES: 20000
+          REFINED_FUZZ_SEED: 1592594470
+        run: opam exec -- dune build @fuzz
+
       - name: Check formatting
         run: opam exec -- dune build @fmt
