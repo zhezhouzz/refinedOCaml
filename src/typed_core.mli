@@ -72,6 +72,8 @@ and expr_desc =
   | Deref of symbol
   | Assign of symbol * expr
   | Sequence of expr * expr
+  | Perform of symbol
+  | Handle of expr * (symbol * expr) list
 
 and exception_pattern = Exn_any | Exn of symbol
 
@@ -82,6 +84,7 @@ type contract = {
   witnesses : (string * string) list;
   raises : (string * string) list;
   state : (string * string) list;
+  performs : (string * string) list;
   loc : Source_span.t;
 }
 

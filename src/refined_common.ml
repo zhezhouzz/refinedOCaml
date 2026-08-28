@@ -149,6 +149,20 @@ let contract_of_attribute attribute =
                         error ~loc:expression.pexp_loc
                           "state must contain (cell, predicate) string pairs")
           in
+          let performs =
+            match find_expression "performs" with
+            | None -> []
+            | Some expression ->
+                expression_list expression
+                |> List.map (fun expression ->
+                    match expression.pexp_desc with
+                    | Pexp_tuple [ operation; predicate ] ->
+                        (string_constant operation, string_constant predicate)
+                    | _ ->
+                        error ~loc:expression.pexp_loc
+                          "performs must contain (operation, predicate) string \
+                           pairs")
+          in
           if mode = Over && witnesses <> [] then
             error ~loc:attribute.attr_loc
               "safety contracts cannot declare coverage witnesses";
@@ -158,7 +172,17 @@ let contract_of_attribute attribute =
           if mode = Under && state <> [] then
             error ~loc:attribute.attr_loc
               "coverage state witnesses are not yet supported";
-          Some (mode, required "pre", required "post", witnesses, raises, state)
+          if mode = Under && performs <> [] then
+            error ~loc:attribute.attr_loc
+              "coverage performed-outcome witnesses are not yet supported";
+          Some
+            ( mode,
+              required "pre",
+              required "post",
+              witnesses,
+              raises,
+              state,
+              performs )
       | _ ->
           error ~loc:attribute.attr_loc
             "expected [@%s { pre = \"...\"; post = \"...\" }]"

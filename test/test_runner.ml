@@ -415,6 +415,10 @@ let () =
   compile "../examples/state_invalid.ml" "typed_state_invalid";
   compile "../examples/state_escape.ml" "typed_state_escape";
   compile "../examples/state_unknown_contract.ml" "typed_state_unknown_contract";
+  compile "../examples/effect_valid.ml" "typed_effect_valid";
+  compile "../examples/effect_invalid.ml" "typed_effect_invalid";
+  compile "../examples/effect_continue_unsupported.ml"
+    "typed_effect_continue_unsupported";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -547,6 +551,15 @@ let () =
   | exception Location.Error _ -> ());
   (match obligations_of_cmt "typed_state_unknown_contract.cmt" with
   | _ -> failwith "state contract naming an unknown cell was accepted"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_effect_valid.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "(=>") then
+        failwith "performed outcome did not emit a guarded obligation";
+      require `Valid obligation);
+  obligations_of_cmt "typed_effect_invalid.cmt" |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_effect_continue_unsupported.cmt" with
+  | _ -> failwith "resuming effect handler was accepted as abortive"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);

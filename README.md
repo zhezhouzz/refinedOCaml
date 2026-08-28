@@ -356,6 +356,27 @@ let[@refined.over
 异常发生前的写入。Reference 参数、alias、escape、heap allocation summary、coverage state witnesses
 和跨函数 state summary 仍 fail closed。
 
+OCaml 5.3 的标准 effect surface 通过 `Effect.perform` 与 `Effect.Deep.match_with` 提供。当前 frontend
+支持 nullary operation 和 canonical abortive handler：
+
+```ocaml
+type _ Effect.t += Stop : int Effect.t
+
+let[@refined.over
+      {
+        pre = "true";
+        post = "result = 0";
+        performs = [ ("Stop", "flag") ];
+      }]
+    run flag =
+  if flag then Effect.perform Stop else 0
+```
+
+未处理的 Performed path 按 operation 名检查 `performs` predicate；未列出的 operation 失败。
+`Effect.Deep.match_with (fun () -> body) () handler` 的 `effc` 可将匹配 operation 映射到
+`Some (fun _continuation -> handler_body)`，并保留 perform 前的 state。调用 `continue` 的 resumptive
+handler、payload operation、非 literal handler record、effectful coverage/call summary 仍 fail closed。
+
 参数化用户 ADT 会在每个 obligation 中按实际闭合类型实例化。例如 `'a box` 在两个不同使用点会
 得到独立的 `T_box_Int` 与 `T_box_Bool` theory；constructor、recognizer、selector 和代数 axioms 的
 名字也包含实例 sort，不会跨实例混用。递归参数化 ADT 会递归替换其 field sorts，多态一阶 helper
@@ -406,9 +427,10 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
 | non-escaping local refs / final-state safety | 支持 | relational ghost-cell threading |
+| nullary Effect.perform / abortive Deep handler | 支持 | Performed guarded paths |
 | payload exception、exception coverage/call summary | 明确拒绝 | 需要 payload/outcome witnesses |
 | reference parameters/alias/escape | 明确拒绝 | 仅支持 lexical local cells |
-| algebraic effect lowering | 明确拒绝 | relational core 已就绪，frontend 待接入 |
+| resumptive/payload effect handlers | 明确拒绝 | 需要 continuation relation |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
@@ -419,8 +441,8 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. algebraic effect handler lowering；
-2. payload exception 与 exceptionful call summaries；
+1. resumptive effect continuation semantics；
+2. payload exception/effect 与 outcome call summaries；
 3. heap/reference summaries 与 coverage state witnesses。
 
 当前模块边界：

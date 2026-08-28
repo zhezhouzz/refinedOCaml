@@ -604,6 +604,99 @@ let rec typed_expression registry (expression : Typedtree.expression) =
             "raise currently requires a nullary exception constructor")
   | Texp_apply
       ( { exp_desc = Texp_ident (path, _, _); _ },
+        [ (Nolabel, Some { exp_desc = Texp_construct (_, operation, []); _ }) ]
+      )
+    when match List.rev (String.split_on_char '.' (Path.name path)) with
+         | "perform" :: _ -> true
+         | _ -> false -> (
+      match operation.Types.cstr_tag with
+      | Cstr_extension _ ->
+          make
+            (Perform
+               (symbol_of_uid ~name:operation.cstr_name operation.cstr_uid))
+      | _ ->
+          typed_error ~loc:expression.exp_loc
+            "Effect.perform currently requires a nullary effect operation")
+  | Texp_apply
+      ( { exp_desc = Texp_ident (path, _, _); _ },
+        [
+          (Nolabel, Some thunk);
+          (Nolabel, Some _argument);
+          (Nolabel, Some handler);
+        ] )
+    when match List.rev (String.split_on_char '.' (Path.name path)) with
+         | "match_with" :: _ -> true
+         | _ -> false ->
+      let thunk_body =
+        match thunk.exp_desc with
+        | Texp_function (_, Tfunction_body body) -> body
+        | _ ->
+            typed_error ~loc:thunk.exp_loc
+              "Effect.Deep.match_with requires an inline thunk"
+      in
+      let fields =
+        match handler.exp_desc with
+        | Texp_record { fields; extended_expression = None; _ } -> fields
+        | _ ->
+            typed_error ~loc:handler.exp_loc
+              "Effect.Deep.match_with requires a literal handler record"
+      in
+      let field name =
+        Array.to_list fields
+        |> List.find_map (fun (description, definition) ->
+            if description.Types.lbl_name <> name then None
+            else
+              match definition with
+              | Typedtree.Overridden (_, value) -> Some value
+              | Kept _ -> None)
+      in
+      let effc =
+        match field "effc" with
+        | Some { exp_desc = Texp_function (_, Tfunction_body body); _ } -> body
+        | _ ->
+            typed_error ~loc:handler.exp_loc
+              "effect handler requires an inline effc function"
+      in
+      let handlers =
+        match effc.exp_desc with
+        | Texp_match (_, cases, [], Total) ->
+            List.filter_map
+              (fun (case : Typedtree.computation Typedtree.case) ->
+                let pattern =
+                  value_pattern_of_computation ~loc:case.c_lhs.pat_loc
+                    case.c_lhs
+                in
+                match (pattern.pat_desc, case.c_rhs.exp_desc) with
+                | ( Tpat_construct (_, operation, [], _),
+                    Texp_construct
+                      ( _,
+                        _,
+                        [
+                          {
+                            exp_desc =
+                              Texp_function (_, Tfunction_body handler_body);
+                            _;
+                          };
+                        ] ) ) -> (
+                    match operation.Types.cstr_tag with
+                    | Cstr_extension _ ->
+                        Some
+                          ( symbol_of_uid ~name:operation.cstr_name
+                              operation.cstr_uid,
+                            recurse handler_body )
+                    | _ -> None)
+                | Tpat_any, Texp_construct (_, _, []) -> None
+                | _ ->
+                    typed_error ~loc:case.c_rhs.exp_loc
+                      "unsupported effect handler clause")
+              cases
+        | _ ->
+            typed_error ~loc:effc.exp_loc
+              "effect handler effc must match on the operation"
+      in
+      make (Handle (recurse thunk_body, handlers))
+  | Texp_apply
+      ( { exp_desc = Texp_ident (path, _, _); _ },
         [ (Nolabel, Some { exp_desc = Texp_ident (cell, _, _); _ }) ] )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | "!" :: _ -> true
@@ -781,7 +874,7 @@ let typed_contracts attributes =
     (fun attribute ->
       match contract_of_attribute attribute with
       | None -> None
-      | Some (mode, pre, post, witnesses, raises, state) ->
+      | Some (mode, pre, post, witnesses, raises, state, performs) ->
           Some
             Typed_core.
               {
@@ -791,6 +884,7 @@ let typed_contracts attributes =
                 witnesses;
                 raises;
                 state;
+                performs;
                 loc = span_of_location attribute.attr_loc;
               })
     attributes
@@ -860,7 +954,15 @@ let typed_normalize expression =
   and anf expression continuation =
     match expression.desc with
     | Var _ | Int _ | Bool _ -> continuation expression
-    | Raise _ -> expression
+    | Raise _ | Perform _ -> expression
+    | Handle (body, handlers) ->
+        let body = anf body Fun.id in
+        let handlers =
+          List.map
+            (fun (operation, handler) -> (operation, anf handler Fun.id))
+            handlers
+        in
+        bind_operation expression (Handle (body, handlers)) continuation
     | Let_ref (symbol, sort, initial, body) ->
         let initial = anf initial Fun.id in
         let body = anf body Fun.id in

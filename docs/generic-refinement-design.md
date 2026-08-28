@@ -134,7 +134,12 @@ Non-escaping local references and final-state contracts are now connected to pro
 cells thread through sequence, branch, raise and handlers; normal posts can constrain each final cell. Reference
 parameters, aliasing, escape, heap summaries and coverage state witnesses remain fail closed.
 
-The next implementation slice is algebraic effect-handler lowering and performed-outcome contracts.
+Nullary `Effect.perform`, canonical abortive `Effect.Deep.match_with`, and performed-outcome safety contracts are
+now connected to production VCs. Matching handlers turn Performed paths into handler relations while preserving
+state; unhandled operations use named `performs` posts. Payload operations, continuation resumption and
+effectful coverage/call summaries remain fail closed.
+
+The next implementation slice is resumptive effect-continuation semantics.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

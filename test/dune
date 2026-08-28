@@ -57,7 +57,10 @@
   ../examples/state_valid.ml
   ../examples/state_invalid.ml
   ../examples/state_escape.ml
-  ../examples/state_unknown_contract.ml))
+  ../examples/state_unknown_contract.ml
+  ../examples/effect_valid.ml
+  ../examples/effect_invalid.ml
+  ../examples/effect_continue_unsupported.ml))
 
 (executable
  (name ppx_sample)
