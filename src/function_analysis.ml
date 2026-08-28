@@ -9,7 +9,7 @@ let calls expression =
       List.fold_left collect accumulator expressions
     in
     match expression.desc with
-    | Var _ | Int _ | Bool _ -> accumulator
+    | Var _ | Int _ | Bool _ | Raise _ -> accumulator
     | Tuple expressions
     | Choose expressions
     | Construct (_, expressions)
@@ -26,6 +26,10 @@ let calls expression =
           (collect accumulator scrutinee)
           cases
     | Field (_, _, record) -> collect accumulator record
+    | Try (body, cases) ->
+        List.fold_left
+          (fun accumulator (_, handler) -> collect accumulator handler)
+          (collect accumulator body) cases
   in
   collect [] expression |> List.sort_uniq String.compare
 

@@ -50,7 +50,10 @@
   ../examples/functor_client.ml
   ../examples/coverage_composition.ml
   ../examples/coverage_bad_witness.ml
-  ../examples/coverage_incomplete_witness.ml))
+  ../examples/coverage_incomplete_witness.ml
+  ../examples/exception_valid.ml
+  ../examples/exception_invalid.ml
+  ../examples/exception_coverage.ml))
 
 (executable
  (name ppx_sample)

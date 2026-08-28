@@ -587,6 +587,21 @@ let rec typed_expression registry (expression : Typedtree.expression) =
              },
              arguments ))
   | Texp_tuple expressions -> make (Tuple (List.map recurse expressions))
+  | Texp_apply
+      ( { exp_desc = Texp_ident (path, _, _); _ },
+        [ (Nolabel, Some { exp_desc = Texp_construct (_, exception_, []); _ }) ]
+      )
+    when match List.rev (String.split_on_char '.' (Path.name path)) with
+         | "raise" :: _ -> true
+         | _ -> false -> (
+      match exception_.Types.cstr_tag with
+      | Cstr_extension _ ->
+          make
+            (Raise
+               (symbol_of_uid ~name:exception_.cstr_name exception_.cstr_uid))
+      | _ ->
+          typed_error ~loc:expression.exp_loc
+            "raise currently requires a nullary exception constructor")
   | Texp_apply ({ exp_desc = Texp_ident (path, _, description); _ }, arguments)
     ->
       let arguments =
@@ -638,6 +653,36 @@ let rec typed_expression registry (expression : Typedtree.expression) =
   | Texp_match (_, _, _, Partial) ->
       typed_error ~loc:expression.exp_loc
         "partial matches are rejected by the refinement frontend"
+  | Texp_try (body, cases, []) ->
+      let exception_pattern (pattern : Typedtree.pattern) =
+        match pattern.pat_desc with
+        | Tpat_any -> Exn_any
+        | Tpat_construct (_, description, [], _) -> (
+            match description.Types.cstr_tag with
+            | Cstr_extension _ ->
+                Exn
+                  (symbol_of_uid ~name:description.cstr_name
+                     description.cstr_uid)
+            | _ ->
+                typed_error ~loc:pattern.pat_loc
+                  "exception handler pattern is not an exception")
+        | _ ->
+            typed_error ~loc:pattern.pat_loc
+              "exception handlers currently require nullary exception or _"
+      in
+      let cases =
+        List.map
+          (fun (case : Typedtree.value Typedtree.case) ->
+            if Option.is_some case.c_guard then
+              typed_error ~loc:case.c_rhs.exp_loc
+                "guarded exception handlers are not supported";
+            (exception_pattern case.c_lhs, recurse case.c_rhs))
+          cases
+      in
+      make (Try (recurse body, cases))
+  | Texp_try (_, _, _ :: _) ->
+      typed_error ~loc:expression.exp_loc
+        "effect handlers are not yet lowered to relational Core"
   | Texp_record { fields; extended_expression = None; _ } ->
       let entries =
         Array.to_list fields
@@ -691,7 +736,7 @@ let typed_contracts attributes =
     (fun attribute ->
       match contract_of_attribute attribute with
       | None -> None
-      | Some (mode, pre, post, witnesses) ->
+      | Some (mode, pre, post, witnesses, raises) ->
           Some
             Typed_core.
               {
@@ -699,6 +744,7 @@ let typed_contracts attributes =
                 pre;
                 post;
                 witnesses;
+                raises;
                 loc = span_of_location attribute.attr_loc;
               })
     attributes
@@ -768,6 +814,7 @@ let typed_normalize expression =
   and anf expression continuation =
     match expression.desc with
     | Var _ | Int _ | Bool _ -> continuation expression
+    | Raise _ -> expression
     | Let (symbol, value, body) ->
         anf value (fun value ->
             let body = anf body continuation in
@@ -805,6 +852,12 @@ let typed_normalize expression =
               refinement = expression.refinement;
               loc = expression.loc;
             })
+    | Try (body, cases) ->
+        let body = anf body Fun.id in
+        let cases =
+          List.map (fun (pattern, body) -> (pattern, anf body Fun.id)) cases
+        in
+        bind_operation expression (Try (body, cases)) continuation
     | Tuple expressions ->
         atoms expressions (fun expressions ->
             bind_operation expression (Tuple expressions) continuation)

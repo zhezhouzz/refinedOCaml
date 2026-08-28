@@ -263,7 +263,10 @@ let typed_specialize_program (program : Typed_core.program)
         recurse scrutinee;
         List.iter (fun (_, body) -> recurse body) cases
     | Field (_, _, record) -> recurse record
-    | Var _ | Int _ | Bool _ -> ()
+    | Var _ | Int _ | Bool _ | Raise _ -> ()
+    | Try (body, cases) ->
+        recurse body;
+        List.iter (fun (_, handler) -> recurse handler) cases
   in
   ignore (infer_formula [] formula_env pre_expression);
   ignore
@@ -359,7 +362,7 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
   let rec collect_expression (expression : Typed_core.expr) =
     collect expression.sort;
     match expression.desc with
-    | Var _ | Int _ | Bool _ -> ()
+    | Var _ | Int _ | Bool _ | Raise _ -> ()
     | Construct (constructor, expressions) | Record (constructor, expressions)
       ->
         collect constructor.result;
@@ -381,6 +384,9 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
         collect constructor.result;
         List.iter collect constructor.arguments;
         collect_expression record
+    | Try (body, cases) ->
+        collect_expression body;
+        List.iter (fun (_, handler) -> collect_expression handler) cases
   in
   List.iter (fun (_, sort) -> collect sort) function_def.arguments;
   collect function_def.result;
@@ -974,7 +980,7 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
     let sort = substitute current.sort in
     let desc =
       match current.desc with
-      | (Var _ | Int _ | Bool _) as desc -> desc
+      | (Var _ | Int _ | Bool _ | Raise _) as desc -> desc
       | Tuple expressions -> Tuple (List.map map_expression expressions)
       | Construct (constructor_, expressions) ->
           Construct
@@ -1005,6 +1011,12 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
       | Field (constructor_, index, record) ->
           let record = map_expression record in
           Field (constructor_for_result constructor_ record.sort, index, record)
+      | Try (body, cases) ->
+          Try
+            ( map_expression body,
+              List.map
+                (fun (pattern, handler) -> (pattern, map_expression handler))
+                cases )
     in
     { current with desc; sort }
   in
@@ -1212,6 +1224,9 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
         (app
            (typed_tuple_constructor expression.sort)
            (List.map recurse_term elements))
+  | Raise _ | Try _ ->
+      typed_error_at expression.loc
+        "exception outcome escaped the relational translator"
 
 and typed_inline_call program analysis mode current_function path call_stack
     choices generic_calls env expression symbol arguments =
@@ -1458,6 +1473,71 @@ let typed_expr_smt program analysis mode function_def env expression =
       generic_calls env expression
   in
   (term, List.rev !choices, generic_calls)
+
+let rec typed_has_exception (expression : Typed_core.expr) =
+  match expression.desc with
+  | Raise _ | Try _ -> true
+  | Var _ | Int _ | Bool _ -> false
+  | Tuple expressions
+  | Construct (_, expressions)
+  | Choose expressions
+  | Apply (_, expressions)
+  | Record (_, expressions) ->
+      List.exists typed_has_exception expressions
+  | If (condition, if_true, if_false) ->
+      List.exists typed_has_exception [ condition; if_true; if_false ]
+  | Let (_, value, body) ->
+      typed_has_exception value || typed_has_exception body
+  | Match (scrutinee, cases) ->
+      typed_has_exception scrutinee
+      || List.exists (fun (_, body) -> typed_has_exception body) cases
+  | Field (_, _, record) -> typed_has_exception record
+
+let typed_relational_expr program analysis function_def env expression =
+  let module R = Relational_outcome in
+  let choices = ref [] in
+  let generic_calls = new_generic_call_state () in
+  let rec translate env (expression : Typed_core.expr) =
+    match expression.desc with
+    | Raise exception_ -> R.raise_ ~state:[] exception_.display
+    | If (condition, if_true, if_false) ->
+        if typed_has_exception condition then
+          typed_error_at condition.loc
+            "exceptionful conditions are not yet supported";
+        let condition =
+          typed_expr_smt_with_choices program analysis Over function_def [] []
+            choices generic_calls env condition
+        in
+        R.branch ~condition:condition.term ~if_true:(translate env if_true)
+          ~if_false:(translate env if_false)
+    | Let (symbol, value, body) ->
+        R.bind (translate env value) (fun value _state ->
+            translate
+              ((symbol.key, { term = value; refinement = None }) :: env)
+              body)
+    | Try (body, cases) ->
+        R.try_with (translate env body) (fun exception_ _state ->
+            match
+              List.find_opt
+                (fun (pattern, _) ->
+                  match pattern with
+                  | Typed_core.Exn_any -> true
+                  | Exn symbol -> symbol.display = exception_)
+                cases
+            with
+            | Some (_, handler) -> translate env handler
+            | None -> R.raise_ ~state:[] exception_)
+    | _ ->
+        if typed_has_exception expression then
+          typed_error_at expression.loc
+            "exception is nested in an unsupported evaluation context";
+        let value =
+          typed_expr_smt_with_choices program analysis Over function_def [] []
+            choices generic_calls env expression
+        in
+        R.return ~state:[] value.term
+  in
+  (translate env expression, List.rev !choices, generic_calls)
 
 let typed_collect_sorts program function_def =
   let module Set = Set.Make (String) in
@@ -1879,6 +1959,120 @@ let typed_obligation (program : Typed_core.program) analysis
     ghost_instantiations = List.rev generic_calls.ghost_instantiations;
   }
 
+let typed_exception_obligation (program : Typed_core.program) analysis
+    (function_def : Typed_core.function_def) (contract : Typed_core.contract) =
+  if contract.mode <> Over then
+    typed_error_at contract.loc
+      "exceptionful coverage contracts are not yet supported";
+  let env =
+    List.map
+      (fun (symbol, _) ->
+        ( symbol.Typed_core.key,
+          { term = smt_identifier symbol.key; refinement = None } ))
+      function_def.arguments
+  in
+  let formula_env =
+    List.map2
+      (fun (symbol, sort) (_, value) ->
+        (symbol.Typed_core.display, (value.term, sort)))
+      function_def.arguments env
+  in
+  let parse text =
+    parse_formula ~filename:contract.loc.file
+      ~loc:(location_of_span contract.loc)
+      text
+  in
+  let pre_expression = parse contract.pre in
+  let post_expression = parse contract.post in
+  let raised_expressions =
+    contract.raises
+    |> List.map (fun (name, predicate) -> (name, parse predicate))
+  in
+  let names = List.map fst contract.raises in
+  if List.length names <> List.length (List.sort_uniq String.compare names) then
+    typed_error_at contract.loc "raises clauses must name each exception once";
+  let program =
+    typed_specialize_program program function_def pre_expression post_expression
+    |> fun program -> typed_monomorphize_datatypes program function_def
+  in
+  let relation, choices, generic_calls =
+    typed_relational_expr program analysis function_def env function_def.body
+  in
+  if
+    generic_calls.side_conditions <> []
+    || generic_calls.summary_assumptions <> []
+  then
+    typed_error_at contract.loc
+      "exceptionful calls with refinement summaries are not yet supported";
+  let roots =
+    generic_calls.used_theory_symbols
+    @ formula_theory_symbols program.registry formula_env pre_expression
+    @ formula_theory_symbols program.registry
+        (("result", ("result", function_def.result)) :: formula_env)
+        post_expression
+    @ List.concat_map
+        (fun (_, expression) ->
+          formula_theory_symbols program.registry formula_env expression)
+        raised_expressions
+    |> List.sort_uniq String.compare
+  in
+  let program, _ = slice_program_theory program ~roots in
+  let pre = typed_formula program.registry formula_env pre_expression in
+  let post =
+    typed_formula program.registry
+      (("result", ("result", function_def.result)) :: formula_env)
+      post_expression
+  in
+  let raised =
+    List.map
+      (fun (name, expression) ->
+        (name, typed_formula program.registry formula_env expression))
+      raised_expressions
+  in
+  let obligation =
+    Relational_outcome.safety_obligation ~pre
+      ~normal:(fun ~value ~initial:_ ~final:_ ->
+        Printf.sprintf "(let ((result %s)) %s)" value post)
+      ~raised:(fun ~exception_ ~initial:_ ~final:_ ->
+        Option.value (List.assoc_opt exception_ raised) ~default:"false")
+      ~performed:(fun ~operation:_ ~payload:_ ~initial:_ ~final:_ -> "false")
+      relation
+  in
+  let buffer = Buffer.create 4096 in
+  Buffer.add_string buffer
+    "(set-option :produce-models true)\n(set-logic ALL)\n";
+  Buffer.add_string buffer (typed_datatype_prelude program function_def);
+  List.iter
+    (fun (symbol, sort) ->
+      Buffer.add_string buffer
+        (Printf.sprintf "(declare-const %s %s)\n"
+           (smt_identifier symbol.Typed_core.key)
+           (typed_smt_sort sort)))
+    function_def.arguments;
+  List.iter
+    (fun (name, sort) ->
+      Buffer.add_string buffer
+        (Printf.sprintf "(declare-const %s %s)\n" name (typed_smt_sort sort)))
+    choices;
+  Buffer.add_string buffer (Printf.sprintf "(assert (not %s))\n" obligation);
+  Buffer.add_string buffer "(check-sat)\n(get-model)\n";
+  {
+    name = function_def.symbol.display;
+    mode = contract.mode;
+    location = contract.loc;
+    smt = Buffer.contents buffer;
+    trusted_axioms =
+      List.rev_map
+        (fun (axiom : Typed_core.axiom) -> axiom.axiom_name)
+        program.registry.axioms;
+    checked_lemmas =
+      List.rev_map
+        (fun (lemma : Typed_core.axiom) -> lemma.axiom_name)
+        program.registry.checked_lemmas;
+    proof_artifacts = List.rev program.registry.proof_artifacts;
+    ghost_instantiations = List.rev generic_calls.ghost_instantiations;
+  }
+
 let lemma_obligations registry lemmas =
   let registry =
     {
@@ -1980,7 +2174,10 @@ let obligations_of_cmt_with_theories ~theories filename =
   List.concat_map
     (fun function_def ->
       List.map
-        (typed_obligation program analysis function_def)
+        (fun contract ->
+          if typed_has_exception function_def.Typed_core.body then
+            typed_exception_obligation program analysis function_def contract
+          else typed_obligation program analysis function_def contract)
         function_def.Typed_core.contracts)
     program.functions
 

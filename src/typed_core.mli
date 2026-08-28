@@ -66,12 +66,17 @@ and expr_desc =
   | Match of expr * (pattern * expr) list
   | Record of constructor * expr list
   | Field of constructor * int * expr
+  | Raise of symbol
+  | Try of expr * (exception_pattern * expr) list
+
+and exception_pattern = Exn_any | Exn of symbol
 
 type contract = {
   mode : Refined_types.mode;
   pre : string;
   post : string;
   witnesses : (string * string) list;
+  raises : (string * string) list;
   loc : Source_span.t;
 }
 

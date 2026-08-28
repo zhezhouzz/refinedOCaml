@@ -318,8 +318,23 @@ state，以及三种 outcome：`Return value`、`Raised exception`、`Performed 
 - relational Coverage 要求目标 outcome 至少匹配一个 guarded path。
 
 该层位于 [relational_outcome.ml](src/relational_outcome.ml)，已经有 deterministic unit/property tests。
-当前 OCaml Typedtree 的 mutation、`raise`/`try` 和 effect handlers 仍 fail closed；它们不会在 frontend
-完成 lowering 前被当作纯表达式接受。
+OCaml frontend 已支持 nullary exception、`raise E`、`try ... with E -> ...` 和 catch-all。Safety
+contract 可增加 exceptional postconditions：
+
+```ocaml
+let[@refined.over
+      {
+        pre = "true";
+        post = "result >= 0";
+        raises = [ ("Negative", "x < 0") ];
+      }]
+    classify x =
+  if x < 0 then raise Negative else x
+```
+
+Normal paths 检查 `post`，Raised paths 按异常名检查 `raises`；未列出的异常对应 `false`。Payload
+exceptions、exceptionful function summary 和 exceptionful coverage 仍 fail closed。Mutation 与 effect
+handlers 也会等到对应 lowering 完成后才开放。
 
 参数化用户 ADT 会在每个 obligation 中按实际闭合类型实例化。例如 `'a box` 在两个不同使用点会
 得到独立的 `T_box_Int` 与 `T_box_Bool` theory；constructor、recognizer、selector 和代数 axioms 的
@@ -369,7 +384,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 递归 coverage | 有条件支持 | complete witnesses + SCC measure |
 | 开放 polymorphic ADT obligation、高阶值 | 明确拒绝 | 需要 finite instances/closure |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
-| OCaml mutation、exception、algebraic effect lowering | 明确拒绝 | relational core 已就绪，frontend 待接入 |
+| nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
+| payload exception、exception coverage/call summary | 明确拒绝 | 需要 payload/outcome witnesses |
+| OCaml mutation、algebraic effect lowering | 明确拒绝 | relational core 已就绪，frontend 待接入 |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
@@ -380,9 +397,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. `raise`/`try` Typedtree lowering 与 outcome contracts；
-2. 局部 reference/assignment lowering 与 state contracts；
-3. algebraic effect handler lowering。
+1. 局部 reference/assignment lowering 与 state contracts；
+2. algebraic effect handler lowering；
+3. payload exception 与 exceptionful call summaries。
 
 当前模块边界：
 

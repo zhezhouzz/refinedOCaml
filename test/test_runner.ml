@@ -408,6 +408,9 @@ let () =
   compile "../examples/coverage_bad_witness.ml" "typed_coverage_bad_witness";
   compile "../examples/coverage_incomplete_witness.ml"
     "typed_coverage_incomplete_witness";
+  compile "../examples/exception_valid.ml" "typed_exception_valid";
+  compile "../examples/exception_invalid.ml" "typed_exception_invalid";
+  compile "../examples/exception_coverage.ml" "typed_exception_coverage";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -518,6 +521,16 @@ let () =
   |> List.iter (require `Invalid);
   (match obligations_of_cmt "typed_coverage_incomplete_witness.cmt" with
   | _ -> failwith "incomplete coverage witnesses were accepted"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_exception_valid.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "(=>") then
+        failwith "exception relation did not emit guarded path obligations";
+      require `Valid obligation);
+  obligations_of_cmt "typed_exception_invalid.cmt"
+  |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_exception_coverage.cmt" with
+  | _ -> failwith "exceptionful coverage was accepted without outcome witnesses"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);
