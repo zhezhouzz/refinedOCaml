@@ -437,6 +437,11 @@ let () =
   compile "../examples/outcome_calls.ml" "typed_outcome_calls";
   compile "../examples/outcome_recursive_unsupported.ml"
     "typed_outcome_recursive_unsupported";
+  compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
+  compile "../examples/outcome_coverage_invalid.ml"
+    "typed_outcome_coverage_invalid";
+  compile "../examples/outcome_coverage_incomplete.ml"
+    "typed_outcome_coverage_incomplete";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -555,9 +560,8 @@ let () =
       require `Valid obligation);
   obligations_of_cmt "typed_exception_invalid.cmt"
   |> List.iter (require `Invalid);
-  (match obligations_of_cmt "typed_exception_coverage.cmt" with
-  | _ -> failwith "exceptionful coverage was accepted without outcome witnesses"
-  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_exception_coverage.cmt"
+  |> List.iter (require `Invalid);
   obligations_of_cmt "typed_state_valid.cmt"
   |> List.iter (fun obligation ->
       if not (contains obligation.smt "state_value") then
@@ -600,6 +604,18 @@ let () =
       require `Valid obligation);
   (match obligations_of_cmt "typed_outcome_recursive_unsupported.cmt" with
   | _ -> failwith "recursive effectful outcome summary was accepted"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_outcome_coverage.cmt"
+  |> List.iter (fun obligation ->
+      if
+        obligation.name = "mapped_outcome"
+        && not (contains obligation.smt "call_payload_")
+      then failwith "under outcome call summary was not composed";
+      require `Valid obligation);
+  obligations_of_cmt "typed_outcome_coverage_invalid.cmt"
+  |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_outcome_coverage_incomplete.cmt" with
+  | _ -> failwith "incomplete outcome witnesses were accepted"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);

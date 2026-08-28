@@ -962,7 +962,7 @@ let typed_contracts attributes =
     (fun attribute ->
       match contract_of_attribute attribute with
       | None -> None
-      | Some (mode, pre, post, witnesses, raises, state, performs) ->
+      | Some (mode, pre, post, witnesses, raises, state, performs, outcomes) ->
           Some
             Typed_core.
               {
@@ -973,6 +973,11 @@ let typed_contracts attributes =
                 raises;
                 state;
                 performs;
+                outcomes =
+                  List.map
+                    (fun (kind, name, post, witnesses) ->
+                      Typed_core.{ kind; name; post; witnesses })
+                    outcomes;
                 loc = span_of_location attribute.attr_loc;
               })
     attributes

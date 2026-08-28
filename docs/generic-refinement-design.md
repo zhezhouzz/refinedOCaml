@@ -140,8 +140,11 @@ safety contracts are connected to production VCs. CPS translation captures the c
 `continue k value` resumes it, deep handlers process re-performed operations, and relational state is preserved.
 Handler `retc` must be identity and `exnc` must re-raise.
 
-The next implementation slice is witness-carrying exception/effect coverage, followed by measured recursive
-outcome summaries.
+Witness-carrying exception/effect coverage is now implemented. Normal Return targets use result inverses;
+Raised/Performed targets use per-outcome payload predicates and inverse mappings. Under calls compose symbolic
+normal results and payload outcomes, with caller continuations attached to Performed paths.
+
+The next implementation slice is measured recursive outcome summaries.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

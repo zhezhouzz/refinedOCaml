@@ -1559,6 +1559,43 @@ let rec typed_has_exception (expression : Typed_core.expr) =
       || List.exists (fun (_, body) -> typed_has_exception body) cases
   | Field (_, _, record) -> typed_has_exception record
 
+let typed_requires_relational (program : Typed_core.program) expression =
+  let rec check visited (expression : Typed_core.expr) =
+    typed_has_exception expression
+    ||
+    match expression.desc with
+    | Apply (symbol, arguments) ->
+        List.exists (check visited) arguments
+        ||
+        if List.mem symbol.key visited then false
+        else
+          Option.fold ~none:false
+            ~some:(fun (callee : Typed_core.function_def) ->
+              check (symbol.key :: visited) callee.body)
+            (List.find_opt
+               (fun (callee : Typed_core.function_def) ->
+                 callee.symbol.key = symbol.key)
+               program.functions)
+    | Tuple expressions
+    | Construct (_, expressions)
+    | Choose expressions
+    | Record (_, expressions) ->
+        List.exists (check visited) expressions
+    | If (condition, if_true, if_false) ->
+        List.exists (check visited) [ condition; if_true; if_false ]
+    | Let (_, value, body) | Sequence (value, body) ->
+        check visited value || check visited body
+    | Match (scrutinee, cases) ->
+        check visited scrutinee
+        || List.exists (fun (_, body) -> check visited body) cases
+    | Field (_, _, record) | Assign (_, record) -> check visited record
+    | Let_ref (_, _, initial, body) ->
+        check visited initial || check visited body
+    | Try _ | Raise _ | Perform _ | Handle _ | Deref _ -> true
+    | Var _ | Int _ | Bool _ -> false
+  in
+  check [] expression
+
 let typed_local_cells expression =
   let rec collect cells (expression : Typed_core.expr) =
     match expression.desc with
@@ -1663,7 +1700,7 @@ let typed_outcome_payload_sorts ?program expression =
   in
   collect [] [] expression |> List.sort_uniq compare
 
-let typed_relational_expr program analysis function_def env expression =
+let typed_relational_expr program analysis mode function_def env expression =
   let module R = Relational_outcome in
   let choices = ref [] in
   let generic_calls = new_generic_call_state () in
@@ -1697,7 +1734,7 @@ let typed_relational_expr program analysis function_def env expression =
         with
         | None ->
             let value =
-              typed_expr_smt_with_choices program analysis Over function_def []
+              typed_expr_smt_with_choices program analysis mode function_def []
                 [] choices generic_calls env expression
             in
             continuation value.term state
@@ -1719,140 +1756,305 @@ let typed_relational_expr program analysis function_def env expression =
               instantiate_function_at_call ~loc:expression.loc callee arguments
                 expression.sort
             in
-            let contracts =
-              List.filter
-                (fun (contract : Typed_core.contract) -> contract.mode = Over)
-                callee.contracts
-            in
-            let summary =
-              match contracts with
-              | [ summary ] -> summary
-              | [] ->
-                  typed_error_at expression.loc
-                    "effectful call `%s` needs one safety outcome summary"
-                    symbol.display
-              | _ ->
-                  typed_error_at expression.loc
-                    "effectful call `%s` has ambiguous safety summaries"
-                    symbol.display
-            in
-            if summary.state <> [] then
-              typed_error_at expression.loc
-                "cross-function state summaries are not yet supported";
-            let values =
-              List.map
-                (fun argument ->
-                  typed_expr_smt_with_choices program analysis Over function_def
-                    [] [] choices generic_calls env argument)
-                arguments
-            in
-            let terms = List.map (fun value -> value.term) values in
-            let formula_env =
-              List.map2
-                (fun ((formal : Typed_core.symbol), sort) term ->
-                  (formal.display, (term, sort)))
-                callee.arguments terms
-            in
-            let parse text =
-              parse_formula ~filename:summary.loc.file
-                ~loc:(location_of_span summary.loc)
-                text
-            in
-            let mark env formula =
-              formula_theory_symbols program.registry env formula
-              |> List.iter (use_theory_symbol generic_calls)
-            in
-            let pre_formula = parse summary.pre in
-            mark formula_env pre_formula;
-            generic_calls.side_conditions <-
-              typed_formula program.registry formula_env pre_formula
-              :: generic_calls.side_conditions;
-            let fresh prefix sort =
-              let name = prefix ^ string_of_int (List.length !choices) in
-              choices := (name, sort) :: !choices;
-              name
-            in
-            let result = fresh "call_result_" callee.result in
-            let result_env =
-              ("result", (result, callee.result)) :: formula_env
-            in
-            let post_formula = parse summary.post in
-            mark result_env post_formula;
-            let normal =
-              Relational_outcome.
-                {
-                  guard = typed_formula program.registry result_env post_formula;
-                  initial_state = state;
-                  final_state = state;
-                  outcome = Return result;
-                }
-            in
-            let payloads = typed_outcome_payload_sorts callee.body in
-            let payload_sort kind name =
-              let rec find = function
-                | [] -> None
-                | (candidate, candidate_name, sort) :: rest ->
-                    if candidate = kind && candidate_name = name then sort
-                    else find rest
+            if mode = Under then (
+              let contracts =
+                List.filter
+                  (fun (contract : Typed_core.contract) ->
+                    contract.mode = Under)
+                  callee.contracts
               in
-              find payloads
-            in
-            let exceptional =
-              List.map
-                (fun (name, predicate) ->
-                  let sort = payload_sort `Raised name in
-                  let payload = Option.map (fresh "call_exception_") sort in
-                  let env =
-                    match (sort, payload) with
-                    | Some sort, Some payload ->
-                        ("payload", (payload, sort)) :: formula_env
-                    | _ -> formula_env
-                  in
-                  let predicate = parse predicate in
-                  mark env predicate;
+              let summary =
+                match contracts with
+                | [ summary ] -> summary
+                | [] ->
+                    typed_error_at expression.loc
+                      "effectful under-call `%s` needs one coverage summary"
+                      symbol.display
+                | _ ->
+                    typed_error_at expression.loc
+                      "effectful under-call `%s` has ambiguous summaries"
+                      symbol.display
+              in
+              let values =
+                List.map
+                  (fun argument ->
+                    typed_expr_smt_with_choices program analysis Under
+                      function_def [] [] choices generic_calls env argument)
+                  arguments
+              in
+              let terms = List.map (fun value -> value.term) values in
+              let formals =
+                List.map
+                  (fun ((formal : Typed_core.symbol), sort) ->
+                    (formal.display, sort))
+                  callee.arguments
+              in
+              let complete witnesses =
+                List.sort String.compare (List.map fst witnesses)
+                = List.sort String.compare (List.map fst formals)
+              in
+              let parse text =
+                parse_formula ~filename:summary.loc.file
+                  ~loc:(location_of_span summary.loc)
+                  text
+              in
+              let fresh prefix sort =
+                let name = prefix ^ string_of_int (List.length !choices) in
+                choices := (name, sort) :: !choices;
+                name
+              in
+              let equations target_env witnesses =
+                List.map2
+                  (fun (name, sort) actual ->
+                    let witness = parse (List.assoc name witnesses) in
+                    formula_theory_symbols ~expected:sort program.registry
+                      target_env witness
+                    |> List.iter (use_theory_symbol generic_calls);
+                    app "="
+                      [
+                        actual;
+                        typed_formula ~expected:sort program.registry target_env
+                          witness;
+                      ])
+                  formals terms
+              in
+              let paths = ref [] in
+              if summary.witnesses <> [] then (
+                if not (complete summary.witnesses) then
+                  typed_error_at expression.loc
+                    "normal coverage summary for `%s` has incomplete witnesses"
+                    symbol.display;
+                let result = fresh "call_result_" callee.result in
+                let target_env = [ ("result", (result, callee.result)) ] in
+                let post = parse summary.post in
+                formula_theory_symbols program.registry target_env post
+                |> List.iter (use_theory_symbol generic_calls);
+                paths :=
                   Relational_outcome.
                     {
-                      guard = typed_formula program.registry env predicate;
+                      guard =
+                        and_
+                          (typed_formula program.registry target_env post
+                          :: equations target_env summary.witnesses);
                       initial_state = state;
                       final_state = state;
-                      outcome = Raised { exception_ = name; payload };
-                    })
-                summary.raises
-            in
-            let continuation_id =
-              "continuation_" ^ string_of_int !continuation_counter
-            in
-            incr continuation_counter;
-            Hashtbl.add continuations continuation_id continuation;
-            let performed =
-              List.map
-                (fun (name, predicate) ->
-                  let sort = payload_sort `Performed name in
-                  let payload = Option.map (fresh "call_effect_") sort in
-                  let env =
+                      outcome = Return result;
+                    }
+                  :: !paths);
+              let payloads = typed_outcome_payload_sorts callee.body in
+              let payload_sort kind name =
+                let rec find = function
+                  | [] -> None
+                  | (candidate, candidate_name, sort) :: rest ->
+                      if candidate = kind && candidate_name = name then sort
+                      else find rest
+                in
+                find payloads
+              in
+              let continuation_id =
+                "continuation_" ^ string_of_int !continuation_counter
+              in
+              incr continuation_counter;
+              Hashtbl.add continuations continuation_id continuation;
+              List.iter
+                (fun (outcome : Typed_core.coverage_outcome) ->
+                  if not (complete outcome.witnesses) then
+                    typed_error_at expression.loc
+                      "coverage outcome `%s` has incomplete witnesses"
+                      outcome.name;
+                  let kind, sort =
+                    match outcome.kind with
+                    | "raise" -> (`Raised, payload_sort `Raised outcome.name)
+                    | "perform" ->
+                        (`Performed, payload_sort `Performed outcome.name)
+                    | kind ->
+                        typed_error_at expression.loc
+                          "unknown coverage outcome kind `%s`" kind
+                  in
+                  let payload = Option.map (fresh "call_payload_") sort in
+                  let target_env =
                     match (sort, payload) with
                     | Some sort, Some payload ->
-                        ("payload", (payload, sort)) :: formula_env
-                    | _ -> formula_env
+                        [ ("payload", (payload, sort)) ]
+                    | _ -> []
                   in
-                  let predicate = parse predicate in
-                  mark env predicate;
-                  Relational_outcome.
-                    {
-                      guard = typed_formula program.registry env predicate;
-                      initial_state = state;
-                      final_state = state;
-                      outcome =
-                        Performed
+                  let post = parse outcome.post in
+                  formula_theory_symbols program.registry target_env post
+                  |> List.iter (use_theory_symbol generic_calls);
+                  let guard =
+                    and_
+                      (typed_formula program.registry target_env post
+                      :: equations target_env outcome.witnesses)
+                  in
+                  let path =
+                    match kind with
+                    | `Raised ->
+                        Relational_outcome.
                           {
-                            operation = name;
-                            payload;
-                            continuation = Some continuation_id;
-                          };
-                    })
-                summary.performs
-            in
-            R.bind ((normal :: exceptional) @ performed) continuation)
+                            guard;
+                            initial_state = state;
+                            final_state = state;
+                            outcome =
+                              Raised { exception_ = outcome.name; payload };
+                          }
+                    | `Performed ->
+                        Relational_outcome.
+                          {
+                            guard;
+                            initial_state = state;
+                            final_state = state;
+                            outcome =
+                              Performed
+                                {
+                                  operation = outcome.name;
+                                  payload;
+                                  continuation = Some continuation_id;
+                                };
+                          }
+                  in
+                  paths := path :: !paths)
+                summary.outcomes;
+              if !paths = [] then
+                typed_error_at expression.loc
+                  "effectful under-call `%s` has no constructive outcome"
+                  symbol.display;
+              R.bind (List.rev !paths) continuation)
+            else
+              let contracts =
+                List.filter
+                  (fun (contract : Typed_core.contract) -> contract.mode = Over)
+                  callee.contracts
+              in
+              let summary =
+                match contracts with
+                | [ summary ] -> summary
+                | [] ->
+                    typed_error_at expression.loc
+                      "effectful call `%s` needs one safety outcome summary"
+                      symbol.display
+                | _ ->
+                    typed_error_at expression.loc
+                      "effectful call `%s` has ambiguous safety summaries"
+                      symbol.display
+              in
+              if summary.state <> [] then
+                typed_error_at expression.loc
+                  "cross-function state summaries are not yet supported";
+              let values =
+                List.map
+                  (fun argument ->
+                    typed_expr_smt_with_choices program analysis mode
+                      function_def [] [] choices generic_calls env argument)
+                  arguments
+              in
+              let terms = List.map (fun value -> value.term) values in
+              let formula_env =
+                List.map2
+                  (fun ((formal : Typed_core.symbol), sort) term ->
+                    (formal.display, (term, sort)))
+                  callee.arguments terms
+              in
+              let parse text =
+                parse_formula ~filename:summary.loc.file
+                  ~loc:(location_of_span summary.loc)
+                  text
+              in
+              let mark env formula =
+                formula_theory_symbols program.registry env formula
+                |> List.iter (use_theory_symbol generic_calls)
+              in
+              let pre_formula = parse summary.pre in
+              mark formula_env pre_formula;
+              generic_calls.side_conditions <-
+                typed_formula program.registry formula_env pre_formula
+                :: generic_calls.side_conditions;
+              let fresh prefix sort =
+                let name = prefix ^ string_of_int (List.length !choices) in
+                choices := (name, sort) :: !choices;
+                name
+              in
+              let result = fresh "call_result_" callee.result in
+              let result_env =
+                ("result", (result, callee.result)) :: formula_env
+              in
+              let post_formula = parse summary.post in
+              mark result_env post_formula;
+              let normal =
+                Relational_outcome.
+                  {
+                    guard =
+                      typed_formula program.registry result_env post_formula;
+                    initial_state = state;
+                    final_state = state;
+                    outcome = Return result;
+                  }
+              in
+              let payloads = typed_outcome_payload_sorts callee.body in
+              let payload_sort kind name =
+                let rec find = function
+                  | [] -> None
+                  | (candidate, candidate_name, sort) :: rest ->
+                      if candidate = kind && candidate_name = name then sort
+                      else find rest
+                in
+                find payloads
+              in
+              let exceptional =
+                List.map
+                  (fun (name, predicate) ->
+                    let sort = payload_sort `Raised name in
+                    let payload = Option.map (fresh "call_exception_") sort in
+                    let env =
+                      match (sort, payload) with
+                      | Some sort, Some payload ->
+                          ("payload", (payload, sort)) :: formula_env
+                      | _ -> formula_env
+                    in
+                    let predicate = parse predicate in
+                    mark env predicate;
+                    Relational_outcome.
+                      {
+                        guard = typed_formula program.registry env predicate;
+                        initial_state = state;
+                        final_state = state;
+                        outcome = Raised { exception_ = name; payload };
+                      })
+                  summary.raises
+              in
+              let continuation_id =
+                "continuation_" ^ string_of_int !continuation_counter
+              in
+              incr continuation_counter;
+              Hashtbl.add continuations continuation_id continuation;
+              let performed =
+                List.map
+                  (fun (name, predicate) ->
+                    let sort = payload_sort `Performed name in
+                    let payload = Option.map (fresh "call_effect_") sort in
+                    let env =
+                      match (sort, payload) with
+                      | Some sort, Some payload ->
+                          ("payload", (payload, sort)) :: formula_env
+                      | _ -> formula_env
+                    in
+                    let predicate = parse predicate in
+                    mark env predicate;
+                    Relational_outcome.
+                      {
+                        guard = typed_formula program.registry env predicate;
+                        initial_state = state;
+                        final_state = state;
+                        outcome =
+                          Performed
+                            {
+                              operation = name;
+                              payload;
+                              continuation = Some continuation_id;
+                            };
+                      })
+                  summary.performs
+              in
+              R.bind ((normal :: exceptional) @ performed) continuation)
     | Handle (body, handlers) ->
         let boundary value state = R.return ~state value in
         let rec discharge relation =
@@ -1902,7 +2104,7 @@ let typed_relational_expr program analysis function_def env expression =
           typed_error_at condition.loc
             "exceptionful conditions are not yet supported";
         let condition =
-          typed_expr_smt_with_choices program analysis Over function_def [] []
+          typed_expr_smt_with_choices program analysis mode function_def [] []
             choices generic_calls env condition
         in
         R.branch ~condition:condition.term
@@ -1964,7 +2166,7 @@ let typed_relational_expr program analysis function_def env expression =
           typed_error_at expression.loc
             "exception is nested in an unsupported evaluation context";
         let value =
-          typed_expr_smt_with_choices program analysis Over function_def [] []
+          typed_expr_smt_with_choices program analysis mode function_def [] []
             choices generic_calls env expression
         in
         continuation value.term state
@@ -2469,7 +2671,8 @@ let typed_exception_obligation (program : Typed_core.program) analysis
     |> fun program -> typed_monomorphize_datatypes program function_def
   in
   let relation, choices, generic_calls =
-    typed_relational_expr program analysis function_def env function_def.body
+    typed_relational_expr program analysis Over function_def env
+      function_def.body
   in
   if generic_calls.summary_assumptions <> [] then
     typed_error_at contract.loc
@@ -2627,6 +2830,256 @@ let typed_exception_obligation (program : Typed_core.program) analysis
     ghost_instantiations = List.rev generic_calls.ghost_instantiations;
   }
 
+let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
+    (function_def : Typed_core.function_def) (contract : Typed_core.contract) =
+  let module R = Relational_outcome in
+  let env =
+    List.map
+      (fun (symbol, _) ->
+        ( symbol.Typed_core.key,
+          { term = smt_identifier symbol.key; refinement = None } ))
+      function_def.arguments
+  in
+  let formula_env =
+    List.map2
+      (fun (symbol, sort) (_, value) ->
+        (symbol.Typed_core.display, (value.term, sort)))
+      function_def.arguments env
+  in
+  let parse text =
+    parse_formula ~filename:contract.loc.file
+      ~loc:(location_of_span contract.loc)
+      text
+  in
+  let pre_expression = parse contract.pre in
+  let post_expression = parse contract.post in
+  let program =
+    typed_specialize_program program function_def pre_expression post_expression
+    |> fun program -> typed_monomorphize_datatypes program function_def
+  in
+  let relation, choices, generic_calls =
+    typed_relational_expr program analysis Under function_def env
+      function_def.body
+  in
+  if generic_calls.side_conditions <> [] then
+    typed_error_at contract.loc
+      "outcome coverage calls require constructive callee summaries";
+  let formals =
+    List.map
+      (fun ((symbol : Typed_core.symbol), sort) ->
+        (symbol.display, symbol.key, sort))
+      function_def.arguments
+  in
+  let validate_witnesses witnesses =
+    let expected = List.map (fun (name, _, _) -> name) formals in
+    let actual = List.map fst witnesses in
+    if
+      List.sort String.compare expected <> List.sort String.compare actual
+      || List.length actual
+         <> List.length (List.sort_uniq String.compare actual)
+    then
+      typed_error_at contract.loc
+        "outcome witnesses must define every parameter exactly once";
+    List.map
+      (fun (name, key, sort) -> (key, sort, parse (List.assoc name witnesses)))
+      formals
+  in
+  let normal_witnesses =
+    if contract.witnesses = [] then None
+    else Some (validate_witnesses contract.witnesses)
+  in
+  let payload_sorts = typed_outcome_payload_sorts ~program function_def.body in
+  let payload_sort kind name =
+    let rec find = function
+      | [] -> None
+      | (candidate, candidate_name, sort) :: rest ->
+          if candidate = kind && candidate_name = name then sort else find rest
+    in
+    find payload_sorts
+  in
+  let outcomes =
+    List.map
+      (fun (outcome : Typed_core.coverage_outcome) ->
+        let kind =
+          match outcome.kind with
+          | "raise" -> `Raised
+          | "perform" -> `Performed
+          | kind ->
+              typed_error_at contract.loc "unknown coverage outcome kind `%s`"
+                kind
+        in
+        let sort = payload_sort kind outcome.name in
+        ( kind,
+          outcome.name,
+          sort,
+          parse outcome.post,
+          validate_witnesses outcome.witnesses ))
+      contract.outcomes
+  in
+  let result_target_env =
+    [ ("result", ("missing_result", function_def.result)) ]
+  in
+  let roots =
+    generic_calls.used_theory_symbols
+    @ formula_theory_symbols program.registry formula_env pre_expression
+    @ formula_theory_symbols program.registry
+        (match normal_witnesses with
+        | Some _ -> result_target_env
+        | None -> result_target_env @ formula_env)
+        post_expression
+    @ Option.fold ~none:[]
+        ~some:(fun witnesses ->
+          List.concat_map
+            (fun (_, sort, expression) ->
+              formula_theory_symbols ~expected:sort program.registry
+                result_target_env expression)
+            witnesses)
+        normal_witnesses
+    @ List.concat_map
+        (fun (_, _, sort, post, witnesses) ->
+          let target_env =
+            match sort with
+            | Some sort -> [ ("payload", ("missing_payload", sort)) ]
+            | None -> []
+          in
+          formula_theory_symbols program.registry target_env post
+          @ List.concat_map
+              (fun (_, formal_sort, expression) ->
+                formula_theory_symbols ~expected:formal_sort program.registry
+                  target_env expression)
+              witnesses)
+        outcomes
+    |> List.sort_uniq String.compare
+  in
+  let program, _ = slice_program_theory program ~roots in
+  let pre = typed_formula program.registry formula_env pre_expression in
+  let choices_declarations =
+    List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices
+  in
+  let exists_choices formula =
+    Refinement_domain.Smt.exists choices_declarations formula
+  in
+  let let_arguments target_env witnesses formula =
+    let bindings =
+      List.map
+        (fun (key, sort, expression) ->
+          ( key,
+            typed_formula ~expected:sort program.registry target_env expression
+          ))
+        witnesses
+    in
+    "(let ("
+    ^ String.concat " "
+        (List.map
+           (fun (name, term) -> Printf.sprintf "(%s %s)" name term)
+           bindings)
+    ^ ") " ^ formula ^ ")"
+  in
+  let normal_paths =
+    relation
+    |> List.filter_map (fun path ->
+        match path.R.outcome with
+        | Return value ->
+            Some (and_ [ path.guard; app "=" [ value; "missing_result" ] ])
+        | Raised _ | Performed _ -> None)
+    |> or_
+  in
+  let normal_reachable = and_ [ pre; normal_paths ] |> exists_choices in
+  let normal_reachable =
+    match normal_witnesses with
+    | Some witnesses ->
+        let_arguments result_target_env witnesses normal_reachable
+    | None ->
+        Refinement_domain.Smt.exists
+          (List.map (fun (_, key, sort) -> (key, typed_smt_sort sort)) formals)
+          normal_reachable
+  in
+  let normal_post_env =
+    match normal_witnesses with
+    | Some _ -> result_target_env
+    | None -> result_target_env @ formula_env
+  in
+  let obligations =
+    [
+      app "=>"
+        [
+          typed_formula program.registry normal_post_env post_expression;
+          normal_reachable;
+        ];
+    ]
+  in
+  let payload_declarations = ref [] in
+  let outcome_obligations =
+    List.mapi
+      (fun index (kind, name, sort, post, witnesses) ->
+        let target = "missing_payload_" ^ string_of_int index in
+        let target_env =
+          match sort with
+          | Some sort ->
+              payload_declarations := (target, sort) :: !payload_declarations;
+              [ ("payload", (target, sort)) ]
+          | None -> []
+        in
+        let matching =
+          relation
+          |> List.filter_map (fun path ->
+              match (kind, path.R.outcome) with
+              | `Raised, Raised raised when raised.exception_ = name -> (
+                  match (sort, raised.payload) with
+                  | Some _, Some payload ->
+                      Some (and_ [ path.guard; app "=" [ payload; target ] ])
+                  | None, None -> Some path.guard
+                  | _ -> None)
+              | `Performed, Performed performed when performed.operation = name
+                -> (
+                  match (sort, performed.payload) with
+                  | Some _, Some payload ->
+                      Some (and_ [ path.guard; app "=" [ payload; target ] ])
+                  | None, None -> Some path.guard
+                  | _ -> None)
+              | _ -> None)
+          |> or_
+        in
+        let reachable =
+          and_ [ pre; matching ]
+          |> exists_choices
+          |> let_arguments target_env witnesses
+        in
+        app "=>" [ typed_formula program.registry target_env post; reachable ])
+      outcomes
+  in
+  let obligation = and_ (obligations @ outcome_obligations) in
+  let buffer = Buffer.create 4096 in
+  Buffer.add_string buffer
+    "(set-option :produce-models true)\n(set-logic ALL)\n";
+  Buffer.add_string buffer (typed_datatype_prelude program function_def);
+  Buffer.add_string buffer
+    (Printf.sprintf "(declare-const missing_result %s)\n"
+       (typed_smt_sort function_def.result));
+  List.iter
+    (fun (name, sort) ->
+      Buffer.add_string buffer
+        (Printf.sprintf "(declare-const %s %s)\n" name (typed_smt_sort sort)))
+    (List.rev !payload_declarations);
+  Buffer.add_string buffer (Printf.sprintf "(assert (not %s))\n" obligation);
+  Buffer.add_string buffer "(check-sat)\n(get-model)\n";
+  {
+    name = function_def.symbol.display;
+    mode = contract.mode;
+    location = contract.loc;
+    smt = Buffer.contents buffer;
+    trusted_axioms =
+      List.rev_map
+        (fun (axiom : Typed_core.axiom) -> axiom.axiom_name)
+        program.registry.axioms;
+    checked_lemmas =
+      List.rev_map
+        (fun (lemma : Typed_core.axiom) -> lemma.axiom_name)
+        program.registry.checked_lemmas;
+    proof_artifacts = List.rev program.registry.proof_artifacts;
+    ghost_instantiations = List.rev generic_calls.ghost_instantiations;
+  }
+
 let lemma_obligations registry lemmas =
   let registry =
     {
@@ -2729,8 +3182,12 @@ let obligations_of_cmt_with_theories ~theories filename =
     (fun function_def ->
       List.map
         (fun contract ->
-          if typed_has_exception function_def.Typed_core.body then
-            typed_exception_obligation program analysis function_def contract
+          if typed_requires_relational program function_def.Typed_core.body then
+            if contract.Typed_core.mode = Under then
+              typed_outcome_coverage_obligation program analysis function_def
+                contract
+            else
+              typed_exception_obligation program analysis function_def contract
           else typed_obligation program analysis function_def contract)
         function_def.Typed_core.contracts)
     program.functions

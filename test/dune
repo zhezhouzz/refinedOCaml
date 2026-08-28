@@ -64,7 +64,10 @@
   ../examples/payload_outcomes.ml
   ../examples/payload_outcomes_invalid.ml
   ../examples/outcome_calls.ml
-  ../examples/outcome_recursive_unsupported.ml))
+  ../examples/outcome_recursive_unsupported.ml
+  ../examples/outcome_coverage.ml
+  ../examples/outcome_coverage_invalid.ml
+  ../examples/outcome_coverage_incomplete.ml))
 
 (executable
  (name ppx_sample)

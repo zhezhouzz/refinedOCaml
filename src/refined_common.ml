@@ -163,6 +163,33 @@ let contract_of_attribute attribute =
                           "performs must contain (operation, predicate) string \
                            pairs")
           in
+          let string_pairs expression =
+            expression_list expression
+            |> List.map (fun expression ->
+                match expression.pexp_desc with
+                | Pexp_tuple [ name; value ] ->
+                    (string_constant name, string_constant value)
+                | _ ->
+                    error ~loc:expression.pexp_loc
+                      "outcome witnesses must contain string pairs")
+          in
+          let outcomes =
+            match find_expression "outcomes" with
+            | None -> []
+            | Some expression ->
+                expression_list expression
+                |> List.map (fun expression ->
+                    match expression.pexp_desc with
+                    | Pexp_tuple [ kind; name; post; witnesses ] ->
+                        ( string_constant kind,
+                          string_constant name,
+                          string_constant post,
+                          string_pairs witnesses )
+                    | _ ->
+                        error ~loc:expression.pexp_loc
+                          "outcomes must contain (kind, name, post, witnesses) \
+                           tuples")
+          in
           if mode = Over && witnesses <> [] then
             error ~loc:attribute.attr_loc
               "safety contracts cannot declare coverage witnesses";
@@ -175,6 +202,9 @@ let contract_of_attribute attribute =
           if mode = Under && performs <> [] then
             error ~loc:attribute.attr_loc
               "coverage performed-outcome witnesses are not yet supported";
+          if mode = Over && outcomes <> [] then
+            error ~loc:attribute.attr_loc
+              "safety contracts cannot declare coverage outcomes";
           Some
             ( mode,
               required "pre",
@@ -182,7 +212,8 @@ let contract_of_attribute attribute =
               witnesses,
               raises,
               state,
-              performs )
+              performs,
+              outcomes )
       | _ ->
           error ~loc:attribute.attr_loc
             "expected [@%s { pre = \"...\"; post = \"...\" }]"

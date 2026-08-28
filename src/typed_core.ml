@@ -86,7 +86,15 @@ type contract = {
   raises : (string * string) list;
   state : (string * string) list;
   performs : (string * string) list;
+  outcomes : coverage_outcome list;
   loc : Source_span.t;
+}
+
+and coverage_outcome = {
+  kind : string;
+  name : string;
+  post : string;
+  witnesses : (string * string) list;
 }
 
 type function_def = {
