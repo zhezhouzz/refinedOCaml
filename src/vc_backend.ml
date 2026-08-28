@@ -880,6 +880,7 @@ type generic_call_state = {
   mutable summary_assumptions : string list;
   mutable ghost_instantiations : string list;
   mutable used_theory_symbols : string list;
+  mutable semantic_assumptions : string list;
 }
 
 let new_generic_call_state () =
@@ -889,6 +890,7 @@ let new_generic_call_state () =
     summary_assumptions = [];
     ghost_instantiations = [];
     used_theory_symbols = [];
+    semantic_assumptions = [];
   }
 
 let use_theory_symbol state symbol =
@@ -1611,7 +1613,8 @@ let typed_local_cells expression =
     match expression.desc with
     | Let_ref (symbol, sort, initial, body) ->
         collect
-          ((symbol.display, symbol.key, sort) :: collect cells initial)
+          ((symbol.display, "ref_" ^ smt_identifier symbol.key, sort)
+          :: collect cells initial)
           body
     | Let (_, value, body) | Sequence (value, body) ->
         collect (collect cells value) body
@@ -1666,9 +1669,52 @@ let typed_reference_arguments (function_def : Typed_core.function_def) =
         (reference_content_sort sort))
     function_def.arguments
 
+let heap_key sort = "heap_" ^ smt_identifier (typed_smt_sort sort)
+let initial_heap_name sort = "initial_" ^ heap_key sort
+
+let reference_sort sort =
+  Typed_core.S_app ({ key = "Stdlib.ref"; display = "ref" }, [ sort ])
+
+let heap_select state identity sort =
+  match List.assoc_opt (heap_key sort) state with
+  | Some heap -> app "select" [ heap; identity ]
+  | None -> invalid_arg ("missing relational heap " ^ heap_key sort)
+
+let heap_store state identity sort value =
+  let key = heap_key sort in
+  match List.assoc_opt key state with
+  | Some heap ->
+      (key, app "store" [ heap; identity; value ])
+      :: List.remove_assoc key state
+  | None -> invalid_arg ("missing relational heap " ^ key)
+
+let alias_consistency updates =
+  let rec pairs = function
+    | [] -> []
+    | (identity, sort, value) :: rest ->
+        List.filter_map
+          (fun (other_identity, other_sort, other_value) ->
+            if typed_smt_sort sort <> typed_smt_sort other_sort then None
+            else
+              Some
+                (app "=>"
+                   [
+                     app "=" [ identity; other_identity ];
+                     app "=" [ value; other_value ];
+                   ]))
+          rest
+        @ pairs rest
+  in
+  pairs updates
+
 let typed_initial_reference_state function_def =
-  typed_reference_arguments function_def
-  |> List.map (fun (_, key, _) -> (key, "initial_" ^ smt_identifier key))
+  let sorts =
+    typed_reference_arguments function_def @ typed_local_cells function_def.body
+    |> List.map (fun (_, _, sort) -> sort)
+    |> List.sort_uniq (fun left right ->
+        String.compare (typed_smt_sort left) (typed_smt_sort right))
+  in
+  List.map (fun sort -> (heap_key sort, initial_heap_name sort)) sorts
 
 let typed_outcome_payload_sorts ?program expression =
   let rec collect visited outcomes (expression : Typed_core.expr) =
@@ -1746,6 +1792,13 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
   let generic_calls = new_generic_call_state () in
   let continuations = Hashtbl.create 8 in
   let continuation_counter = ref 0 in
+  let allocated_references =
+    ref
+      (typed_reference_arguments function_def
+      |> List.filter_map (fun (_, key, sort) ->
+          Option.map (fun value -> (value.term, sort)) (List.assoc_opt key env))
+      )
+  in
   let rec translate env state path (expression : Typed_core.expr) continuation =
     match expression.desc with
     | Raise (exception_, None) -> R.raise_ ~state exception_.display
@@ -1832,27 +1885,6 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                     app "<" [ callee_term; caller_term ];
                   ]
             in
-            let reference_actuals =
-              List.combine callee.arguments arguments
-              |> List.filter_map
-                   (fun (((formal : Typed_core.symbol), sort), argument) ->
-                     match reference_content_sort sort with
-                     | None -> None
-                     | Some _ -> (
-                         match argument.Typed_core.desc with
-                         | Var actual -> Some (formal.display, actual.key)
-                         | _ ->
-                             typed_error_at expression.loc
-                               "reference summary arguments must be variables"))
-            in
-            let actual_keys = List.map snd reference_actuals in
-            if
-              List.length actual_keys
-              <> List.length (List.sort_uniq String.compare actual_keys)
-            then
-              typed_error_at expression.loc
-                "aliased reference arguments are not supported by state \
-                 summaries";
             if mode = Under then (
               let contracts =
                 List.filter
@@ -1922,23 +1954,25 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               in
               let reference_formals = typed_reference_arguments callee in
               let actual_cell name =
-                let index =
+                let _, _, sort =
                   match
-                    List.find_mapi
-                      (fun index ((formal : Typed_core.symbol), _) ->
-                        if formal.display = name then Some index else None)
-                      callee.arguments
+                    List.find_opt
+                      (fun (formal, _, _) -> formal = name)
+                      reference_formals
                   with
-                  | Some index -> index
+                  | Some formal -> formal
                   | None ->
                       typed_error_at expression.loc
                         "state summary `%s` is not a reference parameter" name
                 in
-                match (List.nth arguments index).Typed_core.desc with
-                | Var actual -> actual
-                | _ ->
-                    typed_error_at expression.loc
-                      "state summary arguments must be reference variables"
+                let index =
+                  List.find_mapi
+                    (fun index ((formal : Typed_core.symbol), _) ->
+                      if formal.display = name then Some index else None)
+                    callee.arguments
+                  |> Option.get
+                in
+                (List.nth terms index, sort)
               in
               let paths = ref [] in
               if
@@ -1958,11 +1992,8 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                           (fun (formal, _, _) -> formal = name)
                           reference_formals
                       in
-                      ( name,
-                        actual_cell name,
-                        sort,
-                        fresh "call_state_" sort,
-                        predicate ))
+                      let actual, _ = actual_cell name in
+                      (name, actual, sort, fresh "call_state_" sort, predicate))
                     summary.state
                 in
                 let target_env =
@@ -1988,8 +2019,8 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                         "under state summary has incomplete state_witnesses";
                     List.map
                       (fun (name, _, sort) ->
-                        let actual = actual_cell name in
-                        let old = List.assoc actual.key state in
+                        let actual, _ = actual_cell name in
+                        let old = heap_select state actual sort in
                         let witness =
                           parse (List.assoc name summary.state_witnesses)
                         in
@@ -2005,7 +2036,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   List.fold_left
                     (fun (guards, final_state)
                          (_name, actual, sort, target, predicate) ->
-                      let old = List.assoc actual.Typed_core.key state in
+                      let old = heap_select state actual sort in
                       let predicate = parse predicate in
                       let state_env =
                         ("value", (target, sort))
@@ -2014,9 +2045,14 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       in
                       ( typed_formula program.registry state_env predicate
                         :: guards,
-                        (actual.key, target)
-                        :: List.remove_assoc actual.key final_state ))
+                        heap_store final_state actual sort target ))
                     ([], state) state_targets
+                in
+                let alias_guards =
+                  state_targets
+                  |> List.map (fun (_name, actual, sort, target, _predicate) ->
+                      (actual, sort, target))
+                  |> alias_consistency
                 in
                 paths :=
                   Relational_outcome.
@@ -2026,7 +2062,8 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                           (termination
                            :: typed_formula program.registry target_env post
                            :: equations target_env summary.witnesses
-                          @ state_witness_guards @ state_post_guards);
+                          @ state_witness_guards @ state_post_guards
+                          @ alias_guards);
                       initial_state = state;
                       final_state;
                       outcome = Return result;
@@ -2087,8 +2124,8 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                           "under outcome summary has incomplete state_witnesses";
                       List.map
                         (fun (name, _, sort) ->
-                          let actual = actual_cell name in
-                          let old = List.assoc actual.key state in
+                          let actual, _ = actual_cell name in
+                          let old = heap_select state actual sort in
                           let witness =
                             parse (List.assoc name summary.state_witnesses)
                           in
@@ -2197,44 +2234,30 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 :: generic_calls.side_conditions;
               let reference_formals = typed_reference_arguments callee in
               let actual_cell name =
-                match
-                  List.find_opt
-                    (fun (formal, _, _) -> formal = name)
-                    reference_formals
-                with
-                | None ->
-                    typed_error_at expression.loc
-                      "state summary `%s` is not a reference parameter" name
-                | Some _ -> (
-                    let index =
-                      List.find_mapi
-                        (fun index ((formal : Typed_core.symbol), _) ->
-                          if formal.display = name then Some index else None)
-                        callee.arguments
-                      |> Option.get
-                    in
-                    match (List.nth arguments index).Typed_core.desc with
-                    | Var actual -> actual
-                    | _ ->
-                        typed_error_at expression.loc
-                          "state summary arguments must be reference variables")
+                let _, _, sort =
+                  match
+                    List.find_opt
+                      (fun (formal, _, _) -> formal = name)
+                      reference_formals
+                  with
+                  | None ->
+                      typed_error_at expression.loc
+                        "state summary `%s` is not a reference parameter" name
+                  | Some formal -> formal
+                in
+                let index =
+                  List.find_mapi
+                    (fun index ((formal : Typed_core.symbol), _) ->
+                      if formal.display = name then Some index else None)
+                    callee.arguments
+                  |> Option.get
+                in
+                (List.nth terms index, sort)
               in
               List.iter
                 (fun (name, predicate) ->
-                  let actual = actual_cell name in
-                  let _, _, sort =
-                    List.find
-                      (fun (formal, _, _) -> formal = name)
-                      reference_formals
-                  in
-                  let old =
-                    match List.assoc_opt actual.key state with
-                    | Some value -> value
-                    | None ->
-                        typed_error_at expression.loc
-                          "reference `%s` is not available in caller state"
-                          actual.display
-                  in
+                  let actual, sort = actual_cell name in
+                  let old = heap_select state actual sort in
                   let predicate = parse predicate in
                   let state_env = ("value", (old, sort)) :: formula_env in
                   mark state_env predicate;
@@ -2257,16 +2280,11 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               in
               let post_formula = parse summary.post in
               mark result_env post_formula;
-              let state_guards, final_state =
+              let state_guards, final_state, state_updates =
                 List.fold_left
-                  (fun (guards, final_state) (name, predicate) ->
-                    let actual = actual_cell name in
-                    let _, _, sort =
-                      List.find
-                        (fun (formal, _, _) -> formal = name)
-                        reference_formals
-                    in
-                    let old = List.assoc actual.key state in
+                  (fun (guards, final_state, updates) (name, predicate) ->
+                    let actual, sort = actual_cell name in
+                    let old = heap_select state actual sort in
                     let value = fresh "call_state_" sort in
                     let predicate = parse predicate in
                     let state_env =
@@ -2277,9 +2295,12 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                     mark state_env predicate;
                     ( typed_formula program.registry state_env predicate
                       :: guards,
-                      (actual.key, value)
-                      :: List.remove_assoc actual.key final_state ))
-                  ([], state) summary.state
+                      heap_store final_state actual sort value,
+                      (actual, sort, value) :: updates ))
+                  ([], state, []) summary.state
+              in
+              let state_guards =
+                alias_consistency state_updates @ state_guards
               in
               let normal =
                 Relational_outcome.
@@ -2466,20 +2487,75 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               | None -> R.raise_ ~state exception_)
         in
         R.bind handled continuation
-    | Let_ref (symbol, _sort, initial, body) ->
+    | Let_ref (symbol, sort, initial, body) ->
         translate env state path initial (fun value state ->
-            translate env ((symbol.key, value) :: state) path body continuation)
+            let identity = "ref_" ^ smt_identifier symbol.key in
+            choices := (identity, reference_sort sort) :: !choices;
+            (match
+               List.filter_map
+                 (fun (existing, existing_sort) ->
+                   if typed_smt_sort existing_sort = typed_smt_sort sort then
+                     Some existing
+                   else None)
+                 !allocated_references
+             with
+            | [] -> ()
+            | existing ->
+                generic_calls.semantic_assumptions <-
+                  app "distinct" (identity :: existing)
+                  :: generic_calls.semantic_assumptions);
+            allocated_references := (identity, sort) :: !allocated_references;
+            let key = heap_key sort in
+            let heap =
+              match List.assoc_opt key state with
+              | Some heap -> heap
+              | None -> initial_heap_name sort
+            in
+            let state =
+              (key, app "store" [ heap; identity; value ])
+              :: List.remove_assoc key state
+            in
+            let env =
+              (symbol.key, { term = identity; refinement = None }) :: env
+            in
+            translate env state path body continuation)
     | Deref symbol ->
-        if not (List.mem_assoc symbol.key state) then
-          typed_error_at expression.loc
-            "reference `%s` is not a local non-escaping cell" symbol.display;
-        R.bind (R.read ~state ~cell:symbol.key) continuation
+        let identity =
+          match List.assoc_opt symbol.key env with
+          | Some value -> value.term
+          | None ->
+              typed_error_at expression.loc
+                "reference `%s` escaped its identity environment" symbol.display
+        in
+        let key = heap_key expression.sort in
+        let heap =
+          match List.assoc_opt key state with
+          | Some heap -> heap
+          | None ->
+              typed_error_at expression.loc
+                "reference `%s` has no heap for its content sort" symbol.display
+        in
+        R.bind (R.return ~state (app "select" [ heap; identity ])) continuation
     | Assign (symbol, value) ->
-        if not (List.mem_assoc symbol.key state) then
+        let identity =
+          match List.assoc_opt symbol.key env with
+          | Some value -> value.term
+          | None ->
+              typed_error_at expression.loc
+                "reference `%s` escaped its identity environment" symbol.display
+        in
+        let sort = value.sort in
+        let key = heap_key sort in
+        if not (List.mem_assoc key state) then
           typed_error_at expression.loc
-            "reference `%s` is not a local non-escaping cell" symbol.display;
+            "reference `%s` has no heap for its content sort" symbol.display;
         translate env state path value (fun value state ->
-            R.bind (R.write ~state ~cell:symbol.key ~value) continuation)
+            let heap = List.assoc key state in
+            let state =
+              (key, app "store" [ heap; identity; value ])
+              :: List.remove_assoc key state
+            in
+            continuation "unit" state)
     | Sequence (first, second) ->
         translate env state path first (fun _ state ->
             translate env state path second continuation)
@@ -2512,6 +2588,13 @@ let typed_collect_sorts program function_def =
       Set.empty function_def.Typed_core.arguments
   in
   let set = add set function_def.result in
+  let set =
+    List.fold_left
+      (fun set (_, _, sort) -> add (add set sort) (reference_sort sort))
+      set
+      (typed_reference_arguments function_def
+      @ typed_local_cells function_def.body)
+  in
   let set =
     Hashtbl.fold
       (fun _ (logic_symbol : Typed_core.logic_symbol) set ->
@@ -2551,6 +2634,12 @@ let typed_collect_sort_values program function_def =
   in
   List.iter (fun (_, sort) -> add sort) function_def.Typed_core.arguments;
   add function_def.result;
+  List.iter
+    (fun (_, _, sort) ->
+      add sort;
+      add (reference_sort sort))
+    (typed_reference_arguments function_def
+    @ typed_local_cells function_def.body);
   List.iter
     (fun (datatype : Typed_core.datatype) ->
       add datatype.owner;
@@ -2964,13 +3053,22 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         (name, payload_sort `Performed name, parse predicate))
   in
   let local_cells = typed_local_cells function_def.body in
-  let reference_cells = typed_reference_arguments function_def in
-  let state_cells = local_cells @ reference_cells in
+  let reference_cells =
+    typed_reference_arguments function_def
+    |> List.map (fun (name, key, sort) -> (name, smt_identifier key, sort))
+  in
+  let state_cells =
+    local_cells
+    @ List.map
+        (fun (name, key, sort) -> (name, smt_identifier key, sort))
+        reference_cells
+  in
   let state_expressions =
     List.map
       (fun (name, predicate) ->
         match List.find_opt (fun (cell, _, _) -> cell = name) state_cells with
-        | Some (_, key, sort) -> (name, key, sort, parse predicate)
+        | Some (_, key, sort) ->
+            (name, smt_identifier key, sort, parse predicate)
         | None ->
             typed_error_at contract.loc
               "state postcondition names unknown local cell `%s`" name)
@@ -2982,7 +3080,8 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         match
           List.find_opt (fun (cell, _, _) -> cell = name) reference_cells
         with
-        | Some (_, key, sort) -> (name, key, sort, parse predicate)
+        | Some (_, key, sort) ->
+            (name, smt_identifier key, sort, parse predicate)
         | None ->
             typed_error_at contract.loc
               "requires_state names non-reference parameter `%s`" name)
@@ -3064,8 +3163,9 @@ let typed_exception_obligation (program : Typed_core.program) analysis
             (("value", ("initial_state_value", sort)) :: formula_env)
             expression
         in
-        Printf.sprintf "(let ((initial_state_value initial_%s)) %s)"
-          (smt_identifier key) predicate)
+        let initial_value = app "select" [ initial_heap_name sort; key ] in
+        Printf.sprintf "(let ((initial_state_value %s)) %s)" initial_value
+          predicate)
       required_state_expressions
   in
   let pre =
@@ -3105,6 +3205,7 @@ let typed_exception_obligation (program : Typed_core.program) analysis
       (fun (name, key, sort, expression) ->
         ( name,
           key,
+          sort,
           typed_formula program.registry
             (("value", ("state_value", sort))
             :: ("old", ("old_state_value", sort))
@@ -3118,19 +3219,12 @@ let typed_exception_obligation (program : Typed_core.program) analysis
       ~normal:(fun ~value ~initial ~final ->
         let state_obligations =
           List.map
-            (fun (_name, key, predicate) ->
-              match List.assoc_opt key final with
-              | Some state_value ->
-                  let old_state =
-                    Option.value
-                      (List.assoc_opt key initial)
-                      ~default:state_value
-                  in
-                  Printf.sprintf
-                    "(let ((result %s) (state_value %s) (old_state_value %s)) \
-                     %s)"
-                    value state_value old_state predicate
-              | None -> "false")
+            (fun (_name, key, sort, predicate) ->
+              let state_value = heap_select final key sort in
+              let old_state = heap_select initial key sort in
+              Printf.sprintf
+                "(let ((result %s) (state_value %s) (old_state_value %s)) %s)"
+                value state_value old_state predicate)
             state_posts
         in
         Printf.sprintf "(let ((result %s)) %s)" value
@@ -3175,16 +3269,29 @@ let typed_exception_obligation (program : Typed_core.program) analysis
            (typed_smt_sort sort)))
     function_def.arguments;
   List.iter
-    (fun (_name, key, sort) ->
+    (fun (key, _heap) ->
+      let sort =
+        typed_reference_arguments function_def
+        @ typed_local_cells function_def.body
+        |> List.find_map (fun (_, _, sort) ->
+            if heap_key sort = key then Some sort else None)
+        |> Option.get
+      in
       Buffer.add_string buffer
-        (Printf.sprintf "(declare-const initial_%s %s)\n" (smt_identifier key)
+        (Printf.sprintf "(declare-const %s (Array %s %s))\n"
+           (initial_heap_name sort)
+           (typed_smt_sort (reference_sort sort))
            (typed_smt_sort sort)))
-    reference_cells;
+    (typed_initial_reference_state function_def);
   List.iter
     (fun (name, sort) ->
       Buffer.add_string buffer
         (Printf.sprintf "(declare-const %s %s)\n" name (typed_smt_sort sort)))
     choices;
+  List.iter
+    (fun assumption ->
+      Buffer.add_string buffer (Printf.sprintf "(assert %s)\n" assumption))
+    (List.rev generic_calls.semantic_assumptions);
   Buffer.add_string buffer (Printf.sprintf "(assert (not %s))\n" obligation);
   Buffer.add_string buffer "(check-sat)\n(get-model)\n";
   {
@@ -3404,8 +3511,9 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             [ ("value", ("initial_state_value", sort)) ]
             (parse predicate)
         in
-        Printf.sprintf "(let ((initial_state_value initial_%s)) %s)"
-          (smt_identifier key) predicate)
+        Printf.sprintf "(let ((initial_state_value %s)) %s)"
+          (app "select" [ initial_heap_name sort; key ])
+          predicate)
       contract.requires_state
   in
   let pre =
@@ -3413,8 +3521,29 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
       (typed_formula program.registry formula_env pre_expression
       :: required_state_posts)
   in
+  let heap_declarations =
+    typed_initial_reference_state function_def
+    |> List.map (fun (key, _) ->
+        let sort =
+          state_cells
+          |> List.find_map (fun (_, _, sort) ->
+              if heap_key sort = key then Some sort else None)
+          |> Option.get
+        in
+        ( initial_heap_name sort,
+          Printf.sprintf "(Array %s %s)"
+            (typed_smt_sort (reference_sort sort))
+            (typed_smt_sort sort) ))
+  in
+  let reference_declarations =
+    List.map
+      (fun (_name, identity, sort) ->
+        (identity, typed_smt_sort (reference_sort sort)))
+      reference_cells
+  in
   let choices_declarations =
     List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices
+    @ reference_declarations @ heap_declarations
   in
   let exists_choices formula =
     Refinement_domain.Smt.exists choices_declarations formula
@@ -3435,23 +3564,20 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
            bindings)
     ^ ") " ^ formula ^ ")"
   in
-  let let_initial_state target_env formula =
-    let bindings =
-      List.map
-        (fun (key, sort, expression) ->
-          ( "initial_" ^ smt_identifier key,
-            typed_formula ~expected:sort program.registry target_env expression
-          ))
-        state_witnesses
-    in
-    if bindings = [] then formula
-    else
-      "(let ("
-      ^ String.concat " "
-          (List.map
-             (fun (name, term) -> Printf.sprintf "(%s %s)" name term)
-             bindings)
-      ^ ") " ^ formula ^ ")"
+  let initial_state_guards target_env =
+    List.map
+      (fun (identity, sort, expression) ->
+        app "="
+          [
+            app "select" [ initial_heap_name sort; identity ];
+            typed_formula ~expected:sort program.registry target_env expression;
+          ])
+      state_witnesses
+  in
+  let with_relational_assumptions target_env formula =
+    and_
+      ((formula :: List.rev generic_calls.semantic_assumptions)
+      @ initial_state_guards target_env)
   in
   let normal_paths =
     relation
@@ -3460,10 +3586,8 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         | Return value ->
             let state_equalities =
               List.map
-                (fun (_name, key, _sort, target, _) ->
-                  match List.assoc_opt key path.final_state with
-                  | Some value -> app "=" [ value; target ]
-                  | None -> "false")
+                (fun (_name, key, sort, target, _) ->
+                  app "=" [ heap_select path.final_state key sort; target ])
                 state_targets
             in
             Some
@@ -3474,7 +3598,11 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         | Raised _ | Performed _ -> None)
     |> or_
   in
-  let normal_reachable = and_ [ pre; normal_paths ] |> exists_choices in
+  let normal_reachable =
+    and_ [ pre; normal_paths ]
+    |> with_relational_assumptions result_target_env
+    |> exists_choices
+  in
   let normal_reachable =
     match normal_witnesses with
     | Some witnesses ->
@@ -3484,7 +3612,6 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
           (List.map (fun (_, key, sort) -> (key, typed_smt_sort sort)) formals)
           normal_reachable
   in
-  let normal_reachable = let_initial_state result_target_env normal_reachable in
   let normal_post_env =
     match normal_witnesses with
     | Some _ -> result_target_env
@@ -3543,9 +3670,9 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         in
         let reachable =
           and_ [ pre; matching ]
+          |> with_relational_assumptions target_env
           |> exists_choices
           |> let_arguments target_env witnesses
-          |> let_initial_state target_env
         in
         app "=>" [ typed_formula program.registry target_env post; reachable ])
       outcomes
@@ -3558,6 +3685,36 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   Buffer.add_string buffer
     (Printf.sprintf "(declare-const missing_result %s)\n"
        (typed_smt_sort function_def.result));
+  let identity_capacity_sorts =
+    List.map (fun (_name, _identity, sort) -> sort) reference_cells
+    @ List.filter_map (fun (_name, sort) -> reference_content_sort sort) choices
+  in
+  identity_capacity_sorts
+  |> List.sort_uniq (fun left right ->
+      String.compare (typed_smt_sort left) (typed_smt_sort right))
+  |> List.iter (fun sort ->
+      let count =
+        List.fold_left
+          (fun count candidate ->
+            if typed_smt_sort candidate = typed_smt_sort sort then count + 1
+            else count)
+          0 identity_capacity_sorts
+      in
+      let witnesses =
+        List.init count (fun index ->
+            Printf.sprintf "heap_identity_witness_%s_%d"
+              (smt_identifier (typed_smt_sort sort))
+              index)
+      in
+      List.iter
+        (fun witness ->
+          Buffer.add_string buffer
+            (Printf.sprintf "(declare-const %s %s)\n" witness
+               (typed_smt_sort (reference_sort sort))))
+        witnesses;
+      if List.length witnesses > 1 then
+        Buffer.add_string buffer
+          (Printf.sprintf "(assert %s)\n" (app "distinct" witnesses)));
   List.iter
     (fun (_name, _key, sort, target, _) ->
       Buffer.add_string buffer

@@ -336,7 +336,7 @@ Normal paths 检查 `post`，Raised paths 按异常名检查 `raises`；未列�
 exception 已支持，predicate 可引用 `payload`；handler pattern `E payload` 会把实际 payload 绑定进 handler
 Core。Exceptionful coverage 仍 fail closed。Non-local mutation 也会等到对应 lowering 完成后才开放。
 
-Frontend 还支持非逃逸的局部 references：`let cell = ref init`、`!cell`、`cell := value`、sequence 和
+Frontend 还支持局部 references：`let cell = ref init`、`!cell`、`cell := value`、sequence 和
 条件分支。Safety contract 可为 normal outcomes 声明 final-state predicate：
 
 ```ocaml
@@ -355,7 +355,7 @@ let[@refined.over
 `value` 表示该 path 的最终 cell 内容，`old` 表示 initial content。State 会穿过 branch、raise 和
 handler；因此 handler 可以观察异常发生前的写入。
 
-Non-aliased reference 参数也作为 relational cells。`requires_state`约束 initial contents；Coverage 用
+Reference 参数作为 relational heap identities。`requires_state`约束 initial contents；Coverage 用
 `state_witnesses`从目标 result/final cells 构造 initial contents：
 
 ```ocaml
@@ -364,9 +364,10 @@ state = [ ("cell", "value = result") ];
 state_witnesses = [ ("cell", "result - 1") ];
 ```
 
-Safety/coverage call summaries 会把 callee final cell 更新映射回 caller state。Reference alias、escape、
-动态 heap allocation summary 和 pointer equality 仍 fail closed；同一实际 cell 传给多个 ref formals 会
-明确拒绝。
+每种 content sort 对应一个 SMT array heap，dereference/assignment 分别使用 `select`/`store`。
+Safety/coverage call summaries 会把 callee final contents 更新回 caller heap；同一实际 identity 传给多个
+ref formals 时生成 final-value consistency constraints。局部 `ref` 分配 fresh identity，并支持 lexical
+alias。Pointer equality、reference 跨当前关系边界逃逸以及 abnormal-outcome heap summaries 仍 fail closed。
 
 OCaml 5.3 的标准 effect surface 通过 `Effect.perform` 与 `Effect.Deep.match_with` 提供。当前 frontend
 支持 nullary operation 和 canonical abortive handler：
@@ -469,14 +470,14 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 开放 polymorphic ADT obligation、高阶值 | 明确拒绝 | 需要 finite instances/closure |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
-| non-escaping local refs / final-state safety | 支持 | relational ghost-cell threading |
+| local refs / lexical alias / final-state safety | 支持 | per-sort SMT heap + fresh identity |
 | nullary Effect.perform / abortive+one-shot Deep handler | 支持 | CPS continuation paths |
 | conditional linear continuation | 支持 | guarded Abort/Resume actions |
 | single-payload exception/effect | 支持 | payload-sorted outcome predicates |
 | effectful safety call summary | 支持 | normal/Raised/Performed symbolic paths |
 | exception/effect coverage summary | 支持 | per-outcome payload inverse witnesses |
-| non-aliased reference parameters / state summaries | 支持 | initial/final relational cells |
-| reference alias/escape/pointer equality | 明确拒绝 | 需要 heap identity model |
+| aliased reference parameters / state summaries | 支持 | identity select/store + consistency guards |
+| pointer equality / escaping refs / abnormal heap summaries | 明确拒绝 | 需要 observable identity 与 outcome-state contracts |
 | multi-payload/multi-shot handlers | 明确拒绝 | 需要 richer binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
@@ -488,7 +489,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. heap identity、aliasing 与 dynamic allocation summaries；
+1. nondeterministic relations 与 abnormal outcome state summaries；
 2. 可重放 proof certificate 与稳定 artifact 格式；
 3. 显式 continuation cloning（若未来 OCaml API 支持）。
 

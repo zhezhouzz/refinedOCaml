@@ -128,13 +128,14 @@ fuzzing cover propagation and state threading.
 
 Single-payload exceptions/effects, payload binders and effectful safety call summaries are now connected to the
 production backend. Summary application creates symbolic normal results and Raised/Performed payload paths;
-callee preconditions remain side obligations and caller handlers can discharge callee outcomes. Cross-function
-state remains fail closed.
+callee preconditions remain side obligations and caller handlers can discharge callee outcomes.
 
-Local and non-aliased reference-parameter cells are connected to production relational VCs. `requires_state`
-constrains initial contents; normal posts constrain final cells with `old/value/result`; Coverage introduces
-missing final-state targets and `state_witnesses` for initial contents. Safety and under call summaries update
-caller cells. Aliasing, escape and dynamic heap identity remain fail closed.
+Local and reference-parameter state is encoded as a per-content-sort SMT array heap. References denote
+uninterpreted identities; dereference and assignment use `select` and `store`. `requires_state` constrains initial
+heap contents; normal posts constrain final contents with `old/value/result`; Coverage introduces missing final
+targets and `state_witnesses` for the initial heap. Safety and under call summaries update caller heaps, aliased
+actuals receive consistency guards, and local allocation produces fresh identities. Pointer equality, escaping
+references and abnormal-outcome heap summaries remain fail closed.
 
 Nullary `Effect.perform`, canonical abortive/one-shot-resumptive `Effect.Deep.match_with`, and performed-outcome
 safety contracts are connected to production VCs. CPS translation captures the computation after Perform;
@@ -153,7 +154,7 @@ Conditional-linear continuation actions are now implemented. Handler tails may b
 guards, payloads and state flow through both paths. Non-tail or repeated continuation use on one path fails
 closed, matching OCaml's one-shot Deep continuation semantics.
 
-The next implementation slice is heap identity, alias-aware summaries and dynamic allocation.
+The next implementation slice is nondeterministic relations and abnormal-outcome heap summaries.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

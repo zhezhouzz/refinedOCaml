@@ -445,6 +445,7 @@ let () =
   compile "../examples/reference_state_invalid.ml"
     "typed_reference_state_invalid";
   compile "../examples/reference_state_alias.ml" "typed_reference_state_alias";
+  compile "../examples/reference_fresh.ml" "typed_reference_fresh";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
@@ -578,9 +579,7 @@ let () =
         failwith "state contract did not reach the relational VC";
       require `Valid obligation);
   obligations_of_cmt "typed_state_invalid.cmt" |> List.iter (require `Invalid);
-  (match obligations_of_cmt "typed_state_escape.cmt" with
-  | _ -> failwith "escaping/aliased local reference was accepted"
-  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_state_escape.cmt" |> List.iter (require `Valid);
   (match obligations_of_cmt "typed_state_unknown_contract.cmt" with
   | _ -> failwith "state contract naming an unknown cell was accepted"
   | exception Location.Error _ -> ());
@@ -649,9 +648,18 @@ let () =
       require `Valid obligation);
   obligations_of_cmt "typed_reference_state_invalid.cmt"
   |> List.iter (require `Invalid);
-  (match obligations_of_cmt "typed_reference_state_alias.cmt" with
-  | _ -> failwith "aliased reference summary arguments were accepted"
-  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_reference_state_alias.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "aliased" || obligation.name = "aliased_coverage")
+        && not (contains obligation.smt "(=> (=")
+      then failwith "aliased reference summary lost consistency guard";
+      require `Valid obligation);
+  obligations_of_cmt "typed_reference_fresh.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "(distinct ref_") then
+        failwith "dynamic allocations lost freshness";
+      require `Valid obligation);
   obligations_of_cmt "typed_conditional_resume.cmt"
   |> List.iter (fun obligation ->
       if obligation.name = "conditional" && not (contains obligation.smt "flag")
