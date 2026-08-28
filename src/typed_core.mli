@@ -73,9 +73,10 @@ and expr_desc =
   | Assign of symbol * expr
   | Sequence of expr * expr
   | Perform of symbol
-  | Handle of expr * (symbol * expr) list
+  | Handle of expr * (symbol * handler_action) list
 
 and exception_pattern = Exn_any | Exn of symbol
+and handler_action = Abort of expr | Resume of expr
 
 type contract = {
   mode : Refined_types.mode;

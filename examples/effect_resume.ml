@@ -1,9 +1,11 @@
 type _ Effect.t += Stop : int Effect.t
 
-let[@refined.over { pre = "true"; post = "true" }] resumes (_unit : unit) : int
-    =
+let[@refined.over { pre = "true"; post = "result = 42" }] resumes (_unit : unit)
+    : int =
   Effect.Deep.match_with
-    (fun () -> Effect.perform Stop)
+    (fun () ->
+      let value = Effect.perform Stop in
+      value + 1)
     ()
     {
       retc = (fun value -> value);
@@ -14,6 +16,6 @@ let[@refined.over { pre = "true"; post = "true" }] resumes (_unit : unit) : int
           | Stop ->
               Some
                 (fun (continuation : (result, int) Effect.Deep.continuation) ->
-                  Effect.Deep.continue continuation 1)
+                  Effect.Deep.continue continuation 41)
           | _ -> None);
     }

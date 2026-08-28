@@ -417,8 +417,7 @@ let () =
   compile "../examples/state_unknown_contract.ml" "typed_state_unknown_contract";
   compile "../examples/effect_valid.ml" "typed_effect_valid";
   compile "../examples/effect_invalid.ml" "typed_effect_invalid";
-  compile "../examples/effect_continue_unsupported.ml"
-    "typed_effect_continue_unsupported";
+  compile "../examples/effect_resume.ml" "typed_effect_resume";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -558,9 +557,11 @@ let () =
         failwith "performed outcome did not emit a guarded obligation";
       require `Valid obligation);
   obligations_of_cmt "typed_effect_invalid.cmt" |> List.iter (require `Invalid);
-  (match obligations_of_cmt "typed_effect_continue_unsupported.cmt" with
-  | _ -> failwith "resuming effect handler was accepted as abortive"
-  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_effect_resume.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "42") then
+        failwith "resumed continuation result did not reach the VC";
+      require `Valid obligation);
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);
   (match obligations_of_cmt "typed_recursive_missing_measure.cmt" with

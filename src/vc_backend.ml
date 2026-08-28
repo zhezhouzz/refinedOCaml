@@ -276,7 +276,12 @@ let typed_specialize_program (program : Typed_core.program)
         recurse second
     | Handle (body, handlers) ->
         recurse body;
-        List.iter (fun (_, handler) -> recurse handler) handlers
+        List.iter
+          (fun (_, action) ->
+            match action with
+            | Typed_core.Abort handler | Typed_core.Resume handler ->
+                recurse handler)
+          handlers
   in
   ignore (infer_formula [] formula_env pre_expression);
   ignore
@@ -407,7 +412,12 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
         collect_expression second
     | Handle (body, handlers) ->
         collect_expression body;
-        List.iter (fun (_, handler) -> collect_expression handler) handlers
+        List.iter
+          (fun (_, action) ->
+            match action with
+            | Typed_core.Abort handler | Typed_core.Resume handler ->
+                collect_expression handler)
+          handlers
   in
   List.iter (fun (_, sort) -> collect sort) function_def.arguments;
   collect function_def.result;
@@ -1051,8 +1061,15 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
           Handle
             ( map_expression body,
               List.map
-                (fun (operation, handler) ->
-                  (operation, map_expression handler))
+                (fun (operation, action) ->
+                  let action =
+                    match action with
+                    | Typed_core.Abort handler ->
+                        Typed_core.Abort (map_expression handler)
+                    | Typed_core.Resume value ->
+                        Typed_core.Resume (map_expression value)
+                  in
+                  (operation, action))
                 handlers )
     in
     { current with desc; sort }
@@ -1562,7 +1579,10 @@ let typed_local_cells expression =
     | Var _ | Int _ | Bool _ | Raise _ | Perform _ | Deref _ -> cells
     | Handle (body, handlers) ->
         List.fold_left
-          (fun cells (_, handler) -> collect cells handler)
+          (fun cells (_, action) ->
+            match action with
+            | Typed_core.Abort handler | Typed_core.Resume handler ->
+                collect cells handler)
           (collect cells body) handlers
   in
   collect [] expression |> List.sort_uniq compare
@@ -1571,17 +1591,41 @@ let typed_relational_expr program analysis function_def env expression =
   let module R = Relational_outcome in
   let choices = ref [] in
   let generic_calls = new_generic_call_state () in
-  let rec translate env state (expression : Typed_core.expr) =
+  let continuations = Hashtbl.create 8 in
+  let continuation_counter = ref 0 in
+  let rec translate env state (expression : Typed_core.expr) continuation =
     match expression.desc with
     | Raise exception_ -> R.raise_ ~state exception_.display
     | Perform operation ->
-        R.perform ~state ~operation:operation.display ~payload:"unit"
+        let id = "continuation_" ^ string_of_int !continuation_counter in
+        incr continuation_counter;
+        Hashtbl.add continuations id continuation;
+        R.perform ~state ~operation:operation.display ~payload:id
     | Handle (body, handlers) ->
-        List.fold_left
-          (fun relation (operation, handler) ->
-            R.handle_effect ~operation:operation.Typed_core.display relation
-              (fun ~payload:_ ~state -> translate env state handler))
-          (translate env state body) handlers
+        let boundary value state = R.return ~state value in
+        let rec discharge relation =
+          List.fold_left
+            (fun relation (operation, action) ->
+              R.handle_effect ~operation:operation.Typed_core.display relation
+                (fun ~payload ~state ->
+                  let generated =
+                    match action with
+                    | Typed_core.Abort handler ->
+                        translate env state handler boundary
+                    | Typed_core.Resume value ->
+                        let captured =
+                          match Hashtbl.find_opt continuations payload with
+                          | Some continuation -> continuation
+                          | None ->
+                              typed_error_at expression.loc
+                                "effect continuation escaped its handler"
+                        in
+                        translate env state value captured
+                  in
+                  discharge generated))
+            relation handlers
+        in
+        R.bind (discharge (translate env state body boundary)) continuation
     | If (condition, if_true, if_false) ->
         if typed_has_exception condition then
           typed_error_at condition.loc
@@ -1591,42 +1635,47 @@ let typed_relational_expr program analysis function_def env expression =
             choices generic_calls env condition
         in
         R.branch ~condition:condition.term
-          ~if_true:(translate env state if_true)
-          ~if_false:(translate env state if_false)
+          ~if_true:(translate env state if_true continuation)
+          ~if_false:(translate env state if_false continuation)
     | Let (symbol, value, body) ->
-        R.bind (translate env state value) (fun value state ->
+        translate env state value (fun value state ->
             translate
               ((symbol.key, { term = value; refinement = None }) :: env)
-              state body)
+              state body continuation)
     | Try (body, cases) ->
-        R.try_with (translate env state body) (fun exception_ state ->
-            match
-              List.find_opt
-                (fun (pattern, _) ->
-                  match pattern with
-                  | Typed_core.Exn_any -> true
-                  | Exn symbol -> symbol.display = exception_)
-                cases
-            with
-            | Some (_, handler) -> translate env state handler
-            | None -> R.raise_ ~state exception_)
+        let boundary value state = R.return ~state value in
+        let handled =
+          R.try_with (translate env state body boundary)
+            (fun exception_ state ->
+              match
+                List.find_opt
+                  (fun (pattern, _) ->
+                    match pattern with
+                    | Typed_core.Exn_any -> true
+                    | Exn symbol -> symbol.display = exception_)
+                  cases
+              with
+              | Some (_, handler) -> translate env state handler boundary
+              | None -> R.raise_ ~state exception_)
+        in
+        R.bind handled continuation
     | Let_ref (symbol, _sort, initial, body) ->
-        R.bind (translate env state initial) (fun value state ->
-            translate env ((symbol.key, value) :: state) body)
+        translate env state initial (fun value state ->
+            translate env ((symbol.key, value) :: state) body continuation)
     | Deref symbol ->
         if not (List.mem_assoc symbol.key state) then
           typed_error_at expression.loc
             "reference `%s` is not a local non-escaping cell" symbol.display;
-        R.read ~state ~cell:symbol.key
+        R.bind (R.read ~state ~cell:symbol.key) continuation
     | Assign (symbol, value) ->
         if not (List.mem_assoc symbol.key state) then
           typed_error_at expression.loc
             "reference `%s` is not a local non-escaping cell" symbol.display;
-        R.bind (translate env state value) (fun value state ->
-            R.write ~state ~cell:symbol.key ~value)
+        translate env state value (fun value state ->
+            R.bind (R.write ~state ~cell:symbol.key ~value) continuation)
     | Sequence (first, second) ->
-        R.bind (translate env state first) (fun _ state ->
-            translate env state second)
+        translate env state first (fun _ state ->
+            translate env state second continuation)
     | _ ->
         if typed_has_exception expression then
           typed_error_at expression.loc
@@ -1635,9 +1684,10 @@ let typed_relational_expr program analysis function_def env expression =
           typed_expr_smt_with_choices program analysis Over function_def [] []
             choices generic_calls env expression
         in
-        R.return ~state value.term
+        continuation value.term state
   in
-  (translate env [] expression, List.rev !choices, generic_calls)
+  let boundary value state = R.return ~state value in
+  (translate env [] expression boundary, List.rev !choices, generic_calls)
 
 let typed_collect_sorts program function_def =
   let module Set = Set.Make (String) in

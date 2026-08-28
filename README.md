@@ -373,9 +373,14 @@ let[@refined.over
 ```
 
 未处理的 Performed path 按 operation 名检查 `performs` predicate；未列出的 operation 失败。
-`Effect.Deep.match_with (fun () -> body) () handler` 的 `effc` 可将匹配 operation 映射到
-`Some (fun _continuation -> handler_body)`，并保留 perform 前的 state。调用 `continue` 的 resumptive
-handler、payload operation、非 literal handler record、effectful coverage/call summary 仍 fail closed。
+`Effect.Deep.match_with (fun () -> body) () handler` 的 `effc` 可将匹配 operation 映射到 abortive
+`Some (fun _continuation -> handler_body)`，或 one-shot resumptive
+`Some (fun continuation -> Effect.Deep.continue continuation value)`。Translator 使用 CPS 捕获 perform 后
+的 computation；resumed continuation 再次 perform 时仍由同一个 deep handler set 处理，state 也会穿过
+resumption。`retc` 必须是 identity，`exnc` 必须是 `raise`。
+
+Payload operation、同一 handler 中多次/条件式 continuation 使用、非 literal handler record、
+effectful coverage/call summary 仍 fail closed。
 
 参数化用户 ADT 会在每个 obligation 中按实际闭合类型实例化。例如 `'a box` 在两个不同使用点会
 得到独立的 `T_box_Int` 与 `T_box_Bool` theory；constructor、recognizer、selector 和代数 axioms 的
@@ -427,10 +432,10 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
 | non-escaping local refs / final-state safety | 支持 | relational ghost-cell threading |
-| nullary Effect.perform / abortive Deep handler | 支持 | Performed guarded paths |
+| nullary Effect.perform / abortive+one-shot Deep handler | 支持 | CPS continuation paths |
 | payload exception、exception coverage/call summary | 明确拒绝 | 需要 payload/outcome witnesses |
 | reference parameters/alias/escape | 明确拒绝 | 仅支持 lexical local cells |
-| resumptive/payload effect handlers | 明确拒绝 | 需要 continuation relation |
+| payload/multi-shot effect handlers | 明确拒绝 | 需要 payload binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
@@ -441,9 +446,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. resumptive effect continuation semantics；
-2. payload exception/effect 与 outcome call summaries；
-3. heap/reference summaries 与 coverage state witnesses。
+1. payload exception/effect 与 outcome call summaries；
+2. heap/reference summaries 与 coverage state witnesses；
+3. multi-shot/conditional continuation contracts。
 
 当前模块边界：
 

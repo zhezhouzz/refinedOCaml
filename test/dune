@@ -60,7 +60,7 @@
   ../examples/state_unknown_contract.ml
   ../examples/effect_valid.ml
   ../examples/effect_invalid.ml
-  ../examples/effect_continue_unsupported.ml))
+  ../examples/effect_resume.ml))
 
 (executable
  (name ppx_sample)

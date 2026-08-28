@@ -37,7 +37,10 @@ let calls expression =
         List.fold_left collect accumulator [ first; second ]
     | Handle (body, handlers) ->
         List.fold_left
-          (fun accumulator (_, handler) -> collect accumulator handler)
+          (fun accumulator (_, action) ->
+            match action with
+            | Typed_core.Abort handler | Typed_core.Resume handler ->
+                collect accumulator handler)
           (collect accumulator body) handlers
   in
   collect [] expression |> List.sort_uniq String.compare

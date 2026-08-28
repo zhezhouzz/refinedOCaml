@@ -650,6 +650,35 @@ let rec typed_expression registry (expression : Typedtree.expression) =
               | Typedtree.Overridden (_, value) -> Some value
               | Kept _ -> None)
       in
+      (match field "retc" with
+      | Some
+          {
+            exp_desc =
+              Texp_function
+                ( [
+                    {
+                      fp_kind =
+                        Tparam_pat { pat_desc = Tpat_var (parameter, _, _); _ };
+                      _;
+                    };
+                  ],
+                  Tfunction_body { exp_desc = Texp_ident (result, _, _); _ } );
+            _;
+          }
+        when Path.same result (Path.Pident parameter) ->
+          ()
+      | _ ->
+          typed_error ~loc:handler.exp_loc
+            "effect handler retc must be the identity function");
+      (match field "exnc" with
+      | Some { exp_desc = Texp_ident (path, _, _); _ }
+        when match List.rev (String.split_on_char '.' (Path.name path)) with
+             | "raise" :: _ -> true
+             | _ -> false ->
+          ()
+      | _ ->
+          typed_error ~loc:handler.exp_loc
+            "effect handler exnc must propagate with raise");
       let effc =
         match field "effc" with
         | Some { exp_desc = Texp_function (_, Tfunction_body body); _ } -> body
@@ -680,10 +709,27 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                         ] ) ) -> (
                     match operation.Types.cstr_tag with
                     | Cstr_extension _ ->
+                        let action =
+                          match handler_body.exp_desc with
+                          | Texp_apply
+                              ( { exp_desc = Texp_ident (path, _, _); _ },
+                                [
+                                  (Nolabel, Some _continuation);
+                                  (Nolabel, Some value);
+                                ] )
+                            when match
+                                   List.rev
+                                     (String.split_on_char '.' (Path.name path))
+                                 with
+                                 | "continue" :: _ -> true
+                                 | _ -> false ->
+                              Resume (recurse value)
+                          | _ -> Abort (recurse handler_body)
+                        in
                         Some
                           ( symbol_of_uid ~name:operation.cstr_name
                               operation.cstr_uid,
-                            recurse handler_body )
+                            action )
                     | _ -> None)
                 | Tpat_any, Texp_construct (_, _, []) -> None
                 | _ ->
@@ -954,12 +1000,20 @@ let typed_normalize expression =
   and anf expression continuation =
     match expression.desc with
     | Var _ | Int _ | Bool _ -> continuation expression
-    | Raise _ | Perform _ -> expression
+    | Raise _ -> expression
+    | Perform operation ->
+        bind_operation expression (Perform operation) continuation
     | Handle (body, handlers) ->
         let body = anf body Fun.id in
         let handlers =
           List.map
-            (fun (operation, handler) -> (operation, anf handler Fun.id))
+            (fun (operation, action) ->
+              let action =
+                match action with
+                | Abort handler -> Abort (anf handler Fun.id)
+                | Resume value -> Resume (anf value Fun.id)
+              in
+              (operation, action))
             handlers
         in
         bind_operation expression (Handle (body, handlers)) continuation
