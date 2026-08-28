@@ -80,6 +80,7 @@ let new_typed_registry () =
       logic_by_name = Hashtbl.create 32;
       abstract_sorts_by_name = Hashtbl.create 16;
       module_aliases = Hashtbl.create 16;
+      functor_theories = Hashtbl.create 8;
       generic_schemes_by_name = Hashtbl.create 16;
       axioms = [];
       lemmas = [];
@@ -538,12 +539,28 @@ let expression_refinement attributes =
       typed_error ~loc:attribute.attr_loc
         "an expression can have only one [@refined.type]"
 
+let rec normalize_registered_sort registry sort =
+  let open Typed_core in
+  match sort with
+  | S_app (symbol, arguments) -> (
+      let arguments = List.map (normalize_registered_sort registry) arguments in
+      match
+        Hashtbl.find_opt registry.Typed_core.abstract_sorts_by_name symbol.key
+      with
+      | Some (S_app (abstract, _)) -> S_app (abstract, arguments)
+      | _ -> S_app (symbol, arguments))
+  | S_tuple sorts ->
+      S_tuple (List.map (normalize_registered_sort registry) sorts)
+  | (S_int | S_bool | S_unit | S_var _) as sort -> sort
+
 let rec typed_expression registry (expression : Typedtree.expression) =
   let open Typed_core in
   let make desc =
     {
       desc;
-      sort = typed_sort_of_type expression.exp_type;
+      sort =
+        typed_sort_of_type expression.exp_type
+        |> normalize_registered_sort registry;
       refinement = expression_refinement expression.exp_attributes;
       loc = span_of_location expression.exp_loc;
     }
@@ -854,6 +871,8 @@ let typed_function registry binding =
                 typed_error ~loc:parameter.fp_loc
                   "function parameters in the MVP Core must be simple variables")
           parameters
+        |> List.map (fun (symbol, sort) ->
+            (symbol, normalize_registered_sort registry sort))
       in
       let argument_names =
         List.map
@@ -870,7 +889,9 @@ let typed_function registry binding =
         {
           symbol;
           arguments;
-          result = typed_sort_of_type body.exp_type;
+          result =
+            typed_sort_of_type body.exp_type
+            |> normalize_registered_sort registry;
           body = typed_normalize (typed_expression registry body);
           contracts;
           measure = typed_measure binding.vb_attributes arguments;
@@ -1016,7 +1037,11 @@ let rec normalize_abstract_sort registry scope sort =
       let arguments =
         List.map (normalize_abstract_sort registry scope) arguments
       in
-      match lookup_abstract_sort registry scope symbol.display with
+      match
+        match Hashtbl.find_opt registry.abstract_sorts_by_name symbol.key with
+        | Some sort -> Some sort
+        | None -> lookup_abstract_sort registry scope symbol.display
+      with
       | Some (S_app (abstract, parameters))
         when List.length parameters = List.length arguments ->
           S_app (abstract, arguments)
@@ -1142,6 +1167,113 @@ let register_module_alias registry scope name target =
   if not (Hashtbl.mem registry.module_aliases name) then
     Hashtbl.add registry.module_aliases name target
 
+let instantiate_functor_theory registry scope name functor_name argument =
+  let open Typed_core in
+  let theory =
+    match
+      Hashtbl.find_opt registry.Typed_core.functor_theories functor_name
+    with
+    | Some theory -> theory
+    | None ->
+        typed_error ~loc:Location.none
+          "module functor `%s` has no refinement theory transformer"
+          functor_name
+  in
+  let target = qualified_name scope name in
+  let application_identity =
+    if theory.generative then target
+    else theory.functor_name ^ "(" ^ argument ^ ")"
+  in
+  let replace_prefix prefix replacement value =
+    if value = prefix then replacement
+    else if String.starts_with ~prefix:(prefix ^ ".") value then
+      replacement
+      ^ String.sub value (String.length prefix)
+          (String.length value - String.length prefix)
+    else value
+  in
+  let rec map_sort = function
+    | Typed_core.S_app (symbol, arguments) ->
+        let arguments = List.map map_sort arguments in
+        let key = symbol.key in
+        let short_parameter = theory.parameter_name in
+        if
+          theory.parameter_name <> ""
+          && (key = theory.parameter_prefix
+             || String.starts_with ~prefix:(theory.parameter_prefix ^ ".") key
+             || key = short_parameter
+             || String.starts_with ~prefix:(short_parameter ^ ".") key)
+        then
+          let actual =
+            if
+              key = short_parameter
+              || String.starts_with ~prefix:(short_parameter ^ ".") key
+            then replace_prefix short_parameter argument key
+            else replace_prefix theory.parameter_prefix argument key
+          in
+          match Hashtbl.find_opt registry.abstract_sorts_by_name actual with
+          | Some sort -> sort
+          | None -> S_app ({ symbol with key = actual }, arguments)
+        else
+          let key =
+            replace_prefix theory.result_prefix application_identity key
+          in
+          S_app ({ symbol with key }, arguments)
+    | S_tuple sorts -> S_tuple (List.map map_sort sorts)
+    | (S_int | S_bool | S_unit | S_var _) as sort -> sort
+  in
+  if theory.parameter_name <> "" then
+    Hashtbl.replace registry.module_aliases
+      (target ^ "." ^ theory.parameter_name)
+      argument;
+  List.iter
+    (fun (key, sort) ->
+      if
+        not
+          (key = theory.parameter_prefix
+          || String.starts_with ~prefix:(theory.parameter_prefix ^ ".") key)
+      then
+        let key = replace_prefix theory.result_prefix target key in
+        Hashtbl.replace registry.abstract_sorts_by_name key (map_sort sort))
+    theory.abstract_sorts;
+  List.iter
+    (fun (key, symbol) ->
+      let key = replace_prefix theory.result_prefix target key in
+      let logic_name =
+        {
+          symbol.Typed_core.logic_name with
+          key =
+            replace_prefix
+              ("logic." ^ theory.result_prefix)
+              ("logic." ^ target) symbol.logic_name.key;
+        }
+      in
+      let symbol =
+        Typed_core.
+          {
+            logic_name;
+            arguments = List.map map_sort symbol.arguments;
+            result = map_sort symbol.result;
+          }
+      in
+      Hashtbl.replace registry.logic_by_name key symbol)
+    theory.logic_symbols;
+  List.iter
+    (fun (axiom : Typed_core.axiom) ->
+      let axiom_name =
+        replace_prefix theory.result_prefix target axiom.axiom_name
+      in
+      registry.axioms <-
+        {
+          axiom with
+          axiom_name;
+          scope = scope @ [ name ];
+          variables =
+            List.map (fun (name, sort) -> (name, map_sort sort)) axiom.variables;
+        }
+        :: registry.axioms)
+    theory.axioms
+
 let typed_register_theories registry structure =
   let rec module_structure = function
     | { Typedtree.mod_desc = Typedtree.Tmod_structure structure; _ } ->
@@ -1176,7 +1308,7 @@ let typed_register_theories registry structure =
                   declaration)
               declarations
         | Tstr_module binding ->
-            let scope =
+            let nested =
               match binding.mb_name.txt with
               | Some name -> scope @ [ name ]
               | None -> scope
@@ -1189,8 +1321,30 @@ let typed_register_theories registry structure =
                   else qualified_name scope target
                 in
                 register_module_alias registry scope name target
+            | ( Some name,
+                Tmod_apply
+                  ( { mod_desc = Tmod_ident (_, functor_name); _ },
+                    { mod_desc = Tmod_ident (_, argument); _ },
+                    _ ) ) ->
+                instantiate_functor_theory registry scope name
+                  (longident_name functor_name.txt)
+                  (longident_name argument.txt)
+            | ( Some name,
+                Tmod_apply
+                  ( { mod_desc = Tmod_ident (_, functor_name); _ },
+                    { mod_desc = Tmod_structure { str_items = []; _ }; _ },
+                    _ ) ) ->
+                instantiate_functor_theory registry scope name
+                  (longident_name functor_name.txt)
+                  ""
+            | ( Some name,
+                Tmod_apply_unit { mod_desc = Tmod_ident (_, functor_name); _ } )
+              ->
+                instantiate_functor_theory registry scope name
+                  (longident_name functor_name.txt)
+                  ""
             | _ -> ());
-            Option.iter (visit scope) (module_structure binding.mb_expr)
+            Option.iter (visit nested) (module_structure binding.mb_expr)
         | Tstr_recmodule bindings ->
             List.iter
               (fun (binding : Typedtree.module_binding) ->
@@ -1239,13 +1393,118 @@ let typed_register_signature_theories registry ~root signature =
               (fun lemma ->
                 registry.Typed_core.lemmas <- lemma :: registry.lemmas)
               (lemma_of_attribute registry scope attribute)
-        | Tsig_module declaration ->
+        | Tsig_module declaration -> (
             let nested =
               match declaration.md_name.txt with
               | Some name -> scope @ [ name ]
               | None -> scope
             in
-            (match (declaration.md_name.txt, declaration.md_type.mty_desc) with
+            match (declaration.md_name.txt, declaration.md_type.mty_desc) with
+            | Some name, Tmty_functor (Unit, result_type) ->
+                let result_prefix = qualified_name scope name in
+                let lemmas_before = registry.Typed_core.lemmas in
+                visit_module_type nested result_type;
+                if registry.lemmas != lemmas_before then
+                  typed_error ~loc:declaration.md_loc
+                    "checked lemmas in functor results are not supported";
+                let starts key =
+                  key = result_prefix
+                  || String.starts_with ~prefix:(result_prefix ^ ".") key
+                in
+                let abstract_sorts =
+                  Hashtbl.fold
+                    (fun key sort result ->
+                      if starts key then (key, sort) :: result else result)
+                    registry.abstract_sorts_by_name []
+                in
+                let logic_symbols =
+                  Hashtbl.fold
+                    (fun key symbol result ->
+                      if starts key then (key, symbol) :: result else result)
+                    registry.logic_by_name []
+                in
+                let axioms =
+                  List.filter
+                    (fun (axiom : Typed_core.axiom) -> starts axiom.axiom_name)
+                    registry.axioms
+                  |> List.rev
+                in
+                Hashtbl.replace registry.functor_theories result_prefix
+                  Typed_core.
+                    {
+                      functor_name = result_prefix;
+                      generative = true;
+                      parameter_name = "";
+                      parameter_prefix = "";
+                      result_prefix;
+                      abstract_sorts;
+                      logic_symbols;
+                      axioms;
+                      module_aliases = [];
+                    }
+            | ( Some name,
+                Tmty_functor
+                  (Named (Some parameter, _, parameter_type), result_type) ) ->
+                let result_prefix = qualified_name scope name in
+                let parameter_name = Ident.name parameter in
+                let parameter_prefix = qualified_name nested parameter_name in
+                visit_module_type (nested @ [ parameter_name ]) parameter_type;
+                let lemmas_before = registry.Typed_core.lemmas in
+                visit_module_type nested result_type;
+                if registry.lemmas != lemmas_before then
+                  typed_error ~loc:declaration.md_loc
+                    "checked lemmas in functor results are not supported";
+                let starts prefix name =
+                  name = prefix
+                  || String.starts_with ~prefix:(prefix ^ ".") name
+                in
+                let abstract_sorts =
+                  Hashtbl.fold
+                    (fun key sort result ->
+                      if starts result_prefix key then (key, sort) :: result
+                      else result)
+                    registry.abstract_sorts_by_name []
+                in
+                let logic_symbols =
+                  Hashtbl.fold
+                    (fun key symbol result ->
+                      if
+                        starts result_prefix key
+                        && not (starts parameter_prefix key)
+                      then (key, symbol) :: result
+                      else result)
+                    registry.logic_by_name []
+                in
+                let axioms =
+                  List.filter
+                    (fun (axiom : Typed_core.axiom) ->
+                      starts result_prefix axiom.axiom_name
+                      && not (starts parameter_prefix axiom.axiom_name))
+                    registry.axioms
+                  |> List.rev
+                in
+                let module_aliases =
+                  Hashtbl.fold
+                    (fun key target result ->
+                      if starts result_prefix key then (key, target) :: result
+                      else result)
+                    registry.module_aliases []
+                in
+                let theory =
+                  Typed_core.
+                    {
+                      functor_name = result_prefix;
+                      generative = false;
+                      parameter_name;
+                      parameter_prefix;
+                      result_prefix;
+                      abstract_sorts;
+                      logic_symbols;
+                      axioms;
+                      module_aliases;
+                    }
+                in
+                Hashtbl.replace registry.functor_theories result_prefix theory
             | Some name, Tmty_alias (_, target) ->
                 let target = longident_name target.txt in
                 let target =
@@ -1253,8 +1512,7 @@ let typed_register_signature_theories registry ~root signature =
                   else qualified_name scope target
                 in
                 register_module_alias registry scope name target
-            | _ -> ());
-            visit_module_type nested declaration.md_type
+            | _ -> visit_module_type nested declaration.md_type)
         | Tsig_recmodule declarations ->
             List.iter
               (fun (declaration : Typedtree.module_declaration) ->
@@ -1309,13 +1567,14 @@ type typed_rmi = {
   logic_symbols : (string * Typed_core.logic_symbol) list;
   abstract_sorts : (string * Typed_core.sort) list;
   module_aliases : (string * string) list;
+  functor_theories : (string * Typed_core.functor_theory) list;
   generic_schemes : (string * Generic_refinement.scheme) list;
   axioms : Typed_core.axiom list;
   checked_lemmas : Typed_core.axiom list;
   proof_artifacts : Refined_types.proof_artifact list;
 }
 
-let current_rmi_version = 4
+let current_rmi_version = 5
 
 let read_rmi path =
   let channel = open_in_bin path in
@@ -1380,11 +1639,20 @@ let write_rmi ~verify ~cmti ~output =
   let registry = new_typed_registry () in
   typed_register_signature_theories registry ~root:cmt.cmt_modname signature;
   let seen = Hashtbl.create 16 in
+  let hidden_by_functor name =
+    Hashtbl.fold
+      (fun _ (theory : Typed_core.functor_theory) hidden ->
+        hidden
+        || name = theory.result_prefix
+        || String.starts_with ~prefix:(theory.result_prefix ^ ".") name)
+      registry.functor_theories false
+  in
   let logic_symbols =
     Hashtbl.fold
       (fun name (logic_symbol : Typed_core.logic_symbol) entries ->
         if
           logic_symbol.logic_name.key = "logic." ^ name
+          && (not (hidden_by_functor name))
           && not (Hashtbl.mem seen logic_symbol.logic_name.key)
         then (
           Hashtbl.add seen logic_symbol.logic_name.key ();
@@ -1396,7 +1664,8 @@ let write_rmi ~verify ~cmti ~output =
     let prefix = cmt.cmt_modname ^ "." in
     Hashtbl.fold
       (fun name scheme entries ->
-        if String.starts_with ~prefix name then (name, scheme) :: entries
+        if String.starts_with ~prefix name && not (hidden_by_functor name) then
+          (name, scheme) :: entries
         else entries)
       registry.generic_schemes_by_name []
   in
@@ -1404,16 +1673,25 @@ let write_rmi ~verify ~cmti ~output =
   let abstract_sorts =
     Hashtbl.fold
       (fun name sort entries ->
-        if String.starts_with ~prefix name then (name, sort) :: entries
+        if String.starts_with ~prefix name && not (hidden_by_functor name) then
+          (name, sort) :: entries
         else entries)
       registry.abstract_sorts_by_name []
   in
   let module_aliases =
     Hashtbl.fold
       (fun name target entries ->
-        if String.starts_with ~prefix name then (name, target) :: entries
+        if String.starts_with ~prefix name && not (hidden_by_functor name) then
+          (name, target) :: entries
         else entries)
       registry.module_aliases []
+  in
+  let functor_theories =
+    Hashtbl.fold
+      (fun name theory entries ->
+        if String.starts_with ~prefix name then (name, theory) :: entries
+        else entries)
+      registry.functor_theories []
   in
   let checked_lemmas = List.rev registry.lemmas in
   let proof_artifacts = verify registry checked_lemmas in
@@ -1450,9 +1728,13 @@ let write_rmi ~verify ~cmti ~output =
       abstract_sorts;
       module_aliases;
       generic_schemes;
-      axioms = List.rev registry.axioms;
+      axioms =
+        List.rev registry.axioms
+        |> List.filter (fun (axiom : Typed_core.axiom) ->
+            not (hidden_by_functor axiom.axiom_name));
       checked_lemmas;
       proof_artifacts;
+      functor_theories;
     }
   in
   let temporary =
@@ -1517,6 +1799,10 @@ let load_rmi_into registry cmt path =
       if not (Hashtbl.mem registry.module_aliases short) then
         Hashtbl.add registry.module_aliases short target)
     rmi.module_aliases;
+  List.iter
+    (fun (name, theory) ->
+      Hashtbl.replace registry.Typed_core.functor_theories name theory)
+    rmi.functor_theories;
   List.iter
     (fun (name, scheme) ->
       Hashtbl.replace registry.Typed_core.generic_schemes_by_name name scheme;

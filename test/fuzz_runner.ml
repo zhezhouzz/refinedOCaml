@@ -389,6 +389,7 @@ let fuzz_function_scc random case =
       logic_by_name = Hashtbl.create 0;
       abstract_sorts_by_name = Hashtbl.create 0;
       module_aliases = Hashtbl.create 0;
+      functor_theories = Hashtbl.create 0;
       generic_schemes_by_name = Hashtbl.create 0;
       axioms = [];
       lemmas = [];

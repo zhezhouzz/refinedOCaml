@@ -44,7 +44,10 @@
   ../examples/logic_ambiguity_invalid.ml
   ../examples/abstract_theory.mli
   ../examples/abstract_theory.ml
-  ../examples/abstract_client.ml))
+  ../examples/abstract_client.ml
+  ../examples/functor_theory.mli
+  ../examples/functor_theory.ml
+  ../examples/functor_client.ml))
 
 (executable
  (name ppx_sample)

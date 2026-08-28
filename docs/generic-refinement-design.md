@@ -109,10 +109,13 @@ sorts, and SMT translation plus theory slicing consume the same resolved symbols
 
 Module aliases and monomorphic abstract-type theories are now implemented. Abstract sorts use lexical scope and
 the same stable identity as client Typedtree types; signature and local aliases resolve through longest-prefix
-path rewriting and recursive alias chains. `.rmi` v4 carries both kinds of metadata.
+path rewriting and recursive alias chains.
 
-The next implementation slice is functor theory transformers and generativity. A later coverage slice must
-define its own call judgment and witness-carrying under-summary instead of reusing the safety rule.
+Functor theory transformers are now implemented for named first-order and unit functors. Named applications
+use applicative `F(Arg)` sort identities; unit applications use fresh target paths. Result predicates/axioms and
+parameter aliases are instantiated at applications, and `.rmi` v5 exports the templates.
+
+The next implementation slice is a compositional coverage call judgment and witness-carrying under-summary.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

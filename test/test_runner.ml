@@ -580,6 +580,58 @@ let () =
       if not (contains obligation.smt "T_Abstract_theory") then
         failwith "abstract type did not use its qualified uninterpreted sort";
       require `Valid obligation);
+  run
+    "ocamlc -bin-annot -c ../examples/functor_theory.mli -o functor_theory.cmi";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/functor_theory.ml -o \
+     functor_theory.cmo";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/functor_client.ml -o \
+     functor_client.cmo";
+  write_rmi ~cmti:"functor_theory.cmti" ~output:"functor_theory.rmi";
+  obligations_of_cmt_with_theories ~theories:[ "functor_theory.rmi" ]
+    "functor_client.cmt"
+  |> List.iter (fun obligation ->
+      (match obligation.name with
+      | "first_mark" ->
+          if
+            not
+              (List.mem "First.mark_enabled" obligation.trusted_axioms
+              && List.mem "Functor_theory.Arg1.enabled"
+                   obligation.trusted_axioms)
+          then failwith "first functor application has the wrong axiom";
+          if not (contains obligation.smt "Make_Functor_theory_Arg1") then
+            failwith "first application lost its applicative sort identity"
+      | "first_again_mark" ->
+          if
+            not
+              (List.mem "First_again.mark_enabled" obligation.trusted_axioms
+              && List.mem "Functor_theory.Arg1.enabled"
+                   obligation.trusted_axioms)
+          then failwith "repeated functor application has the wrong axiom";
+          if not (contains obligation.smt "Make_Functor_theory_Arg1") then
+            failwith "same functor argument did not reuse its sort identity"
+      | "second_mark" ->
+          if
+            not
+              (List.mem "Second.mark_enabled" obligation.trusted_axioms
+              && List.mem "Functor_theory.Arg2.enabled"
+                   obligation.trusted_axioms)
+          then failwith "second functor application has the wrong axiom";
+          if not (contains obligation.smt "Make_Functor_theory_Arg2") then
+            failwith "different functor argument did not separate its sort"
+      | "fresh1_mark" ->
+          if obligation.trusted_axioms <> [ "Fresh1.mark_all" ] then
+            failwith "first generative application has the wrong axiom";
+          if not (contains obligation.smt "T_Fresh1_t") then
+            failwith "first unit functor application was not generative"
+      | "fresh2_mark" ->
+          if obligation.trusted_axioms <> [ "Fresh2.mark_all" ] then
+            failwith "second generative application has the wrong axiom";
+          if not (contains obligation.smt "T_Fresh2_t") then
+            failwith "second unit functor application reused a fresh sort"
+      | name -> failwith ("unexpected functor obligation " ^ name));
+      require `Valid obligation);
   run "ocamlc -bin-annot -c ../examples/list_theory.mli -o list_theory.cmi";
   run "ocamlc -bin-annot -I . -c ../examples/list_theory.ml -o list_theory.cmo";
   run

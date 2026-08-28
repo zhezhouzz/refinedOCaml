@@ -25,6 +25,18 @@ type axiom = {
   loc : Source_span.t;
 }
 
+type functor_theory = {
+  functor_name : string;
+  generative : bool;
+  parameter_name : string;
+  parameter_prefix : string;
+  result_prefix : string;
+  abstract_sorts : (string * sort) list;
+  logic_symbols : (string * logic_symbol) list;
+  axioms : axiom list;
+  module_aliases : (string * string) list;
+}
+
 type pattern =
   | Pat_any
   | Pat_var of symbol
@@ -79,6 +91,7 @@ type registry = {
   logic_by_name : (string, logic_symbol) Hashtbl.t;
   abstract_sorts_by_name : (string, sort) Hashtbl.t;
   module_aliases : (string, string) Hashtbl.t;
+  functor_theories : (string, functor_theory) Hashtbl.t;
   generic_schemes_by_name : (string, Generic_refinement.scheme) Hashtbl.t;
   mutable axioms : axiom list;
   mutable lemmas : axiom list;

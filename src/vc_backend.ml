@@ -95,7 +95,7 @@ let typed_lookup_logic registry scope name =
         qualified_name scope name
         :: candidates (List.rev (List.tl (List.rev scope)))
   in
-  let names = if String.contains name '.' then [ name ] else candidates scope in
+  let names = candidates scope in
   let rec expand_alias visited name =
     if List.mem name visited then name
     else
