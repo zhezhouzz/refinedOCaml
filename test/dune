@@ -47,7 +47,10 @@
   ../examples/abstract_client.ml
   ../examples/functor_theory.mli
   ../examples/functor_theory.ml
-  ../examples/functor_client.ml))
+  ../examples/functor_client.ml
+  ../examples/coverage_composition.ml
+  ../examples/coverage_bad_witness.ml
+  ../examples/coverage_incomplete_witness.ml))
 
 (executable
  (name ppx_sample)

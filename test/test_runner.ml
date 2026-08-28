@@ -339,6 +339,10 @@ let () =
     "typed_logic_disambiguation_invalid";
   compile "../examples/logic_ambiguity_invalid.ml"
     "typed_logic_ambiguity_invalid";
+  compile "../examples/coverage_composition.ml" "typed_coverage_composition";
+  compile "../examples/coverage_bad_witness.ml" "typed_coverage_bad_witness";
+  compile "../examples/coverage_incomplete_witness.ml"
+    "typed_coverage_incomplete_witness";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -435,6 +439,20 @@ let () =
   | exception Location.Error _ -> ());
   (match obligations_of_cmt "typed_logic_ambiguity_invalid.cmt" with
   | _ -> failwith "constructor without an expected sort was accepted"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_coverage_composition.cmt"
+  |> List.iter (fun obligation ->
+      if
+        obligation.name = "successor_twice"
+        && not (contains obligation.smt "call_result_")
+      then failwith "coverage call chain did not use constructive summaries";
+      if obligation.name = "countdown" && not (contains obligation.smt "(<")
+      then failwith "recursive coverage did not retain its measure constraint";
+      require `Valid obligation);
+  obligations_of_cmt "typed_coverage_bad_witness.cmt"
+  |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_coverage_incomplete_witness.cmt" with
+  | _ -> failwith "incomplete coverage witnesses were accepted"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);

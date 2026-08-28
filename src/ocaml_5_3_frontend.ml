@@ -691,10 +691,16 @@ let typed_contracts attributes =
     (fun attribute ->
       match contract_of_attribute attribute with
       | None -> None
-      | Some (mode, pre, post) ->
+      | Some (mode, pre, post, witnesses) ->
           Some
             Typed_core.
-              { mode; pre; post; loc = span_of_location attribute.attr_loc })
+              {
+                mode;
+                pre;
+                post;
+                witnesses;
+                loc = span_of_location attribute.attr_loc;
+              })
     attributes
 
 let typed_measure attributes arguments =

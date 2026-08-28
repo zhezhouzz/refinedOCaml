@@ -12,6 +12,7 @@ type context = {
   post : string;
   assumptions : string list;
   side_conditions : string list;
+  argument_witnesses : (string * string) list;
 }
 
 let declare buffer (name, sort) =
@@ -59,13 +60,29 @@ module Coverage : S = struct
 
   let encode context =
     let missing = "missing_result" in
-    let witnesses = context.arguments @ context.choices in
+    let body =
+      Refinement_domain.Smt.conjunction
+        (context.pre
+        :: Refinement_domain.Smt.equality missing context.body
+        :: context.assumptions)
+    in
     let actual =
-      Refinement_domain.Smt.exists witnesses
-        (Refinement_domain.Smt.conjunction
-           (context.pre
-           :: Refinement_domain.Smt.equality missing context.body
-           :: context.assumptions))
+      match context.argument_witnesses with
+      | [] ->
+          Refinement_domain.Smt.exists
+            (context.arguments @ context.choices)
+            body
+      | bindings ->
+          let bindings =
+            "("
+            ^ String.concat " "
+                (List.map
+                   (fun (name, term) -> Printf.sprintf "(%s %s)" name term)
+                   bindings)
+            ^ ")"
+          in
+          Refinement_domain.Smt.exists context.choices
+            (Printf.sprintf "(let %s %s)" bindings body)
     in
     let judgment =
       Typing_judgment.Coverage.synthesize ~rule:Function_body ~predicate:actual

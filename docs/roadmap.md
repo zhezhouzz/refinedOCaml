@@ -12,9 +12,9 @@
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v5 保存 OCaml version、unit/digest、abstract sorts、aliases、functor templates 和 proof metadata | MVP 已完成 | 设计非 `Marshal` 的长期稳定格式 |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
-| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
-| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn fixpoint 与 safety 函数 summary、递归 call-graph SCC、路径敏感 termination VC 已完成 | Safety/Generic 阶段完成 | 设计 compositional coverage judgment 与 under-summary |
-| C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 当前 coverage 是 `forall result. post(result) => exists input. pre(input) /\ result = f(input)` 的 SMT obligation | 未完成 | 设计 coverage judgment、subtyping/entailment、witness/inverse 支持 |
+| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Safety summary 与 constructive coverage inverse summary 都可组合；同一 binding 可声明 upper/lower contract | Summary MVP 已完成 | 扩展到 relational state/outcome semantics |
+| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、safety summary、coverage inverse witness、递归 SCC/measure 已接入同一 Core/VC 路径 | Safety/Generic/Coverage summary 完成 | effectful relational judgment 与 domain-specific witnesses |
+| C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 无 witness 保留 whole-image existential VC；完整 result-indexed witnesses 验证 constructive inverse，并在调用点 existentially 组合 call result/argument equations；递归使用 measure | Compositional MVP 已完成 | ghost state、nondeterministic relational witnesses 与 richer subtyping |
 | 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
 | OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 int/bool、算术、if、简单 let、tuple、单态/参数化 ADT/record、exhaustive match 与受 measure 检查的 safety recursion；拒绝高阶、mutation、exception、effect 等 | MVP 已完成 | 按优先级扩展 match/records/modules，再考虑 effectful core |
@@ -66,16 +66,16 @@ constraint generation/solving 也已接入同一条生产路径。
 
 ### 4. Coverage 目前只是 VC，不是真正的 coverage type system
 
-当前 coverage 的含义是整函数 image 的 under-approximation obligation：
+无 witness coverage 的含义仍是整函数 image 的 under-approximation obligation：
 
 ```text
 forall result. post(result) => exists input. pre(input) /\ result = f(input)
 ```
 
-这可以验证一些简单函数和 finite choice，但它还不是可组合的 coverage typing algorithm。未来需要决定：
+完整 witnesses 会把 existential 输入替换为 result-indexed inverse，并形成可组合 call judgment。后续仍需决定：
 
 - coverage judgment 是否和 safety 共享同一 Core typing skeleton；
-- under 的 witness/inverse 信息如何表达；
+- ghost state 与 nondeterministic witness relations 如何表达；
 - coverage subtyping/entailment 是否能复用 safety 的 refinement domain；
 - nondeterminism、effects、exceptions 是否需要 relational outcome semantics。
 
@@ -115,4 +115,9 @@ Functor theory transformer 与 generativity MVP 也已完成。具名参数应�
 identity，unit functor application 使用目标 module path 生成 fresh identity；result predicates/axioms 和
 parameter aliases 会在 application 处实例化。
 
-roadmap 的下一实现步骤回到 compositional coverage judgment 与 witness-carrying under-summary。
+Compositional coverage judgment 与 witness-carrying under-summary 也已完成。完整 witness mapping 会把
+whole-image existential 加强为可检查的 inverse，并在调用点通过 existential call result、callee post 和
+argument/witness equations 组合；递归调用继续受 measure 约束。
+
+roadmap 的下一实现步骤是为 mutation、exception 和 algebraic effect 引入 relational outcome/state
+semantics。

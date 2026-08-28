@@ -10,6 +10,7 @@ type context = {
   post : string;
   assumptions : string list;
   side_conditions : string list;
+  argument_witnesses : (string * string) list;
 }
 
 module type S = sig

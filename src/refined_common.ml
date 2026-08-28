@@ -83,14 +83,13 @@ let contract_of_attribute attribute =
               _;
             };
           ] ->
-          let find name =
+          let find_expression name =
             List.find_map
               (fun ({ txt; _ }, expression) ->
-                if longident_last txt = name then
-                  Some (string_constant expression)
-                else None)
+                if longident_last txt = name then Some expression else None)
               fields
           in
+          let find name = Option.map string_constant (find_expression name) in
           let required name =
             match find name with
             | Some value -> value
@@ -98,7 +97,35 @@ let contract_of_attribute attribute =
                 error ~loc:attribute.attr_loc
                   "contract is missing the `%s` string field" name
           in
-          Some (mode, required "pre", required "post")
+          let rec expression_list expression =
+            match expression.pexp_desc with
+            | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> []
+            | Pexp_construct
+                ( { txt = Lident "::"; _ },
+                  Some { pexp_desc = Pexp_tuple [ head; tail ]; _ } ) ->
+                head :: expression_list tail
+            | _ ->
+                error ~loc:expression.pexp_loc
+                  "contract witnesses must be an OCaml list literal"
+          in
+          let witnesses =
+            match find_expression "witnesses" with
+            | None -> []
+            | Some expression ->
+                expression_list expression
+                |> List.map (fun expression ->
+                    match expression.pexp_desc with
+                    | Pexp_tuple [ parameter; witness ] ->
+                        (string_constant parameter, string_constant witness)
+                    | _ ->
+                        error ~loc:expression.pexp_loc
+                          "coverage witnesses must contain (parameter, \
+                           expression) string pairs")
+          in
+          if mode = Over && witnesses <> [] then
+            error ~loc:attribute.attr_loc
+              "safety contracts cannot declare coverage witnesses";
+          Some (mode, required "pre", required "post", witnesses)
       | _ ->
           error ~loc:attribute.attr_loc
             "expected [@%s { pre = \"...\"; post = \"...\" }]"

@@ -27,8 +27,8 @@ over-partial   over-total   under-may   under-must
 ```
 
 当前 MVP 实现 `over-partial` 的一阶片段；递归 safety 通过 independently checked summary 和
-well-founded `int` measure 处理。确定性或有限 `choose` 纯函数支持 whole-image `under-may`，但递归
-coverage 仍需 compositional under-summary。
+well-founded `int` measure 处理。确定性或有限 `choose` 纯函数支持 whole-image `under-may`；完整的
+result-indexed inverse witnesses 可形成 compositional under-summary，并在 measure 下支持递归。
 
 ## 3. 合约表面语法
 
@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-compositional coverage summary、可重放 proof certificate、增量缓存。
+relational state/outcome semantics、可重放 proof certificate、增量缓存。
 
 ### M2
 

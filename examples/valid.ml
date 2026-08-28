@@ -6,8 +6,12 @@ let[@refined.over { pre = "x >= 0"; post = "result > x" }] succ (x : int) : int
   x + 1
 
 (* Every integer result >= 1 has the witness x = result - 1, with x >= 0. *)
-let[@refined.under { pre = "x >= 0"; post = "result >= 1" }] positive_range
-    (x : int) : int =
+let[@refined.under
+     {
+       pre = "x >= 0";
+       post = "result >= 1";
+       witnesses = [ ("x", "result - 1") ];
+     }] positive_range (x : int) : int =
   x + 1
 
 let[@refined.over { pre = "true"; post = "(result = true) = (n = Z)" }] is_zero

@@ -470,7 +470,8 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
 
 exception Logic_needs_expected of Location.t * string
 
-let elaborate_formula ?(scope = []) registry env expression =
+let elaborate_formula ?(scope = []) ?(expected = Typed_core.S_bool) registry env
+    expression =
   let open Logic_term in
   let ensure_sort ~loc expected actual =
     if expected <> actual then
@@ -674,7 +675,7 @@ let elaborate_formula ?(scope = []) registry env expression =
           }
     | _ -> typed_error ~loc "unsupported refinement formula"
   in
-  try elaborate ~expected:Typed_core.S_bool expression
+  try elaborate ~expected expression
   with Logic_needs_expected (loc, construct) ->
     typed_error ~loc "%s needs an expected logic sort" construct
 
@@ -695,11 +696,12 @@ let rec logic_term_smt (term : Logic_term.t) =
       let arguments = List.map logic_term_smt arguments in
       if arguments = [] then name else app name arguments
 
-let typed_formula ?scope registry env expression =
-  elaborate_formula ?scope registry env expression |> logic_term_smt
+let typed_formula ?scope ?expected registry env expression =
+  elaborate_formula ?scope ?expected registry env expression |> logic_term_smt
 
-let formula_theory_symbols ?scope registry env expression =
-  elaborate_formula ?scope registry env expression |> Logic_term.theory_symbols
+let formula_theory_symbols ?scope ?expected registry env expression =
+  elaborate_formula ?scope ?expected registry env expression
+  |> Logic_term.theory_symbols
 
 let slice_program_theory (program : Typed_core.program) ~roots =
   let registry = program.registry in
@@ -1259,6 +1261,12 @@ and typed_inline_call program analysis mode current_function path call_stack
           (fun (contract : Typed_core.contract) -> contract.mode = Over)
           function_def.contracts
       in
+      let constructive_under_contracts =
+        List.filter
+          (fun (contract : Typed_core.contract) ->
+            contract.mode = Under && contract.witnesses <> [])
+          function_def.contracts
+      in
       if mode = Over && over_contracts <> [] then (
         let summary =
           match over_contracts with
@@ -1341,6 +1349,89 @@ and typed_inline_call program analysis mode current_function path call_stack
                     app "<" [ callee_measure_term; caller_measure_term ];
                   ])
              :: generic_calls.side_conditions);
+        { term = result; refinement = expression.refinement })
+      else if mode = Under && constructive_under_contracts <> [] then (
+        let summary =
+          match constructive_under_contracts with
+          | [ summary ] -> summary
+          | _ ->
+              typed_error_at expression.loc
+                "call to `%s` has ambiguous constructive coverage summaries"
+                symbol.display
+        in
+        let formal_names =
+          List.map
+            (fun ((argument : Typed_core.symbol), _) -> argument.display)
+            function_def.arguments
+        in
+        if
+          List.sort String.compare (List.map fst summary.witnesses)
+          <> List.sort String.compare formal_names
+        then
+          typed_error_at expression.loc
+            "coverage summary for `%s` has incomplete witnesses" symbol.display;
+        let result = "call_result_" ^ string_of_int (List.length !choices) in
+        choices := (result, function_def.result) :: !choices;
+        let result_env = [ ("result", (result, function_def.result)) ] in
+        let parse text =
+          parse_formula ~filename:summary.loc.file
+            ~loc:(location_of_span summary.loc)
+            text
+        in
+        let post_formula = parse summary.post in
+        formula_theory_symbols program.registry result_env post_formula
+        |> List.iter (use_theory_symbol generic_calls);
+        let constraints =
+          typed_formula program.registry result_env post_formula
+          :: List.map2
+               (fun ((formal : Typed_core.symbol), sort) actual ->
+                 let witness =
+                   parse (List.assoc formal.display summary.witnesses)
+                 in
+                 formula_theory_symbols ~expected:sort program.registry
+                   result_env witness
+                 |> List.iter (use_theory_symbol generic_calls);
+                 app "="
+                   [
+                     actual;
+                     typed_formula ~expected:sort program.registry result_env
+                       witness;
+                   ])
+               function_def.arguments terms
+        in
+        generic_calls.summary_assumptions <-
+          List.rev_append
+            (List.map (under_path path) constraints)
+            generic_calls.summary_assumptions;
+        (if recursive then
+           let callee_measure =
+             match function_def.measure with
+             | Some measure -> measure
+             | None ->
+                 typed_error_at expression.loc
+                   "recursive coverage callee `%s` needs [@refined.measure]"
+                   symbol.display
+           in
+           let caller_measure =
+             match current_function.Typed_core.measure with
+             | Some measure -> measure
+             | None ->
+                 typed_error_at expression.loc
+                   "recursive coverage caller `%s` needs [@refined.measure]"
+                   current_function.symbol.display
+           in
+           let callee =
+             List.find_map
+               (fun (((argument : Typed_core.symbol), _), term) ->
+                 if argument.key = callee_measure.key then Some term else None)
+               (List.combine function_def.arguments terms)
+             |> Option.get
+           in
+           let caller = (List.assoc caller_measure.key env).term in
+           generic_calls.summary_assumptions <-
+             under_path path
+               (and_ [ app ">=" [ caller; "0" ]; app "<" [ callee; caller ] ])
+             :: generic_calls.summary_assumptions);
         { term = result; refinement = expression.refinement })
       else if recursive then
         typed_error_at expression.loc
@@ -1671,6 +1762,35 @@ let typed_obligation (program : Typed_core.program) analysis
       ~loc:(location_of_span contract.loc)
       contract.post
   in
+  let witness_expressions =
+    match contract.witnesses with
+    | [] -> []
+    | witnesses ->
+        if contract.mode <> Under then assert false;
+        let names = List.map fst witnesses in
+        let expected =
+          List.map
+            (fun ((symbol : Typed_core.symbol), _) -> symbol.display)
+            function_def.arguments
+        in
+        if
+          List.sort String.compare names <> List.sort String.compare expected
+          || List.length names
+             <> List.length (List.sort_uniq String.compare names)
+        then
+          typed_error_at contract.loc
+            "coverage witnesses must define every parameter exactly once";
+        List.map
+          (fun ((symbol : Typed_core.symbol), sort) ->
+            let text = List.assoc symbol.display witnesses in
+            let expression =
+              parse_formula ~filename:contract.loc.file
+                ~loc:(location_of_span contract.loc)
+                text
+            in
+            (symbol, sort, expression))
+          function_def.arguments
+  in
   let program =
     typed_specialize_program program function_def pre_expression post_expression
   in
@@ -1685,6 +1805,12 @@ let typed_obligation (program : Typed_core.program) analysis
     @ formula_theory_symbols program.registry
         (("result", ("result", function_def.result)) :: formula_env)
         post_expression
+    @ List.concat_map
+        (fun (_, sort, expression) ->
+          formula_theory_symbols ~expected:sort program.registry
+            [ ("result", ("missing_result", function_def.result)) ]
+            expression)
+        witness_expressions
     |> List.sort_uniq String.compare
   in
   let program, _enabled_symbols = slice_program_theory program ~roots in
@@ -1692,10 +1818,19 @@ let typed_obligation (program : Typed_core.program) analysis
   let result_name =
     match contract.mode with Over -> "result" | Under -> "missing_result"
   in
-  let post =
-    typed_formula program.registry
-      (("result", (result_name, function_def.result)) :: formula_env)
-      post_expression
+  let post_env =
+    let result = ("result", (result_name, function_def.result)) in
+    if witness_expressions = [] then result :: formula_env else [ result ]
+  in
+  let post = typed_formula program.registry post_env post_expression in
+  let argument_witnesses =
+    List.map
+      (fun (symbol, sort, expression) ->
+        ( smt_identifier symbol.Typed_core.key,
+          typed_formula ~expected:sort program.registry
+            [ ("result", (result_name, function_def.result)) ]
+            expression ))
+      witness_expressions
   in
   let buffer = Buffer.create 4096 in
   Buffer.add_string buffer
@@ -1724,6 +1859,7 @@ let typed_obligation (program : Typed_core.program) analysis
       post;
       assumptions = List.rev generic_calls.summary_assumptions;
       side_conditions = List.rev generic_calls.side_conditions;
+      argument_witnesses;
     };
   Buffer.add_string buffer "(check-sat)\n(get-model)\n";
   {

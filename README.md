@@ -87,7 +87,30 @@ coverage [P] f [Q] ≜ ∀y. Q(y) ⇒ ∃x. P(x) ∧ y = f(x)
 ```
 
 Coverage contract 描述函数 image 的一个下界。当前 coverage
-`post` 只能引用 `result`；后续会加入 ghost variables 表达输入/输出状态关系。
+`post` 只能引用 `result`。可选的 constructive witnesses 为每个参数给出只依赖 `result` 的 inverse：
+
+```ocaml
+let[@refined.coverage
+      {
+        pre = "x >= 0";
+        post = "result >= 1";
+        witnesses = [ ("x", "result - 1") ];
+      }]
+    successor x =
+  x + 1
+```
+
+此时 checker 验证更强的 judgment：
+
+```text
+forall result. post(result) =>
+  pre(witness(result)) /\ result = f(witness(result))
+```
+
+完整 witness contract 可以作为 under call summary。Caller existentially 选择 call result，并加入 callee
+post 与 `actual_argument = witness(call_result)`；多层调用因而可以组合。递归 under-summary 还要求 SCC
+内 measure 非负且严格下降。没有 witnesses 的旧 contract 仍按 whole-image existential VC 验证，但只
+能 inline，不能关闭递归调用。
 
 验证器把 safety 反例和 coverage 的缺失结果交给 Z3：`unsat` 表示 contract 成立；`sat` 时输出
 model。
@@ -254,8 +277,8 @@ Stable Core 会构造函数调用图并用 Tarjan 算法求 SCC。SCC 内每条�
 summary，并在实际控制流路径下检查 summary precondition、caller measure 非负以及 callee measure
 严格下降。每个带合约的 SCC 成员仍会独立产生 VC，因此 summary 不是 trusted axiom。
 
-当前 measure 必须直接命名一个 `int` 参数。递归 coverage 被明确拒绝：现有 coverage 合约描述整个
-函数 image，并不是可安全用于固定实参调用的 compositional under-summary。
+当前 measure 必须直接命名一个 `int` 参数。递归 coverage 只有在提供完整 constructive witnesses 时
+才可使用 under-summary；whole-image existential contract 仍不能关闭递归调用。
 
 ## ADT 编码
 
@@ -322,10 +345,11 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | dependency-driven theory slicing | 支持 | symbol/dependency least closure |
 | typed Logic AST / expected-sort elaboration | 支持 | resolved constructor/selector symbols |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
+| constructive coverage call summary | 支持 | result-indexed inverse witnesses |
 | 二选一 nondeterministic `choose` | 支持 | demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
 | safety 函数 summary、直接/互递归 | 支持 | call-graph SCC + `int` measure |
-| 递归 coverage | 明确拒绝 | 需要 compositional under-summary/witness |
+| 递归 coverage | 有条件支持 | complete witnesses + SCC measure |
 | 开放 polymorphic ADT obligation、高阶值 | 明确拒绝 | 需要 finite instances/closure |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
@@ -339,9 +363,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. compositional coverage judgment 与 witness-carrying summary；
-2. 关系化 mutation、exception 和 effect handler；
-3. parameterized abstract sorts 与 nested functor theory。
+1. 关系化 mutation、exception 和 effect handler；
+2. parameterized abstract sorts 与 nested functor theory；
+3. 可重放 proof certificate 与稳定 `.rmi` 格式。
 
 当前模块边界：
 

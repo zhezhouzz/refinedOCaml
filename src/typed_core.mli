@@ -71,6 +71,7 @@ type contract = {
   mode : Refined_types.mode;
   pre : string;
   post : string;
+  witnesses : (string * string) list;
   loc : Source_span.t;
 }
 

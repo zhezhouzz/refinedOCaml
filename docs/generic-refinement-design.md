@@ -115,7 +115,13 @@ Functor theory transformers are now implemented for named first-order and unit f
 use applicative `F(Arg)` sort identities; unit applications use fresh target paths. Result predicates/axioms and
 parameter aliases are instantiated at applications, and `.rmi` v5 exports the templates.
 
-The next implementation slice is a compositional coverage call judgment and witness-carrying under-summary.
+Compositional coverage calls and witness-carrying under-summaries are now implemented. A complete mapping from
+formal parameters to result-indexed inverse terms strengthens the whole-image existential VC into a constructive
+certificate. Callers existentially choose call results and assume callee postconditions plus argument/witness
+equalities; recursive calls additionally carry path-sensitive measure constraints. Contracts without witnesses
+retain the old whole-image meaning and cannot summarize recursive calls.
+
+The next implementation slice is relational state/outcome semantics for mutation, exceptions and effects.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
