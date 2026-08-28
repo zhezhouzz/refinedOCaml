@@ -107,9 +107,12 @@ The typed Logic AST and expected-sort elaboration are now implemented. Equality 
 both directions, constructors resolve from expected result and argument sorts, fields resolve from receiver
 sorts, and SMT translation plus theory slicing consume the same resolved symbols.
 
-The next implementation slice is module aliases and abstract-type theories, followed by functor theory
-transformers. A later coverage slice must define its own call judgment and witness-carrying under-summary
-instead of reusing the safety rule.
+Module aliases and monomorphic abstract-type theories are now implemented. Abstract sorts use lexical scope and
+the same stable identity as client Typedtree types; signature and local aliases resolve through longest-prefix
+path rewriting and recursive alias chains. `.rmi` v4 carries both kinds of metadata.
+
+The next implementation slice is functor theory transformers and generativity. A later coverage slice must
+define its own call judgment and witness-carrying under-summary instead of reusing the safety rule.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

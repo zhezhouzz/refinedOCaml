@@ -89,8 +89,9 @@ monomorphise；真正无法有限实例化的 polymorphic recursion 需要显式
 ### Modules 与抽象类型
 
 MVP 将 `.mli` 中公开的 predicates/axioms 编译成带 `.cmi` digest 的 `.rmi`；客户端不会看到实现侧
-private axioms。抽象类型的 sort/measure 导出以及 Functor 的 parameterized theory/generativity 是
-下一阶段工作。
+private axioms。单态抽象类型已导出为 scoped uninterpreted sort，applicative module aliases 已作为路径
+重写处理。Functor 的 parameterized theory/generativity、parameterized abstract sorts 和 abstract
+measure 仍是下一阶段工作。
 
 ### Mutation
 
@@ -145,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-abstract type/module theory、可重放 proof certificate、增量缓存。
+functor theory transformer/generativity、可重放 proof certificate、增量缓存。
 
 ### M2
 

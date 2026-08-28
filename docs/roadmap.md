@@ -8,8 +8,8 @@
 |---|---|---|---|---|
 | A. 插入时机 | 在 OCaml normal typecheck 之后运行 refinement checker，并使用 Typedtree typing information | 已从 `.cmt/.cmti` 读取 Typedtree；PPX 只检查并保留 annotation；OCaml API 全部隔离在 `Ocaml_5_3_frontend` | 工程化完成 | 新 OCaml release 必须新增 versioned frontend 和 CI entry |
 | A. 普通类型错误处理 | 只接受完整 typed implementation，拒绝 partial Typedtree | `obligations_of_cmt_with_theories` 只接受 `Implementation`，拒绝 `Partial_implementation` / `Partial_interface`；测试覆盖 ill-typed case | MVP 已完成 | 增加错误信息和 dune 集成 |
-| B. Module theory | 用 module/signature 管理 predicates 和 axioms | `.mli` 可导出 `[@@refined.predicate]` 和 `[@@@refined.axiom]`；`.cmti -> .rmi`；客户端通过 `--theory` 导入 | MVP 已完成 | 支持 abstract type theory、module alias、functor theory transformer |
-| B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` 保存 OCaml version、unit name、`.cmi` digest；加载时检查 imports 和 digest | MVP 已完成 | 设计 `.rmi` 稳定格式，避免直接 `Marshal` 作为长期 artifact |
+| B. Module theory | 用 module/signature 管理 predicates 和 axioms | `.mli` 可导出 predicate/axiom/lemma、单态 abstract sorts 和 applicative module aliases；lookup 支持 longest-prefix alias chain | Alias/abstract MVP 已完成 | functor theory transformer、generativity 与 parameterized abstract sorts |
+| B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v4 保存 OCaml version、unit/digest、abstract sorts、aliases 和 proof metadata；加载时检查 imports/digest | MVP 已完成 | 设计非 `Marshal` 的长期稳定格式 |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
@@ -107,6 +107,9 @@ provenance、artifacts 与 ADT bundle 一起过滤。只作为值流过的 ADT �
 result/argument sorts，field 使用 receiver sort；SMT translation 与 slicing 共享同一个 resolved AST，
 不再各自猜测短名。
 
-roadmap 的下一实现步骤是 module alias 与 abstract type theory，然后进入 functor theory transformer。
-递归 coverage 暂不借用 safety summary：它需要先定义固定实参下可组合的 under-summary 和 witness
-规则。
+Module alias 与单态 abstract type theory 也已完成。Signature/local aliases 作为 longest-prefix path
+rewrite 链式展开；abstract sort 按 lexical scope 解析，并与客户端 Typedtree sort identity 对齐；`.rmi`
+格式升级到 v4。
+
+roadmap 的下一实现步骤是 functor theory transformer 与 generativity。递归 coverage 暂不借用 safety
+summary：它需要先定义固定实参下可组合的 under-summary 和 witness 规则。

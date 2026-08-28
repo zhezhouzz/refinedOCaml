@@ -77,6 +77,8 @@ type registry = {
   fields_by_uid : (string, constructor * int) Hashtbl.t;
   fields_by_name : (string, constructor * int) Hashtbl.t;
   logic_by_name : (string, logic_symbol) Hashtbl.t;
+  abstract_sorts_by_name : (string, sort) Hashtbl.t;
+  module_aliases : (string, string) Hashtbl.t;
   generic_schemes_by_name : (string, Generic_refinement.scheme) Hashtbl.t;
   mutable axioms : axiom list;
   mutable lemmas : axiom list;

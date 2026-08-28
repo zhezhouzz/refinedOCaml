@@ -158,6 +158,26 @@ verification artifact。客户端诊断也分别列出两类 provenance。
 这里的 artifact 是可审计的验证记录，不是可由小型 kernel 独立重放的 Z3 proof certificate；solver
 调用仍属于当前 checker 的可信边界。
 
+### Abstract type theory 与 module alias
+
+签名中的单态抽象类型会导出为作用域化 uninterpreted sort：
+
+```ocaml
+type t
+val holds : t -> bool [@@refined.predicate]
+
+[@@@refined.axiom
+{ name = "holds_all"; vars = [ ("x", "t") ]; body = "holds x" }]
+```
+
+Axiom/lemma sort parser 按 lexical module scope 解析 `"t"`，并与 Typedtree 中客户端看到的
+`Module.t` 使用同一个 sort identity。`.rmi` v4 显式保存这些 abstract sorts。
+
+Structure 和 signature 中的 applicative module alias 也会保存为 theory path rewrite。Lookup 使用最长
+前缀并递归展开 alias chain，因此客户端本地 `Local.holds` 可以依次解析到
+`Abstract_theory.Alias.holds` 和 `Abstract_theory.Core.holds`。这只是别名，不处理 functor application、
+generativity 或 destructive substitution。
+
 ### Hindley generic schemes
 
 Module signature 可以导出 higher-sorted Hindley generic：
@@ -283,6 +303,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 单态/参数化 immutable record、字段读取 | 支持 | instance-specific constructor/selectors |
 | 普通多态函数的 first-order 调用 | 支持 | Typedtree + inlining |
 | module predicate/axiom/checked lemma 与 `.rmi` | 支持 | scoped FOL + verification artifact |
+| 单态 abstract type theory / module alias | 支持 | scoped sort + alias-chain rewrite |
 | dependency-driven theory slicing | 支持 | symbol/dependency least closure |
 | typed Logic AST / expected-sort elaboration | 支持 | resolved constructor/selector symbols |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
@@ -303,9 +324,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. module alias 与 abstract type theory；
-2. functor/theory transformer 与 generativity；
-3. 关系化 mutation、exception 和 effect handler。
+1. functor/theory transformer 与 generativity；
+2. 关系化 mutation、exception 和 effect handler；
+3. compositional coverage judgment 与 witness-carrying summary。
 
 当前模块边界：
 

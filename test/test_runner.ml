@@ -553,6 +553,33 @@ let () =
             failwith "theory-free obligation retained logic declarations"
       | name -> failwith ("unexpected slicing obligation " ^ name));
       require `Valid obligation);
+  run
+    "ocamlc -bin-annot -c ../examples/abstract_theory.mli -o \
+     abstract_theory.cmi";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/abstract_theory.ml -o \
+     abstract_theory.cmo";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/abstract_client.ml -o \
+     abstract_client.cmo";
+  write_rmi ~cmti:"abstract_theory.cmti" ~output:"abstract_theory.rmi";
+  obligations_of_cmt_with_theories ~theories:[ "abstract_theory.rmi" ]
+    "abstract_client.cmt"
+  |> List.iter (fun obligation ->
+      (match obligation.name with
+      | "through_alias" ->
+          if obligation.trusted_axioms <> [ "Abstract_theory.Core.holds_all" ]
+          then failwith "nested alias did not retain its scoped axiom";
+          if not (contains obligation.smt "L_logic_Abstract_theory_Core_holds")
+          then
+            failwith "local/exported alias chain did not resolve its predicate"
+      | "reflexive" ->
+          if obligation.trusted_axioms <> [ "Abstract_theory.equal_refl" ] then
+            failwith "abstract sort equality selected the wrong theory slice"
+      | name -> failwith ("unexpected abstract theory obligation " ^ name));
+      if not (contains obligation.smt "T_Abstract_theory") then
+        failwith "abstract type did not use its qualified uninterpreted sort";
+      require `Valid obligation);
   run "ocamlc -bin-annot -c ../examples/list_theory.mli -o list_theory.cmi";
   run "ocamlc -bin-annot -I . -c ../examples/list_theory.ml -o list_theory.cmo";
   run

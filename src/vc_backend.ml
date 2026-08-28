@@ -96,9 +96,35 @@ let typed_lookup_logic registry scope name =
         :: candidates (List.rev (List.tl (List.rev scope)))
   in
   let names = if String.contains name '.' then [ name ] else candidates scope in
+  let rec expand_alias visited name =
+    if List.mem name visited then name
+    else
+      let parts = String.split_on_char '.' name in
+      let rec longest length =
+        if length = 0 then None
+        else
+          let prefix =
+            parts |> List.to_seq |> Seq.take length |> List.of_seq
+            |> String.concat "."
+          in
+          match Hashtbl.find_opt registry.Typed_core.module_aliases prefix with
+          | Some target ->
+              let suffix =
+                parts |> List.to_seq |> Seq.drop length |> List.of_seq
+              in
+              Some (String.concat "." (target :: suffix))
+          | None -> longest (length - 1)
+      in
+      match longest (List.length parts - 1) with
+      | None -> name
+      | Some expanded -> expand_alias (name :: visited) expanded
+  in
   List.find_map
     (fun candidate ->
-      Hashtbl.find_opt registry.Typed_core.logic_by_name candidate)
+      let expanded = expand_alias [] candidate in
+      match Hashtbl.find_opt registry.Typed_core.logic_by_name expanded with
+      | Some symbol -> Some symbol
+      | None -> Hashtbl.find_opt registry.logic_by_name candidate)
     names
 
 let typed_specialize_program (program : Typed_core.program)

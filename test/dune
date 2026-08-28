@@ -41,7 +41,10 @@
   ../examples/slicing_client.ml
   ../examples/logic_disambiguation.ml
   ../examples/logic_disambiguation_invalid.ml
-  ../examples/logic_ambiguity_invalid.ml))
+  ../examples/logic_ambiguity_invalid.ml
+  ../examples/abstract_theory.mli
+  ../examples/abstract_theory.ml
+  ../examples/abstract_client.ml))
 
 (executable
  (name ppx_sample)
