@@ -29,7 +29,11 @@
   ../examples/recursive_missing_measure.ml
   ../examples/recursive_missing_summary.ml
   ../examples/recursive_coverage.ml
-  ../examples/mutual_recursive.ml))
+  ../examples/mutual_recursive.ml
+  ../examples/lemma_theory.mli
+  ../examples/lemma_theory.ml
+  ../examples/lemma_client.ml
+  ../examples/invalid_lemma_theory.mli))
 
 (executable
  (name ppx_sample)

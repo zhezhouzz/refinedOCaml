@@ -389,6 +389,9 @@ let fuzz_function_scc random case =
       logic_by_name = Hashtbl.create 0;
       generic_schemes_by_name = Hashtbl.create 0;
       axioms = [];
+      lemmas = [];
+      checked_lemmas = [];
+      proof_artifacts = [];
       datatypes = [];
     }
   in

@@ -10,7 +10,7 @@
 | A. 普通类型错误处理 | 只接受完整 typed implementation，拒绝 partial Typedtree | `obligations_of_cmt_with_theories` 只接受 `Implementation`，拒绝 `Partial_implementation` / `Partial_interface`；测试覆盖 ill-typed case | MVP 已完成 | 增加错误信息和 dune 集成 |
 | B. Module theory | 用 module/signature 管理 predicates 和 axioms | `.mli` 可导出 `[@@refined.predicate]` 和 `[@@@refined.axiom]`；`.cmti -> .rmi`；客户端通过 `--theory` 导入 | MVP 已完成 | 支持 abstract type theory、module alias、functor theory transformer |
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` 保存 OCaml version、unit name、`.cmi` digest；加载时检查 imports 和 digest | MVP 已完成 | 设计 `.rmi` 稳定格式，避免直接 `Marshal` 作为长期 artifact |
-| B. Axioms vs lemmas | 当前允许 trusted axioms；未来希望支持 checked lemmas | 当前 axiom 全部进入 TCB，并在结果中列出 trusted axiom 名称 | 部分完成 | 加入 `lemma` 语法、lemma VC、导出已检查 lemma |
+| B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态 variant/record 已支持；constructor、recognizer、selector 和基本代数 axioms 已生成 | MVP 已完成 | 支持参数化用户 ADT 的 use-site monomorphisation；加入 axiom slicing |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
 | C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn fixpoint 与 safety 函数 summary、递归 call-graph SCC、路径敏感 termination VC 已完成 | Safety/Generic 阶段完成 | 设计 compositional coverage judgment 与 under-summary |
@@ -91,5 +91,9 @@ Generic Refinement Types 的 Hindley/Horn surface、result propagation 与 mutua
 CHC fixpoint 已经落实。函数 safety summary、递归 call-graph SCC 与路径敏感的 termination measure
 也已经接入生产 VC 路径；summary 会由各函数自己的 obligation 检查，不进入 trusted axiom 集合。
 
-roadmap 的下一实现步骤是 checked lemma 与 proof-artifact 导出。递归 coverage 暂不借用 safety
-summary：它需要先定义固定实参下可组合的 under-summary 和 witness 规则。
+Checked lemma 与 verification-artifact 导出也已经落实：失败或 unknown 的 lemma 不会进入 `.rmi`，
+checked lemma 不计入 trusted axiom provenance。当前 artifact 记录 VC digest、solver identity 和 timeout，
+但还不是可由小型 kernel 独立重放的 proof certificate。
+
+roadmap 的下一实现步骤是参数化用户 ADT 的 use-site monomorphisation。递归 coverage 暂不借用
+safety summary：它需要先定义固定实参下可组合的 under-summary 和 witness 规则。

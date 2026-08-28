@@ -79,6 +79,9 @@ type registry = {
   logic_by_name : (string, logic_symbol) Hashtbl.t;
   generic_schemes_by_name : (string, Generic_refinement.scheme) Hashtbl.t;
   mutable axioms : axiom list;
+  mutable lemmas : axiom list;
+  mutable checked_lemmas : axiom list;
+  mutable proof_artifacts : Refined_types.proof_artifact list;
   mutable datatypes : datatype list;
 }
 

@@ -1,6 +1,8 @@
 open Refined_ir
 open Refined_types
 
+let timeout_seconds = 10
+
 let read_all channel =
   let buffer = Buffer.create 1024 in
   (try
@@ -13,7 +15,9 @@ let read_all channel =
 
 let solve obligation =
   let input, output, error =
-    Unix.open_process_full "z3 -in -T:10" (Unix.environment ())
+    Unix.open_process_full
+      (Printf.sprintf "z3 -in -T:%d" timeout_seconds)
+      (Unix.environment ())
   in
   output_string output obligation.smt;
   close_out output;
@@ -30,3 +34,15 @@ let solve obligation =
   | "sat" -> Invalid stdout
   | "unknown" -> Unknown (stdout ^ stderr)
   | _ -> Unknown (stdout ^ stderr)
+
+let solver_identity () =
+  let channel = Unix.open_process_in "z3 -version" in
+  let result =
+    Fun.protect
+      ~finally:(fun () -> ignore (Unix.close_process_in channel))
+      (fun () ->
+        match input_line channel with
+        | line -> String.trim line
+        | exception End_of_file -> "z3 (version unavailable)")
+  in
+  result

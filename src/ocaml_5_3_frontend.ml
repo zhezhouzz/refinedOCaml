@@ -80,6 +80,9 @@ let new_typed_registry () =
       logic_by_name = Hashtbl.create 32;
       generic_schemes_by_name = Hashtbl.create 16;
       axioms = [];
+      lemmas = [];
+      checked_lemmas = [];
+      proof_artifacts = [];
       datatypes = [];
     }
 
@@ -868,8 +871,8 @@ let rec expression_list expression =
       head :: expression_list tail
   | _ -> typed_error ~loc:expression.pexp_loc "expected an OCaml list literal"
 
-let axiom_of_attribute scope attribute =
-  if not (attribute_named "refined.axiom" attribute) then None
+let theory_statement_of_attribute ~attribute_name ~kind scope attribute =
+  if not (attribute_named attribute_name attribute) then None
   else
     match attribute.attr_payload with
     | PStr
@@ -890,8 +893,8 @@ let axiom_of_attribute scope attribute =
           match find name with
           | Some value -> value
           | None ->
-              typed_error ~loc:attribute.attr_loc "axiom is missing field `%s`"
-                name
+              typed_error ~loc:attribute.attr_loc "%s is missing field `%s`"
+                kind name
         in
         let name = string_constant (required "name") in
         let body = string_constant (required "body") in
@@ -905,7 +908,7 @@ let axiom_of_attribute scope attribute =
                       (string_constant sort) )
               | _ ->
                   typed_error ~loc:expression.pexp_loc
-                    "axiom vars must contain (name, sort) string pairs")
+                    "%s vars must contain (name, sort) string pairs" kind)
         in
         Some
           Typed_core.
@@ -918,7 +921,13 @@ let axiom_of_attribute scope attribute =
             }
     | _ ->
         typed_error ~loc:attribute.attr_loc
-          "expected [@@@refined.axiom { name; vars; body }]"
+          "expected [@@@%s { name; vars; body }]" attribute_name
+
+let axiom_of_attribute =
+  theory_statement_of_attribute ~attribute_name:"refined.axiom" ~kind:"axiom"
+
+let lemma_of_attribute =
+  theory_statement_of_attribute ~attribute_name:"refined.lemma" ~kind:"lemma"
 
 let register_logic_symbol registry scope binding =
   if
@@ -1026,7 +1035,10 @@ let typed_register_theories registry structure =
               (fun axiom ->
                 registry.Typed_core.axioms <-
                   axiom :: registry.Typed_core.axioms)
-              (axiom_of_attribute scope attribute)
+              (axiom_of_attribute scope attribute);
+            if attribute_named "refined.lemma" attribute then
+              typed_error ~loc:attribute.attr_loc
+                "checked lemmas must be declared in a module signature"
         | Tstr_module binding ->
             let scope =
               match binding.mb_name.txt with
@@ -1067,7 +1079,11 @@ let typed_register_signature_theories registry ~root signature =
               (fun axiom ->
                 registry.Typed_core.axioms <-
                   axiom :: registry.Typed_core.axioms)
-              (axiom_of_attribute scope attribute)
+              (axiom_of_attribute scope attribute);
+            Option.iter
+              (fun lemma ->
+                registry.Typed_core.lemmas <- lemma :: registry.lemmas)
+              (lemma_of_attribute scope attribute)
         | Tsig_module declaration ->
             let nested =
               match declaration.md_name.txt with
@@ -1129,9 +1145,11 @@ type typed_rmi = {
   logic_symbols : (string * Typed_core.logic_symbol) list;
   generic_schemes : (string * Generic_refinement.scheme) list;
   axioms : Typed_core.axiom list;
+  checked_lemmas : Typed_core.axiom list;
+  proof_artifacts : Refined_types.proof_artifact list;
 }
 
-let current_rmi_version = 2
+let current_rmi_version = 3
 
 let read_rmi path =
   let channel = open_in_bin path in
@@ -1147,9 +1165,40 @@ let read_rmi path =
     typed_error ~loc:Location.none
       ".rmi `%s` was produced by OCaml %s, but the checker uses OCaml %s" path
       rmi.ocaml_version Sys.ocaml_version;
+  let lemma_names =
+    List.map
+      (fun (lemma : Typed_core.axiom) -> lemma.axiom_name)
+      rmi.checked_lemmas
+  in
+  let artifact_names =
+    List.map
+      (fun (artifact : Refined_types.proof_artifact) -> artifact.lemma_name)
+      rmi.proof_artifacts
+  in
+  if lemma_names <> artifact_names then
+    typed_error ~loc:Location.none
+      ".rmi `%s` has inconsistent checked-lemma artifacts" path;
+  let trusted_axioms =
+    List.map (fun (axiom : Typed_core.axiom) -> axiom.axiom_name) rmi.axioms
+  in
+  let rec validate_artifacts checked = function
+    | [] -> ()
+    | (artifact : Refined_types.proof_artifact) :: rest ->
+        if
+          artifact.trusted_axioms <> trusted_axioms
+          || artifact.checked_dependencies <> checked
+          || artifact.vc_digest = "" || artifact.solver = ""
+          || artifact.timeout_seconds <= 0
+        then
+          typed_error ~loc:Location.none
+            ".rmi `%s` has malformed verification metadata for lemma `%s`" path
+            artifact.lemma_name;
+        validate_artifacts (checked @ [ artifact.lemma_name ]) rest
+  in
+  validate_artifacts [] rmi.proof_artifacts;
   rmi
 
-let write_rmi ~cmti ~output =
+let write_rmi ~verify ~cmti ~output =
   ensure_supported_version ();
   let cmt = Cmt_format.read_cmt cmti in
   let signature =
@@ -1182,6 +1231,31 @@ let write_rmi ~cmti ~output =
         else entries)
       registry.generic_schemes_by_name []
   in
+  let checked_lemmas = List.rev registry.lemmas in
+  let proof_artifacts = verify registry checked_lemmas in
+  let artifact_names =
+    List.map
+      (fun (artifact : Refined_types.proof_artifact) -> artifact.lemma_name)
+      proof_artifacts
+  in
+  let lemma_names =
+    List.map (fun (lemma : Typed_core.axiom) -> lemma.axiom_name) checked_lemmas
+  in
+  let statement_names =
+    lemma_names
+    @ List.map
+        (fun (axiom : Typed_core.axiom) -> axiom.axiom_name)
+        (List.rev registry.axioms)
+  in
+  if
+    List.length statement_names
+    <> List.length (List.sort_uniq String.compare statement_names)
+  then
+    typed_error ~loc:Location.none
+      "theory `%s` exports duplicate axiom/lemma names" cmt.cmt_modname;
+  if artifact_names <> lemma_names then
+    typed_error ~loc:Location.none
+      "internal error: lemma verification artifacts do not match declarations";
   let rmi =
     {
       format_version = current_rmi_version;
@@ -1191,12 +1265,25 @@ let write_rmi ~cmti ~output =
       logic_symbols;
       generic_schemes;
       axioms = List.rev registry.axioms;
+      checked_lemmas;
+      proof_artifacts;
     }
   in
-  let channel = open_out_bin output in
-  Fun.protect
-    ~finally:(fun () -> close_out channel)
-    (fun () -> Marshal.to_channel channel rmi [])
+  let temporary =
+    Filename.temp_file ~temp_dir:(Filename.dirname output)
+      (Filename.basename output ^ ".")
+      ".tmp"
+  in
+  match
+    let channel = open_out_bin temporary in
+    Fun.protect
+      ~finally:(fun () -> close_out channel)
+      (fun () -> Marshal.to_channel channel rmi [])
+  with
+  | () -> Sys.rename temporary output
+  | exception exception_ ->
+      (try Sys.remove temporary with Sys_error _ -> ());
+      raise exception_
 
 let load_rmi_into registry cmt path =
   let rmi = read_rmi path in
@@ -1233,7 +1320,11 @@ let load_rmi_into registry cmt path =
       if not (Hashtbl.mem registry.generic_schemes_by_name short) then
         Hashtbl.add registry.generic_schemes_by_name short scheme)
     rmi.generic_schemes;
-  registry.axioms <- List.rev_append rmi.axioms registry.axioms
+  registry.axioms <- List.rev_append rmi.axioms registry.axioms;
+  registry.checked_lemmas <-
+    List.rev_append rmi.checked_lemmas registry.checked_lemmas;
+  registry.proof_artifacts <-
+    List.rev_append rmi.proof_artifacts registry.proof_artifacts
 
 let program_of_cmt ~theories filename =
   ensure_supported_version ();

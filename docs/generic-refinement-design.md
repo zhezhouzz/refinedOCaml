@@ -88,8 +88,14 @@ Tarjan SCCs; recursive edges use independently checked over-contract summaries a
 non-negativity and strict-decrease obligations for an `int` parameter measure. Coverage recursion remains
 rejected because a whole-image coverage contract is not a compositional summary for a fixed call.
 
-The next implementation slice is checked lemmas and proof-artifact export. A later coverage slice must define
-its own call judgment and witness-carrying under-summary instead of reusing the safety rule.
+Checked signature lemmas and verification-artifact export are now implemented. Lemma VCs are checked in source
+order against trusted axioms and earlier checked lemmas. `.rmi` v3 records the VC digest, solver identity,
+timeout and dependency lists separately from trusted-axiom provenance; invalid or unknown lemmas fail before
+atomic artifact export.
+This is an auditable verification record, not a kernel-checkable Z3 proof certificate.
+
+The next implementation slice is use-site monomorphisation for parameterized user ADTs. A later coverage slice
+must define its own call judgment and witness-carrying under-summary instead of reusing the safety rule.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

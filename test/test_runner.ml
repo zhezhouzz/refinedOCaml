@@ -372,6 +372,59 @@ let () =
       | Under, Invalid model when contains model "missing_result" -> ()
       | _ -> failwith "choice upper/lower bounds were not distinguished");
   let run command = if Sys.command command <> 0 then failwith command in
+  run "ocamlc -bin-annot -c ../examples/lemma_theory.mli -o lemma_theory.cmi";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/lemma_theory.ml -o lemma_theory.cmo";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/lemma_client.ml -o lemma_client.cmo";
+  write_rmi ~cmti:"lemma_theory.cmti" ~output:"lemma_theory.rmi";
+  obligations_of_cmt_with_theories ~theories:[ "lemma_theory.rmi" ]
+    "lemma_client.cmt"
+  |> List.iter (fun obligation ->
+      if obligation.trusted_axioms <> [ "Lemma_theory.p_implies_q" ] then
+        failwith "checked lemma changed trusted axiom provenance";
+      if
+        obligation.checked_lemmas
+        <> [
+             "Lemma_theory.not_q_implies_not_p";
+             "Lemma_theory.p_implies_q_checked";
+           ]
+      then failwith "checked lemma provenance was not imported";
+      (match obligation.proof_artifacts with
+      | [ first; second ] ->
+          if first.lemma_name <> "Lemma_theory.not_q_implies_not_p" then
+            failwith "verification artifact names the wrong lemma";
+          if String.length first.vc_digest <> 32 then
+            failwith "verification artifact has no VC digest";
+          if not (contains first.solver "Z3") then
+            failwith "verification artifact has no solver identity";
+          if first.timeout_seconds <> 10 then
+            failwith "verification artifact has the wrong timeout";
+          if first.trusted_axioms <> [ "Lemma_theory.p_implies_q" ] then
+            failwith "verification artifact lost trusted dependencies";
+          if first.checked_dependencies <> [] then
+            failwith "first lemma invented checked dependencies";
+          if
+            second.checked_dependencies
+            <> [ "Lemma_theory.not_q_implies_not_p" ]
+          then failwith "lemma declaration order was not preserved"
+      | _ -> failwith "checked lemma verification artifact was not imported");
+      if not (contains obligation.smt "; checked lemma:") then
+        failwith "checked lemma was not asserted in the client SMT theory";
+      require `Valid obligation);
+  run
+    "ocamlc -bin-annot -c ../examples/invalid_lemma_theory.mli -o \
+     invalid_lemma_theory.cmi";
+  if Sys.file_exists "invalid_lemma_theory.rmi" then
+    Sys.remove "invalid_lemma_theory.rmi";
+  (match
+     write_rmi ~cmti:"invalid_lemma_theory.cmti"
+       ~output:"invalid_lemma_theory.rmi"
+   with
+  | () -> failwith "an invalid lemma was exported"
+  | exception Location.Error _ ->
+      if Sys.file_exists "invalid_lemma_theory.rmi" then
+        failwith "failed lemma checking left an .rmi artifact");
   run "ocamlc -bin-annot -c ../examples/list_theory.mli -o list_theory.cmi";
   run "ocamlc -bin-annot -I . -c ../examples/list_theory.ml -o list_theory.cmo";
   run

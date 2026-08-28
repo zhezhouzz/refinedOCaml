@@ -15,6 +15,9 @@ The current frontend supports exactly OCaml 5.3.0. This is enforced in four plac
 An `.rmi` also records `Sys.ocaml_version` and the corresponding `.cmi` digest. A client rejects an `.rmi`
 produced by another compiler version or from a stale interface.
 
+The current `.rmi` format version is 3. It separates trusted axioms from checked lemmas and stores a verification
+artifact for every lemma. Older formats are rejected rather than decoded as if they carried this provenance.
+
 ## Upgrade procedure
 
 Supporting a new compiler release requires a new frontend module rather than conditional patterns spread through
@@ -28,4 +31,3 @@ the semantic checker:
 
 The stable Core and VC semantics must not contain `Typedtree`, `Types`, `Path`, `Ident`, `Shape`, or
 `Cmt_format` values. Source locations are converted at the frontend boundary.
-

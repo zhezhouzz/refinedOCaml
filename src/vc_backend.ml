@@ -259,7 +259,7 @@ let typed_specialize_program (program : Typed_core.program)
         in
         Hashtbl.replace logic_by_name name { logic_name; arguments; result })
       program.registry.logic_by_name;
-    let axioms =
+    let specialize_statements statements =
       List.map
         (fun (axiom : Typed_core.axiom) ->
           {
@@ -269,9 +269,15 @@ let typed_specialize_program (program : Typed_core.program)
                 (fun (name, sort) -> (name, substitute sort))
                 axiom.variables;
           })
-        program.registry.axioms
+        statements
     in
-    let registry = { program.registry with logic_by_name; axioms } in
+    let axioms = specialize_statements program.registry.axioms in
+    let checked_lemmas =
+      specialize_statements program.registry.checked_lemmas
+    in
+    let registry =
+      { program.registry with logic_by_name; axioms; checked_lemmas }
+    in
     { program with registry }
 
 let typed_formula ?(scope = []) registry env expression =
@@ -820,6 +826,12 @@ let typed_collect_sorts program function_def =
         List.fold_left (fun set (_, sort) -> add set sort) set axiom.variables)
       set program.registry.axioms
   in
+  let set =
+    List.fold_left
+      (fun set (lemma : Typed_core.axiom) ->
+        List.fold_left (fun set (_, sort) -> add set sort) set lemma.variables)
+      set program.registry.checked_lemmas
+  in
   List.fold_left
     (fun set (datatype : Typed_core.datatype) ->
       let set = add set datatype.Typed_core.owner in
@@ -857,6 +869,10 @@ let typed_collect_sort_values program function_def =
     (fun (axiom : Typed_core.axiom) ->
       List.iter (fun (_, sort) -> add sort) axiom.variables)
     program.registry.axioms;
+  List.iter
+    (fun (lemma : Typed_core.axiom) ->
+      List.iter (fun (_, sort) -> add sort) lemma.variables)
+    program.registry.checked_lemmas;
   Hashtbl.fold (fun _ sort result -> sort :: result) values []
 
 let typed_datatype_prelude program function_def =
@@ -934,34 +950,35 @@ let typed_datatype_prelude program function_def =
           (String.concat " " (List.map typed_smt_sort logic_symbol.arguments))
           (typed_smt_sort logic_symbol.result)))
     program.registry.logic_by_name;
-  List.rev program.registry.axioms
-  |> List.iter (fun (axiom : Typed_core.axiom) ->
-      let formula =
-        parse_formula ~filename:axiom.loc.file
-          ~loc:(location_of_span axiom.loc)
-          axiom.body
-      in
-      let env =
-        List.map (fun (name, _) -> (name, smt_identifier name)) axiom.variables
-      in
-      let body =
-        typed_formula ~scope:axiom.scope program.registry env formula
-      in
-      let binders =
-        "("
-        ^ String.concat " "
-            (List.map
-               (fun (name, sort) ->
-                 Printf.sprintf "(%s %s)" (smt_identifier name)
-                   (typed_smt_sort sort))
-               axiom.variables)
-        ^ ")"
-      in
-      let assertion =
-        if axiom.variables = [] then body else app "forall" [ binders; body ]
-      in
-      line "; trusted axiom: %s" axiom.axiom_name;
-      line "(assert %s)" assertion);
+  let emit_statement provenance (axiom : Typed_core.axiom) =
+    let formula =
+      parse_formula ~filename:axiom.loc.file
+        ~loc:(location_of_span axiom.loc)
+        axiom.body
+    in
+    let env =
+      List.map (fun (name, _) -> (name, smt_identifier name)) axiom.variables
+    in
+    let body = typed_formula ~scope:axiom.scope program.registry env formula in
+    let binders =
+      "("
+      ^ String.concat " "
+          (List.map
+             (fun (name, sort) ->
+               Printf.sprintf "(%s %s)" (smt_identifier name)
+                 (typed_smt_sort sort))
+             axiom.variables)
+      ^ ")"
+    in
+    let assertion =
+      if axiom.variables = [] then body else app "forall" [ binders; body ]
+    in
+    line "; %s: %s" provenance axiom.axiom_name;
+    line "(assert %s)" assertion
+  in
+  List.rev program.registry.axioms |> List.iter (emit_statement "trusted axiom");
+  List.rev program.registry.checked_lemmas
+  |> List.iter (emit_statement "checked lemma");
   List.iter
     (fun (datatype : Typed_core.datatype) ->
       let result = typed_smt_sort datatype.Typed_core.owner in
@@ -1135,8 +1152,101 @@ let typed_obligation (program : Typed_core.program) analysis
       List.rev_map
         (fun (axiom : Typed_core.axiom) -> axiom.axiom_name)
         program.registry.axioms;
+    checked_lemmas =
+      List.rev_map
+        (fun (lemma : Typed_core.axiom) -> lemma.axiom_name)
+        program.registry.checked_lemmas;
+    proof_artifacts = List.rev program.registry.proof_artifacts;
     ghost_instantiations = List.rev generic_calls.ghost_instantiations;
   }
+
+let lemma_obligations registry lemmas =
+  let registry =
+    {
+      registry with
+      Typed_core.lemmas = [];
+      checked_lemmas = [];
+      proof_artifacts = [];
+    }
+  in
+  let obligation (lemma : Typed_core.axiom) =
+    let arguments =
+      List.map
+        (fun (name, sort) ->
+          ( Typed_core.
+              { key = "lemma." ^ lemma.axiom_name ^ "." ^ name; display = name },
+            sort ))
+        lemma.variables
+    in
+    let dummy =
+      Typed_core.
+        {
+          symbol =
+            { key = "lemma." ^ lemma.axiom_name; display = lemma.axiom_name };
+          arguments;
+          result = S_unit;
+          body =
+            {
+              desc = Bool true;
+              sort = S_bool;
+              refinement = None;
+              loc = lemma.loc;
+            };
+          contracts = [];
+          measure = None;
+        }
+    in
+    let program = Typed_core.{ registry; functions = [] } in
+    let formula =
+      parse_formula ~filename:lemma.loc.file
+        ~loc:(location_of_span lemma.loc)
+        lemma.body
+    in
+    let env =
+      List.map (fun (name, _) -> (name, smt_identifier name)) lemma.variables
+    in
+    let body = typed_formula ~scope:lemma.scope registry env formula in
+    let binders =
+      String.concat " "
+        (List.map
+           (fun (name, sort) ->
+             Printf.sprintf "(%s %s)" (smt_identifier name)
+               (typed_smt_sort sort))
+           lemma.variables)
+    in
+    let theorem =
+      if lemma.variables = [] then body
+      else app "forall" [ "(" ^ binders ^ ")"; body ]
+    in
+    let buffer = Buffer.create 4096 in
+    Buffer.add_string buffer
+      "(set-option :produce-models true)\n(set-logic ALL)\n";
+    Buffer.add_string buffer (typed_datatype_prelude program dummy);
+    Buffer.add_string buffer (Printf.sprintf "(assert (not %s))\n" theorem);
+    Buffer.add_string buffer "(check-sat)\n(get-model)\n";
+    {
+      name = lemma.axiom_name;
+      mode = Over;
+      location = lemma.loc;
+      smt = Buffer.contents buffer;
+      trusted_axioms =
+        List.rev_map
+          (fun (axiom : Typed_core.axiom) -> axiom.axiom_name)
+          registry.axioms;
+      checked_lemmas =
+        List.rev_map
+          (fun (lemma : Typed_core.axiom) -> lemma.axiom_name)
+          registry.checked_lemmas;
+      proof_artifacts = List.rev registry.proof_artifacts;
+      ghost_instantiations = [];
+    }
+  in
+  List.map
+    (fun lemma ->
+      let result = obligation lemma in
+      registry.checked_lemmas <- lemma :: registry.checked_lemmas;
+      result)
+    lemmas
 
 let obligations_of_cmt_with_theories ~theories filename =
   let program = Ocaml_5_3_frontend.program_of_cmt ~theories filename in

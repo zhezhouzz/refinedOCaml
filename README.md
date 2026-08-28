@@ -139,7 +139,24 @@ refined-ocaml --theory list_theory.rmi client.cmt
 这里的 `'a` 在每个 obligation 中根据 Typedtree use-site type 实例化；例如两个客户端会分别得到
 `mem$int : int list × int → Bool` 和 `mem$bool : bool list × Bool → Bool`。
 
-目前 `axiom` 属于 trusted computing base。后续的 `lemma` 会先验证再导出。
+`axiom` 属于 trusted computing base。签名还可以声明 checked lemma：
+
+```ocaml
+[@@@refined.lemma
+{
+  name = "not_mem_not_hd";
+  vars = [ ("l", "'a list"); ("x", "'a") ];
+  body = "implies (not (mem l x)) (not (hd l x))";
+}]
+```
+
+`--emit-rmi` 会按声明顺序，以 trusted axioms 和先前已检查 lemmas 为上下文为每条 lemma 生成 VC。
+只有全部得到 `unsat` 才会原子替换目标 `.rmi`；`sat` 或 `unknown` 都不会留下新 artifact。`.rmi` v3
+分别保存 trusted axioms、checked lemmas，以及包含 VC digest、Z3 identity、timeout 和依赖列表的
+verification artifact。客户端诊断也分别列出两类 provenance。
+
+这里的 artifact 是可审计的验证记录，不是可由小型 kernel 独立重放的 Z3 proof certificate；solver
+调用仍属于当前 checker 的可信边界。
 
 ### Hindley generic schemes
 
@@ -242,7 +259,7 @@ well-founded measure、checked lemma 或有限展开显式引入。
 | 单态 variant、constructor、exhaustive `match` | 支持 | uninterpreted sort + axioms |
 | immutable record、字段读取 | 支持 | 单 constructor + selectors |
 | 普通多态函数的 first-order 调用 | 支持 | Typedtree + inlining |
-| module predicate/axiom 与 `.rmi` | 支持 | scoped FOL theory + digest |
+| module predicate/axiom/checked lemma 与 `.rmi` | 支持 | scoped FOL + verification artifact |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
 | 二选一 nondeterministic `choose` | 支持 | demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
@@ -261,10 +278,9 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. Checked lemma 与 proof-artifact 导出；
-2. 参数化用户 ADT 的按使用点 monomorphisation；
-3. functor/theory transformer 与 generativity；
-4. 关系化 mutation、exception 和 effect handler。
+1. 参数化用户 ADT 的按使用点 monomorphisation；
+2. functor/theory transformer 与 generativity；
+3. 关系化 mutation、exception 和 effect handler。
 
 当前模块边界：
 

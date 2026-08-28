@@ -42,6 +42,16 @@ let report obligation verdict =
   if obligation.trusted_axioms <> [] then
     Printf.printf "  trusted axioms: %s\n%!"
       (String.concat ", " obligation.trusted_axioms);
+  if obligation.checked_lemmas <> [] then
+    Printf.printf "  checked lemmas: %s\n%!"
+      (String.concat ", " obligation.checked_lemmas);
+  if obligation.proof_artifacts <> [] then
+    Printf.printf "  verification artifacts: %s\n%!"
+      (String.concat ", "
+         (List.map
+            (fun artifact ->
+              Printf.sprintf "%s@%s" artifact.lemma_name artifact.vc_digest)
+            obligation.proof_artifacts));
   if obligation.ghost_instantiations <> [] then
     Printf.printf "  ghost instantiations: %s\n%!"
       (String.concat ", " obligation.ghost_instantiations)
