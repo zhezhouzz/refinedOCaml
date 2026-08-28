@@ -184,7 +184,9 @@ Elaborated result refinement 会沿 ANF `let`、变量引用、局部 first-orde
 `[@@refined.horn]` 使用相同 scheme surface，但 generic application 只能出现在 predicate 的顶层合取
 中。调用点从 `assumption ⇒ property(index)` 收集 lower bounds，将 index 抽象为 lambda 参数，并把多条
 lower bounds 合成析取。Horn application 位于 `not`、`or`、关系式内部或 datatype index 时会在 `.rmi`
-生成阶段被拒绝。当前实现是非递归正向 Horn 片段，不包含互递归 CHC fixpoint。
+生成阶段被拒绝。Horn predicates 会构成 dependency graph 和 SCC，从 `false` 开始同步迭代 least
+fixpoint；互递归 SCC 支持 base-fact propagation，无依据循环稳定为 `false`，超出迭代上限则拒绝。
+当前没有 widening，也不声称能求解超出受支持 term algebra 的任意 SMT-CHC。
 
 ## ADT 编码
 
@@ -230,7 +232,7 @@ well-founded measure、checked lemma 或有限展开显式引入。
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
-| Evar/Hindley property fuzzing | 支持 | deterministic `@fuzz` + CI replay seed |
+| Evar/Hindley/Horn graph fuzzing | 支持 | deterministic `@fuzz` + reachability oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
 
 未支持的 Typedtree node 会报错。
@@ -239,8 +241,8 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 将 Horn lower-bound solver 扩展为带递归依赖的完整 CHC fixpoint；
-2. 函数 summary、递归 SCC、termination measure 与 checked lemma；
+1. 函数 summary、递归 call-graph SCC 与 termination measure；
+2. Checked lemma 与 proof-artifact 导出；
 3. 参数化用户 ADT 的按使用点 monomorphisation；
 4. functor/theory transformer 与 generativity；
 5. 关系化 mutation、exception 和 effect handler。

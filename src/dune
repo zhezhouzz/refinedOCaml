@@ -6,6 +6,7 @@
   refined_types
   typed_core
   evar_context
+  horn_fixpoint
   generic_refinement
   refinement_domain
   typing_judgment

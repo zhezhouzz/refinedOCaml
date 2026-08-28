@@ -25,6 +25,58 @@ end
 
 module Fuzz_evars = Refined_ir.Evar_context.Make (Fuzz_term)
 
+module Horn_term = struct
+  type parameter = string
+
+  type t =
+    | False
+    | True
+    | Reference of string
+    | Or of t list
+    | Lambda of string * t
+
+  let falsity = False
+
+  let rec normalize = function
+    | Or terms -> (
+        let terms =
+          terms |> List.map normalize
+          |> List.concat_map (function Or nested -> nested | term -> [ term ])
+          |> List.filter (( <> ) False)
+          |> List.sort_uniq compare
+        in
+        if List.mem True terms then True
+        else
+          match terms with [] -> False | [ term ] -> term | terms -> Or terms)
+    | Lambda (parameter, body) -> Lambda (parameter, normalize body)
+    | (False | True | Reference _) as term -> term
+
+  let join terms = normalize (Or terms)
+  let lambda ~parameter body = Lambda (parameter, normalize body)
+
+  let rec instantiate solutions = function
+    | Reference name -> (
+        match List.assoc_opt name solutions with
+        | Some (Lambda (_, body)) -> body
+        | Some body -> body
+        | None -> Reference name)
+    | Or terms -> Or (List.map (instantiate solutions) terms) |> normalize
+    | Lambda (parameter, body) -> Lambda (parameter, instantiate solutions body)
+    | (False | True) as term -> term
+
+  let abstract ~argument:_ ~parameter:_ body = body
+
+  let rec dependencies ~variables = function
+    | Reference name when List.mem name variables -> [ name ]
+    | Or terms -> List.concat_map (dependencies ~variables) terms
+    | Lambda (_, body) -> dependencies ~variables body
+    | False | True | Reference _ -> []
+
+  let equal left right = normalize left = normalize right
+end
+
+module Horn_solver = Refined_ir.Horn_fixpoint.Make (Horn_term)
+
 let rec ground_term random depth =
   if depth = 0 || Random.State.int random 4 = 0 then
     Fuzz_term.Node (Atom (Random.State.int random 32), [])
@@ -155,6 +207,8 @@ let fuzz_hindley random case =
         | Unsolved_hindley generic -> "unsolved " ^ generic
         | Unsolved_horn generic -> "unsolved horn " ^ generic
         | Unsupported_horn_constraint generic -> "unsupported horn " ^ generic
+        | Horn_fixpoint_did_not_converge iterations ->
+            "horn divergence " ^ string_of_int iterations
         | Cyclic_instantiation evar -> "cyclic " ^ evar)
   | Ok elaboration ->
       if
@@ -215,6 +269,59 @@ let fuzz_horn random case =
   | Error (Ill_formed_horn "property") -> ()
   | Ok () | Error _ -> fail case "Horn positivity check accepted disjunction"
 
+let fuzz_recursive_horn random case =
+  let count = 1 + Random.State.int random 6 in
+  let names = List.init count (fun index -> "P" ^ string_of_int index) in
+  let variables =
+    List.map (fun name -> Horn_solver.{ name; parameter = "arg_" ^ name }) names
+  in
+  let base = Array.init count (fun _ -> Random.State.int random 4 = 0) in
+  let edges = ref [] in
+  let clauses = ref [] in
+  List.iteri
+    (fun head name ->
+      if base.(head) then
+        clauses :=
+          Horn_solver.{ head = name; argument = Horn_term.True; body = True }
+          :: !clauses;
+      let edge_count = Random.State.int random (count + 1) in
+      for _ = 1 to edge_count do
+        let dependency = Random.State.int random count in
+        edges := (head, dependency) :: !edges;
+        clauses :=
+          Horn_solver.
+            {
+              head = name;
+              argument = Horn_term.True;
+              body = Reference (List.nth names dependency);
+            }
+          :: !clauses
+      done)
+    names;
+  let expected = Array.copy base in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    List.iter
+      (fun (head, dependency) ->
+        if expected.(dependency) && not expected.(head) then (
+          expected.(head) <- true;
+          changed := true))
+      !edges
+  done;
+  match Horn_solver.solve ~variables ~clauses:!clauses () with
+  | Error _ -> fail case "finite recursive Horn graph did not converge"
+  | Ok solution ->
+      List.iteri
+        (fun index name ->
+          let expected_body =
+            if expected.(index) then Horn_term.True else False
+          in
+          match List.assoc_opt name solution.predicates with
+          | Some (Lambda (_, body)) when body = expected_body -> ()
+          | _ -> fail case "Horn fixpoint disagreed with graph reachability")
+        names
+
 let () =
   let cases = env_int "REFINED_FUZZ_CASES" 5_000 in
   let seed = env_int "REFINED_FUZZ_SEED" 0x5eed_2026 in
@@ -224,7 +331,8 @@ let () =
     for case = 0 to cases - 1 do
       fuzz_evars random case;
       fuzz_hindley random case;
-      fuzz_horn random case
+      fuzz_horn random case;
+      fuzz_recursive_horn random case
     done;
     Printf.printf "fuzz: %d cases passed (seed=%d)\n%!" cases seed
   with Fuzz_failure (case, message) ->

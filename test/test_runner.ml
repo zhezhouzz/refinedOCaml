@@ -189,10 +189,125 @@ let test_higher_sorted_hindley_application () =
   | Ok () | Error _ ->
       failwith "Horn generic under disjunction passed positivity checking"
 
+let test_mutually_recursive_horn_fixpoint () =
+  let module Term = struct
+    type parameter = string
+
+    type t =
+      | False
+      | True
+      | Reference of string
+      | Or of t list
+      | Lambda of string * t
+      | Grow of t
+
+    let falsity = False
+
+    let rec normalize = function
+      | Or terms -> (
+          let terms =
+            terms |> List.map normalize
+            |> List.concat_map (function
+              | Or nested -> nested
+              | term -> [ term ])
+            |> List.filter (( <> ) False)
+            |> List.sort_uniq compare
+          in
+          if List.mem True terms then True
+          else
+            match terms with
+            | [] -> False
+            | [ term ] -> term
+            | terms -> Or terms)
+      | Lambda (parameter, body) -> Lambda (parameter, normalize body)
+      | Grow term -> Grow (normalize term)
+      | (False | True | Reference _) as term -> term
+
+    let join terms = normalize (Or terms)
+    let lambda ~parameter body = Lambda (parameter, normalize body)
+
+    let rec instantiate solutions = function
+      | Reference name -> (
+          match List.assoc_opt name solutions with
+          | Some (Lambda (_, body)) -> body
+          | Some body -> body
+          | None -> Reference name)
+      | Or terms -> Or (List.map (instantiate solutions) terms) |> normalize
+      | Lambda (parameter, body) ->
+          Lambda (parameter, instantiate solutions body)
+      | Grow term -> Grow (instantiate solutions term)
+      | (False | True) as term -> term
+
+    let abstract ~argument:_ ~parameter:_ body = body
+
+    let rec dependencies ~variables = function
+      | Reference name when List.mem name variables -> [ name ]
+      | Or terms -> List.concat_map (dependencies ~variables) terms
+      | Lambda (_, body) | Grow body -> dependencies ~variables body
+      | False | True | Reference _ -> []
+
+    let equal left right = normalize left = normalize right
+  end in
+  let module Solver = Refined_ir.Horn_fixpoint.Make (Term) in
+  let variables =
+    [
+      Solver.{ name = "P"; parameter = "p" };
+      Solver.{ name = "Q"; parameter = "q" };
+    ]
+  in
+  let clauses =
+    [
+      Solver.{ head = "P"; argument = Term.True; body = Term.True };
+      Solver.{ head = "P"; argument = Term.True; body = Term.Reference "Q" };
+      Solver.{ head = "Q"; argument = Term.True; body = Term.Reference "P" };
+    ]
+  in
+  (match Solver.solve ~variables ~clauses () with
+  | Error _ -> failwith "mutually-recursive Horn SCC did not converge"
+  | Ok solution ->
+      if
+        solution.predicates
+        <> [ ("P", Term.Lambda ("p", True)); ("Q", Lambda ("q", True)) ]
+      then failwith "base fact did not propagate through recursive Horn SCC";
+      if
+        not
+          (List.exists
+             (fun component ->
+               List.sort String.compare component = [ "P"; "Q" ])
+             solution.strongly_connected_components)
+      then failwith "Horn dependency graph lost its recursive SCC");
+  let cycle_only =
+    [
+      Solver.{ head = "P"; argument = Term.True; body = Term.Reference "Q" };
+      Solver.{ head = "Q"; argument = Term.True; body = Term.Reference "P" };
+    ]
+  in
+  (match Solver.solve ~variables ~clauses:cycle_only () with
+  | Error _ -> failwith "bottom recursive Horn SCC did not stabilize"
+  | Ok solution ->
+      if
+        solution.predicates
+        <> [ ("P", Term.Lambda ("p", False)); ("Q", Lambda ("q", False)) ]
+      then failwith "least Horn solution for an unfounded cycle was not false");
+  let growing =
+    [
+      Solver.
+        { head = "P"; argument = Term.True; body = Term.Grow (Reference "P") };
+    ]
+  in
+  match
+    Solver.solve ~max_iterations:4
+      ~variables:[ List.hd variables ]
+      ~clauses:growing ()
+  with
+  | Error (Did_not_converge 4) -> ()
+  | Ok _ | Error _ -> failwith "non-converging Horn recursion was accepted"
+
 let () =
   test_compositional_judgment ();
   test_hindley_evars ();
   test_higher_sorted_hindley_application ();
+  test_mutually_recursive_horn_fixpoint ();
   let compile source output =
     let command =
       Printf.sprintf "ocamlc -bin-annot -c %s -o %s.cmo" (Filename.quote source)

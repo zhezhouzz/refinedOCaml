@@ -36,6 +36,9 @@ type elaboration = {
   instantiations : instantiation list;
   result : type_;
   constraints : constraint_ list;
+  horn_dependency_graph : (string * string list) list;
+  horn_sccs : string list list;
+  horn_iterations : int;
 }
 
 type error =
@@ -47,6 +50,7 @@ type error =
   | Unsolved_hindley of string
   | Unsolved_horn of string
   | Unsupported_horn_constraint of string
+  | Horn_fixpoint_did_not_converge of int
   | Cyclic_instantiation of string
 
 let string_of_base_sort = function
@@ -440,52 +444,111 @@ let substitute_generic_constraint name replacement constraint_ =
     requirement = substitute_generic name replacement constraint_.requirement;
   }
 
-let horn_lower_bounds name constraints =
+module Horn_term = struct
+  type t = term
+  type parameter = string * sort
+
+  let falsity = Boolean false
+
+  let join = function
+    | [] -> falsity
+    | [ term ] -> term
+    | terms -> normalize (Or terms)
+
+  let lambda ~parameter:(parameter, sort) body =
+    Lambda (parameter, sort, normalize body)
+
+  let instantiate solutions term =
+    List.fold_left
+      (fun term (name, solution) -> substitute_generic name solution term)
+      term solutions
+    |> normalize
+
+  let abstract ~argument ~parameter:(parameter, _) body =
+    replace_term argument (Variable parameter) body |> normalize
+
+  let rec dependencies ~variables term =
+    let recurse = dependencies ~variables in
+    match term with
+    | Apply (Generic name, argument) when List.mem name variables ->
+        name :: recurse argument
+    | Lambda (_, _, body) | Not body -> recurse body
+    | Apply (left, right)
+    | Equal (left, right)
+    | Add (left, right)
+    | Greater (left, right) ->
+        recurse left @ recurse right
+    | And terms | Or terms -> List.concat_map recurse terms
+    | Integer _ | Boolean _ | Variable _ | Generic _ | Evar _ -> []
+
+  let equal left right = normalize left = normalize right
+end
+
+module Horn_solver = Horn_fixpoint.Make (Horn_term)
+
+let horn_clauses horns constraints =
+  let names = List.map fst horns in
+  let first_occurring term =
+    List.find_opt (fun name -> occurs_generic name term) names
+  in
   let rec heads assumption requirement =
     match requirement with
-    | Apply (Generic candidate, argument) when candidate = name ->
-        Ok [ (argument, assumption) ]
+    | Apply (Generic head, argument) when List.mem head names ->
+        Ok [ Horn_solver.{ head; argument; body = assumption } ]
     | And requirements ->
         List.fold_left
           (fun result requirement ->
-            Result.bind result (fun bounds ->
+            Result.bind result (fun clauses ->
                 Result.map
-                  (fun more -> more @ bounds)
+                  (fun more -> more @ clauses)
                   (heads assumption requirement)))
           (Ok []) requirements
-    | requirement when occurs_generic name requirement ->
-        Error (Unsupported_horn_constraint name)
-    | _ -> Ok []
+    | requirement -> (
+        match first_occurring requirement with
+        | None -> Ok []
+        | Some generic -> Error (Unsupported_horn_constraint generic))
   in
   List.fold_left
     (fun result constraint_ ->
-      Result.bind result (fun bounds ->
-          if occurs_generic name constraint_.assumption then
-            Error (Unsupported_horn_constraint name)
-          else
-            Result.map
-              (fun more -> more @ bounds)
-              (heads constraint_.assumption constraint_.requirement)))
+      Result.bind result (fun clauses ->
+          match
+            List.find_opt
+              (fun name ->
+                let valid, _ =
+                  horn_term_status name ~top:true constraint_.assumption
+                in
+                not valid)
+              names
+          with
+          | Some generic -> Error (Unsupported_horn_constraint generic)
+          | None ->
+              Result.map
+                (fun more -> more @ clauses)
+                (heads constraint_.assumption constraint_.requirement)))
     (Ok []) constraints
 
-let solve_horn name sort constraints =
-  match sort with
-  | Arrow (input_sort, Base Bool) ->
-      Result.bind (horn_lower_bounds name constraints) (function
-        | [] -> Error (Unsolved_horn name)
-        | bounds ->
-            let parameter = "horn_" ^ name in
-            let bodies =
-              List.map
-                (fun (argument, assumption) ->
-                  replace_term argument (Variable parameter) assumption)
-                bounds
-            in
-            let body = match bodies with [ body ] -> body | _ -> Or bodies in
-            Ok (Lambda (parameter, input_sort, normalize body)))
-  | _ ->
-      Error
-        (Ill_sorted ("Horn generic " ^ name ^ " must have sort base -> bool"))
+let horn_variables horns =
+  let results =
+    List.map
+      (fun (name, sort) ->
+        match sort with
+        | Arrow (input_sort, Base Bool) ->
+            Ok
+              ( Horn_solver.{ name; parameter = ("horn_" ^ name, input_sort) },
+                input_sort )
+        | _ ->
+            Error
+              (Ill_sorted
+                 ("Horn generic " ^ name ^ " must have sort base -> bool")))
+      horns
+  in
+  let rec collect = function
+    | [] -> Ok []
+    | result :: results ->
+        Result.bind result (fun result ->
+            Result.map (fun results -> result :: results) (collect results))
+  in
+  collect results
 
 let rec check_argument context actual formal constraints =
   match (actual, formal) with
@@ -606,42 +669,83 @@ let elaborate_application scheme arguments =
                   | Ok hindley_instantiations ->
                       let constraints = List.rev constraints in
                       let result = substitute_evars_type context result in
-                      let rec solve_horns constraints result instantiations =
-                        function
-                        | [] -> Ok (constraints, result, List.rev instantiations)
-                        | (name, sort) :: horns ->
-                            Result.bind (solve_horn name sort constraints)
-                              (fun refinement ->
-                                let constraints =
-                                  List.map
-                                    (substitute_generic_constraint name
-                                       refinement)
-                                    constraints
-                                in
-                                let result =
-                                  substitute_generic_type name refinement result
-                                in
-                                solve_horns constraints result
-                                  ({ generic = name; refinement }
-                                  :: instantiations)
-                                  horns)
-                      in
                       Result.bind
-                        (solve_horns constraints result [] (List.rev horns))
-                        (fun (constraints, result, horn_instantiations) ->
-                          Ok
-                            {
-                              instantiations =
-                                hindley_instantiations @ horn_instantiations;
-                              result = map_type_terms normalize result;
-                              constraints =
-                                List.map
-                                  (fun constraint_ ->
-                                    {
-                                      assumption =
-                                        normalize constraint_.assumption;
-                                      requirement =
-                                        normalize constraint_.requirement;
-                                    })
-                                  constraints;
-                            })))))
+                        (horn_variables (List.rev horns))
+                        (fun variables_with_sorts ->
+                          let variables = List.map fst variables_with_sorts in
+                          Result.bind (horn_clauses horns constraints)
+                            (fun clauses ->
+                              match
+                                List.find_opt
+                                  (fun variable ->
+                                    not
+                                      (List.exists
+                                         (fun clause ->
+                                           clause.Horn_solver.head
+                                           = variable.Horn_solver.name)
+                                         clauses))
+                                  variables
+                              with
+                              | Some variable ->
+                                  Error (Unsolved_horn variable.name)
+                              | None -> (
+                                  match
+                                    Horn_solver.solve ~variables ~clauses ()
+                                  with
+                                  | Error (Did_not_converge iterations) ->
+                                      Error
+                                        (Horn_fixpoint_did_not_converge
+                                           iterations)
+                                  | Ok horn_solution ->
+                                      let constraints =
+                                        List.map
+                                          (fun constraint_ ->
+                                            List.fold_left
+                                              (fun constraint_
+                                                   (name, refinement) ->
+                                                substitute_generic_constraint
+                                                  name refinement constraint_)
+                                              constraint_
+                                              horn_solution.predicates)
+                                          constraints
+                                      in
+                                      let result =
+                                        List.fold_left
+                                          (fun result (name, refinement) ->
+                                            substitute_generic_type name
+                                              refinement result)
+                                          result horn_solution.predicates
+                                      in
+                                      let horn_instantiations =
+                                        List.map
+                                          (fun (generic, refinement) ->
+                                            { generic; refinement })
+                                          horn_solution.predicates
+                                      in
+                                      Ok
+                                        {
+                                          instantiations =
+                                            hindley_instantiations
+                                            @ horn_instantiations;
+                                          result =
+                                            map_type_terms normalize result;
+                                          constraints =
+                                            List.map
+                                              (fun constraint_ ->
+                                                {
+                                                  assumption =
+                                                    normalize
+                                                      constraint_.assumption;
+                                                  requirement =
+                                                    normalize
+                                                      constraint_.requirement;
+                                                })
+                                              constraints;
+                                          horn_dependency_graph =
+                                            horn_solution.dependency_graph;
+                                          horn_sccs =
+                                            horn_solution
+                                              .strongly_connected_components;
+                                          horn_iterations =
+                                            horn_solution.iterations;
+                                        })))))))

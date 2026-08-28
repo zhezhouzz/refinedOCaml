@@ -36,6 +36,9 @@ type elaboration = {
   instantiations : instantiation list;
   result : type_;
   constraints : constraint_ list;
+  horn_dependency_graph : (string * string list) list;
+  horn_sccs : string list list;
+  horn_iterations : int;
 }
 
 type error =
@@ -47,6 +50,7 @@ type error =
   | Unsolved_hindley of string
   | Unsolved_horn of string
   | Unsupported_horn_constraint of string
+  | Horn_fixpoint_did_not_converge of int
   | Cyclic_instantiation of string
 
 val well_formed : scheme -> (unit, error) result

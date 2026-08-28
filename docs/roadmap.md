@@ -13,7 +13,7 @@
 | B. Axioms vs lemmas | 当前允许 trusted axioms；未来希望支持 checked lemmas | 当前 axiom 全部进入 TCB，并在结果中列出 trusted axiom 名称 | 部分完成 | 加入 `lemma` 语法、lemma VC、导出已检查 lemma |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态 variant/record 已支持；constructor、recognizer、selector 和基本代数 axioms 已生成 | MVP 已完成 | 支持参数化用户 ADT 的 use-site monomorphisation；加入 axiom slicing |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
-| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn surface、正向 Horn solving 和 result refinement propagation 已完成；调用链通过 ANF Let/Var、inlining 与同型 branch merge 自动携带 elaborated result | Generic call chain 完成 | 扩展 mutually-recursive CHC fixpoint |
+| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn surface、result propagation、Horn dependency graph/Tarjan SCC 和同步 least-fixpoint 已完成；随机 Horn graph fuzz 与可达性 oracle 一致 | Generic/CHC 阶段完成 | 转入函数 summary、递归 call-graph SCC 与 termination measure |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 当前 coverage 是 `forall result. post(result) => exists input. pre(input) /\ result = f(input)` 的 SMT obligation | 未完成 | 设计 coverage judgment、subtyping/entailment、witness/inverse 支持 |
 | 函数调用 | 支持 first-order 函数调用 | 当前通过 inlining 处理本文件中的 first-order 函数；递归调用被拒绝 | 部分完成 | 加入函数 summary、递归 SCC、termination measure |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 的 type variable 可按 obligation 实例化；普通多态函数可 first-order inlining | 部分完成 | 用户参数化 ADT 的 monomorphisation；处理 polymorphic recursion 的拒绝/抽象机制 |
@@ -86,6 +86,6 @@ Actions 运行 `@all/@install/@refined/@fmt/@fuzz`，autofix.ci 自动提交 `du
 seed 跑 20,000 个 evar/Hindley elaboration cases。`refined_ocaml.ir` 不依赖 compiler-libs；所有版本敏感 API
 集中在 `Ocaml_5_3_frontend`。升级流程记录在 `docs/versioning.md`。
 
-Generic Refinement Types 的 Hindley/Horn surface、正向 lower-bound solving 与 result propagation 已经
-落实。roadmap 的下一实现步骤切换为 mutually-recursive CHC fixpoint：构建 Horn-variable dependency
-graph，迭代求解相互引用的 lower bounds，并在稳定后统一验证所有 constraints。
+Generic Refinement Types 的 Hindley/Horn surface、result propagation 与 mutually-recursive symbolic
+CHC fixpoint 已经落实。roadmap 的下一实现步骤切换为函数 summary、递归 call-graph SCC 与
+termination measure，替换当前“非递归调用直接 inline、递归调用拒绝”的策略。

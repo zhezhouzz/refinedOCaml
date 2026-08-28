@@ -454,6 +454,9 @@ let generic_error ~loc =
   | Unsupported_horn_constraint generic ->
       typed_error_at loc "Horn constraints for `%s` left the positive fragment"
         generic
+  | Horn_fixpoint_did_not_converge iterations ->
+      typed_error_at loc "Horn fixpoint did not converge in %d iterations"
+        iterations
   | Cyclic_instantiation evar ->
       typed_error_at loc "cyclic Hindley instantiation `%s`" evar
 

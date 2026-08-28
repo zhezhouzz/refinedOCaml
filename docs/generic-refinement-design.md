@@ -76,15 +76,23 @@ the inferred type to the temporary symbol; variable lookup, local first-order in
 result refinements preserve it. Consequently only the first external value in a common generic call chain needs
 an explicit `[@refined.type]`.
 
-The next implementation slice is mutually recursive Horn variables and a genuine CHC fixpoint computation.
+Horn solving now builds a predicate dependency graph and Tarjan SCCs, initializes every predicate to `false`,
+and synchronously iterates the immediate-consequence operator to a least structural fixpoint. Base facts
+propagate through mutually recursive SCCs; unfounded cycles remain false; a configurable iteration limit makes
+non-convergence fail closed. The property fuzzer compares random Horn graphs against ordinary graph
+reachability. This is a symbolic fixpoint for the supported positive term algebra, not a widening-based solver
+for arbitrary SMT-CHCs.
+
+The next implementation slice is function summaries, recursive call-graph SCCs and termination measures.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
 
 ## Property fuzzing
 
-`test/fuzz_runner.ml` recursively generates ground/template term trees and higher-sorted predicate lambdas. It
-checks that successful unification reconstructs the ground term, solved contexts are complete, recursive
-solutions fail the occurs-check, Hindley application elaboration returns the expected ghost argument, and result
-substitution/beta-reduction preserve the generated scheme. The default seed and case count are deterministic;
-both can be overridden through `REFINED_FUZZ_SEED` and `REFINED_FUZZ_CASES`.
+`test/fuzz_runner.ml` recursively generates ground/template term trees, higher-sorted predicate lambdas, and
+random mutually-recursive Horn graphs. It checks that successful unification reconstructs the ground term,
+solved contexts are complete, recursive evar solutions fail the occurs-check, Hindley application elaboration
+returns the expected ghost argument, result substitution/beta-reduction preserve the generated scheme, and Horn
+least-fixpoint solutions agree with graph reachability. The default seed and case count are deterministic; both
+can be overridden through `REFINED_FUZZ_SEED` and `REFINED_FUZZ_CASES`.

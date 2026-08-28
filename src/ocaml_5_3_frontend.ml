@@ -465,6 +465,10 @@ let generic_scheme_of_attribute attribute =
                     "unsolved Horn generic `" ^ generic ^ "`"
                 | Unsupported_horn_constraint generic ->
                     "unsupported Horn constraint for `" ^ generic ^ "`"
+                | Horn_fixpoint_did_not_converge iterations ->
+                    Printf.sprintf
+                      "Horn fixpoint did not converge in %d iterations"
+                      iterations
                 | Cyclic_instantiation evar ->
                     "cyclic generic instantiation `" ^ evar ^ "`"
               in
