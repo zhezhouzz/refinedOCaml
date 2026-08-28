@@ -1,7 +1,7 @@
 let imported = Slicing_theory.touch
 
 let[@refined.over
-     { pre = "Slicing_theory.q x = false"; post = "Slicing_theory.p x = false" }] use_left
+     { pre = "not (Slicing_theory.q x)"; post = "not (Slicing_theory.p x)" }] use_left
     (x : int) : int =
   if Slicing_theory.p x then x else x
 

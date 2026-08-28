@@ -334,6 +334,11 @@ let () =
   compile "../examples/mutual_recursive.ml" "typed_mutual_recursive";
   compile "../examples/parameterized_adt.ml" "typed_parameterized_adt";
   compile "../examples/open_parameterized_adt.ml" "typed_open_parameterized_adt";
+  compile "../examples/logic_disambiguation.ml" "typed_logic_disambiguation";
+  compile "../examples/logic_disambiguation_invalid.ml"
+    "typed_logic_disambiguation_invalid";
+  compile "../examples/logic_ambiguity_invalid.ml"
+    "typed_logic_ambiguity_invalid";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -394,6 +399,42 @@ let () =
       require `Valid obligation);
   (match obligations_of_cmt "typed_open_parameterized_adt.cmt" with
   | _ -> failwith "an open parameterized ADT obligation was accepted"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_logic_disambiguation.cmt"
+  |> List.iter (fun obligation ->
+      if contains obligation.smt "Tvar_" then
+        failwith "typed logic elaboration leaked an open ADT sort";
+      (match obligation.name with
+      | "mixed_box" | "reversed_box" ->
+          if
+            not
+              (contains obligation.smt "T_box_"
+              && contains obligation.smt "_Int"
+              && contains obligation.smt "_Bool")
+          then
+            failwith "constructor expected sort did not select both instances"
+      | "mixed_nothing" | "reversed_nothing" ->
+          if
+            not
+              (contains obligation.smt "T_maybe_"
+              && contains obligation.smt "_Int"
+              && contains obligation.smt "_Bool")
+          then failwith "nullary constructor was not resolved by result sort"
+      | "mixed_fields" ->
+          if
+            not
+              (contains obligation.smt "T_cell_"
+              && contains obligation.smt "_Int"
+              && contains obligation.smt "_Bool")
+          then failwith "record selector was not resolved from receiver sort"
+      | name -> failwith ("unexpected typed logic obligation " ^ name));
+      require `Valid obligation);
+  (match obligations_of_cmt "typed_logic_disambiguation_invalid.cmt" with
+  | _ ->
+      failwith "constructor argument with the wrong expected sort was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_logic_ambiguity_invalid.cmt" with
+  | _ -> failwith "constructor without an expected sort was accepted"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);

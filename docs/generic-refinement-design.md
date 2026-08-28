@@ -103,8 +103,12 @@ statement symbols, and checked-lemma artifact dependencies. Logic declarations, 
 and complete ADT bundles are filtered together; an ADT used only as a value sort stays opaque. Random dependency
 graphs are checked against an independent fixed-point oracle.
 
-The next implementation slice is a typed logic AST with expected-sort elaboration for constructor/field
-disambiguation. A later coverage slice must define its own call judgment and witness-carrying under-summary
+The typed Logic AST and expected-sort elaboration are now implemented. Equality propagates operand sorts in
+both directions, constructors resolve from expected result and argument sorts, fields resolve from receiver
+sorts, and SMT translation plus theory slicing consume the same resolved symbols.
+
+The next implementation slice is module aliases and abstract-type theories, followed by functor theory
+transformers. A later coverage slice must define its own call judgment and witness-carrying under-summary
 instead of reusing the safety rule.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing

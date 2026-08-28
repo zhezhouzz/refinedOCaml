@@ -154,6 +154,11 @@ let typed_specialize_program (program : Typed_core.program)
         | None ->
             typed_error ~loc:expression.pexp_loc "unknown constructor `%s`" name
         )
+    | Pexp_apply
+        ( { pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ },
+          [ (Nolabel, argument) ] ) ->
+        unify ~loc:expression.pexp_loc S_bool (recurse argument);
+        S_bool
     | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, arguments) -> (
         let name = longident_name txt in
         let argument_sorts =
@@ -169,6 +174,7 @@ let typed_specialize_program (program : Typed_core.program)
         | Some ("+" | "-" | "*" | "div" | "mod") ->
             List.iter (unify ~loc:expression.pexp_loc S_int) argument_sorts;
             S_int
+        | Some ("=" | "distinct") -> S_bool
         | Some _ -> S_bool
         | None -> (
             match typed_lookup_logic program.registry scope name with
@@ -420,7 +426,7 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
   let specialize_field table key ((template : Typed_core.constructor), index) =
     match constructor_candidates template.Typed_core.symbol.key with
     | [ constructor ] -> Hashtbl.replace table key (constructor, index)
-    | _ -> ()
+    | _ -> Hashtbl.replace table key (template, index)
   in
   Hashtbl.iter (specialize_field fields_by_name) program.registry.fields_by_name;
   Hashtbl.iter (specialize_field fields_by_uid) program.registry.fields_by_uid;
@@ -436,121 +442,238 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
   in
   { program with registry }
 
-let typed_formula ?(scope = []) registry env expression =
-  let rec translate env expression =
-    let recurse = translate env in
-    match expression.Parsetree.pexp_desc with
+exception Logic_needs_expected of Location.t * string
+
+let elaborate_formula ?(scope = []) registry env expression =
+  let open Logic_term in
+  let ensure_sort ~loc expected actual =
+    if expected <> actual then
+      typed_error ~loc "logical sort mismatch: expected %s but got %s"
+        (typed_smt_sort expected) (typed_smt_sort actual)
+  in
+  let finish ?expected ~loc term =
+    Option.iter (fun expected -> ensure_sort ~loc expected term.sort) expected;
+    term
+  in
+  let constructors_named name =
+    List.concat_map
+      (fun (datatype : Typed_core.datatype) ->
+        List.filter
+          (fun (constructor : Typed_core.constructor) ->
+            constructor.symbol.display = name)
+          datatype.constructors)
+      registry.Typed_core.datatypes
+  in
+  let constructor_arguments argument =
+    match argument with
+    | None -> []
+    | Some { Parsetree.pexp_desc = Pexp_tuple expressions; _ } -> expressions
+    | Some expression -> [ expression ]
+  in
+  let rec elaborate ?expected expression =
+    let loc = expression.Parsetree.pexp_loc in
+    match expression.pexp_desc with
     | Pexp_ident { txt; _ } -> (
         let name = longident_name txt in
         match List.assoc_opt name env with
-        | Some term -> term
+        | Some (variable, sort) ->
+            finish ?expected ~loc { desc = Variable variable; sort }
         | None -> (
             match typed_lookup_logic registry scope name with
             | Some logic_symbol when logic_symbol.arguments = [] ->
-                typed_logic_name logic_symbol
-            | _ ->
-                typed_error ~loc:expression.pexp_loc
-                  "unknown logical variable `%s`" name))
-    | Pexp_constant { pconst_desc = Pconst_integer (value, _); _ } -> value
-    | Pexp_construct ({ txt = Lident "true"; _ }, None) -> "true"
-    | Pexp_construct ({ txt = Lident "false"; _ }, None) -> "false"
+                finish ?expected ~loc
+                  {
+                    desc = Application (Logic logic_symbol, []);
+                    sort = logic_symbol.result;
+                  }
+            | _ -> typed_error ~loc "unknown logical variable `%s`" name))
+    | Pexp_constant { pconst_desc = Pconst_integer (value, _); _ } ->
+        finish ?expected ~loc
+          { desc = Integer (int_of_string value); sort = Typed_core.S_int }
+    | Pexp_construct ({ txt = Lident "true"; _ }, None) ->
+        finish ?expected ~loc { desc = Boolean true; sort = Typed_core.S_bool }
+    | Pexp_construct ({ txt = Lident "false"; _ }, None) ->
+        finish ?expected ~loc { desc = Boolean false; sort = Typed_core.S_bool }
     | Pexp_construct ({ txt; _ }, argument) ->
         let name = longident_last txt in
+        let expressions = constructor_arguments argument in
+        let candidates =
+          constructors_named name
+          |> List.filter (fun (constructor : Typed_core.constructor) ->
+              List.length constructor.Typed_core.arguments
+              = List.length expressions)
+          |> List.filter (fun (constructor : Typed_core.constructor) ->
+              match expected with
+              | Some expected -> constructor.result = expected
+              | None -> true)
+        in
+        let candidates =
+          match (expected, candidates) with
+          | Some _, _ | None, [] | None, [ _ ] -> candidates
+          | None, candidates ->
+              let inferred = List.map elaborate expressions in
+              List.filter
+                (fun (constructor : Typed_core.constructor) ->
+                  List.map (fun term -> term.sort) inferred
+                  = constructor.Typed_core.arguments)
+                candidates
+        in
         let constructor =
-          match
-            Hashtbl.find_opt registry.Typed_core.constructors_by_name name
-          with
-          | Some constructor -> constructor
-          | None ->
-              typed_error ~loc:expression.pexp_loc "unknown constructor `%s`"
+          match candidates with
+          | [ constructor ] -> constructor
+          | [] ->
+              typed_error ~loc "constructor `%s` has no matching logic sort"
                 name
+          | _ ->
+              raise (Logic_needs_expected (loc, "constructor `" ^ name ^ "`"))
         in
         let arguments =
-          match argument with
-          | None -> []
-          | Some { pexp_desc = Pexp_tuple expressions; _ } ->
-              List.map recurse expressions
-          | Some expression -> [ recurse expression ]
+          List.map2
+            (fun expected expression -> elaborate ~expected expression)
+            constructor.arguments expressions
         in
-        if arguments = [] then typed_constructor_name constructor
-        else app (typed_constructor_name constructor) arguments
+        finish ?expected ~loc
+          {
+            desc = Application (Constructor constructor, arguments);
+            sort = constructor.result;
+          }
     | Pexp_apply
         ( { pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ },
           [ (Nolabel, argument) ] ) ->
-        app "not" [ recurse argument ]
+        let argument = elaborate ~expected:Typed_core.S_bool argument in
+        finish ?expected ~loc
+          {
+            desc = Application (Builtin "not", [ argument ]);
+            sort = Typed_core.S_bool;
+          }
     | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, arguments) -> (
         let name = longident_name txt in
         let arguments =
           List.map
             (function
-              | Nolabel, argument -> recurse argument
-              | _ ->
-                  typed_error ~loc:expression.pexp_loc
-                    "logical applications cannot use labels")
+              | Nolabel, argument -> argument
+              | _ -> typed_error ~loc "logical applications cannot use labels")
             arguments
         in
         match (binary_operator name, arguments) with
-        | Some operator, [ left; right ] -> app operator [ left; right ]
+        | Some (("=" | "distinct") as operator), [ left; right ] ->
+            let left, right =
+              try
+                let left = elaborate left in
+                (left, elaborate ~expected:left.sort right)
+              with Logic_needs_expected _ ->
+                let right = elaborate right in
+                (elaborate ~expected:right.sort left, right)
+            in
+            finish ?expected ~loc
+              {
+                desc = Application (Builtin operator, [ left; right ]);
+                sort = Typed_core.S_bool;
+              }
+        | Some (("+" | "-" | "*" | "div" | "mod") as operator), [ left; right ]
+          ->
+            let left = elaborate ~expected:Typed_core.S_int left in
+            let right = elaborate ~expected:Typed_core.S_int right in
+            finish ?expected ~loc
+              {
+                desc = Application (Builtin operator, [ left; right ]);
+                sort = Typed_core.S_int;
+              }
+        | Some (("<" | "<=" | ">" | ">=") as operator), [ left; right ] ->
+            let left = elaborate ~expected:Typed_core.S_int left in
+            let right = elaborate ~expected:Typed_core.S_int right in
+            finish ?expected ~loc
+              {
+                desc = Application (Builtin operator, [ left; right ]);
+                sort = Typed_core.S_bool;
+              }
+        | Some (("and" | "or" | "=>") as operator), [ left; right ] ->
+            let left = elaborate ~expected:Typed_core.S_bool left in
+            let right = elaborate ~expected:Typed_core.S_bool right in
+            finish ?expected ~loc
+              {
+                desc = Application (Builtin operator, [ left; right ]);
+                sort = Typed_core.S_bool;
+              }
         | _ -> (
             match typed_lookup_logic registry scope name with
             | Some logic_symbol ->
                 if List.length arguments <> List.length logic_symbol.arguments
                 then
-                  typed_error ~loc:expression.pexp_loc
-                    "logical predicate `%s` expects %d arguments" name
+                  typed_error ~loc "logical predicate `%s` expects %d arguments"
+                    name
                     (List.length logic_symbol.arguments);
-                app (typed_logic_name logic_symbol) arguments
-            | None ->
-                typed_error ~loc:expression.pexp_loc
-                  "unknown logical predicate `%s`" name))
+                let arguments =
+                  List.map2
+                    (fun expected expression -> elaborate ~expected expression)
+                    logic_symbol.arguments arguments
+                in
+                finish ?expected ~loc
+                  {
+                    desc = Application (Logic logic_symbol, arguments);
+                    sort = logic_symbol.result;
+                  }
+            | None -> typed_error ~loc "unknown logical predicate `%s`" name))
     | Pexp_field (record, { txt; _ }) ->
         let name = longident_last txt in
-        let constructor, index =
-          match Hashtbl.find_opt registry.fields_by_name name with
+        let record = elaborate record in
+        let family, index =
+          match Hashtbl.find_opt registry.Typed_core.fields_by_name name with
           | Some entry -> entry
-          | None ->
-              typed_error ~loc:expression.pexp_loc
-                "unknown logical record field `%s`" name
+          | None -> typed_error ~loc "unknown logical record field `%s`" name
         in
-        app (typed_selector constructor index) [ recurse record ]
-    | _ -> typed_error ~loc:expression.pexp_loc "unsupported refinement formula"
+        let candidates =
+          List.concat_map
+            (fun (datatype : Typed_core.datatype) -> datatype.constructors)
+            registry.datatypes
+          |> List.filter (fun constructor ->
+              let constructor : Typed_core.constructor = constructor in
+              constructor.Typed_core.symbol.key = family.symbol.key
+              && constructor.result = record.sort)
+        in
+        let constructor =
+          match candidates with
+          | [ constructor ] -> constructor
+          | [] ->
+              typed_error ~loc
+                "record field `%s` does not belong to logic sort %s" name
+                (typed_smt_sort record.sort)
+          | _ -> typed_error ~loc "record field `%s` remains ambiguous" name
+        in
+        let sort = List.nth constructor.arguments index in
+        finish ?expected ~loc
+          {
+            desc = Application (Selector (constructor, index), [ record ]);
+            sort;
+          }
+    | _ -> typed_error ~loc "unsupported refinement formula"
   in
-  translate env expression
+  try elaborate ~expected:Typed_core.S_bool expression
+  with Logic_needs_expected (loc, construct) ->
+    typed_error ~loc "%s needs an expected logic sort" construct
 
-let formula_theory_symbols ?(scope = []) registry expression =
-  let symbols = Hashtbl.create 16 in
-  let add symbol = Hashtbl.replace symbols symbol () in
-  let rec collect expression =
-    match expression.Parsetree.pexp_desc with
-    | Pexp_ident { txt; _ } ->
-        let name = longident_name txt in
-        Option.iter
-          (fun (logic_symbol : Typed_core.logic_symbol) ->
-            add logic_symbol.logic_name.key)
-          (typed_lookup_logic registry scope name)
-    | Pexp_construct ({ txt; _ }, argument) ->
-        let name = longident_last txt in
-        Option.iter
-          (fun (constructor : Typed_core.constructor) ->
-            add constructor.symbol.key)
-          (Hashtbl.find_opt registry.Typed_core.constructors_by_name name);
-        Option.iter collect argument
-    | Pexp_apply (function_, arguments) ->
-        collect function_;
-        List.iter (fun (_, argument) -> collect argument) arguments
-    | Pexp_field (record, { txt; _ }) ->
-        let name = longident_last txt in
-        Option.iter
-          (fun ((constructor : Typed_core.constructor), _) ->
-            add constructor.symbol.key)
-          (Hashtbl.find_opt registry.fields_by_name name);
-        collect record
-    | Pexp_tuple expressions -> List.iter collect expressions
-    | Pexp_constant _ -> ()
-    | _ -> ()
-  in
-  collect expression;
-  Hashtbl.fold (fun symbol () result -> symbol :: result) symbols []
+let rec logic_term_smt (term : Logic_term.t) =
+  let open Logic_term in
+  match term.desc with
+  | Variable variable -> variable
+  | Integer value -> string_of_int value
+  | Boolean value -> string_of_bool value
+  | Application (head, arguments) ->
+      let name =
+        match head with
+        | Builtin name -> name
+        | Logic symbol -> typed_logic_name symbol
+        | Constructor constructor -> typed_constructor_name constructor
+        | Selector (constructor, index) -> typed_selector constructor index
+      in
+      let arguments = List.map logic_term_smt arguments in
+      if arguments = [] then name else app name arguments
+
+let typed_formula ?scope registry env expression =
+  elaborate_formula ?scope registry env expression |> logic_term_smt
+
+let formula_theory_symbols ?scope registry env expression =
+  elaborate_formula ?scope registry env expression |> Logic_term.theory_symbols
 
 let slice_program_theory (program : Typed_core.program) ~roots =
   let registry = program.registry in
@@ -565,8 +688,13 @@ let slice_program_theory (program : Typed_core.program) ~roots =
         ~loc:(location_of_span axiom.loc)
         axiom.body
     in
+    let env =
+      List.map
+        (fun (name, sort) -> (name, (smt_identifier name, sort)))
+        axiom.variables
+    in
     let symbols =
-      formula_theory_symbols ~scope:axiom.scope registry formula
+      formula_theory_symbols ~scope:axiom.scope registry env formula
       |> List.sort_uniq String.compare
     in
     let requires =
@@ -1117,8 +1245,8 @@ and typed_inline_call program analysis mode current_function path call_stack
         choices := (result, function_def.result) :: !choices;
         let formula_env =
           List.map2
-            (fun ((argument : Typed_core.symbol), _) term ->
-              (argument.display, term))
+            (fun ((argument : Typed_core.symbol), sort) term ->
+              (argument.display, (term, sort)))
             function_def.arguments terms
         in
         let translate formula =
@@ -1127,7 +1255,7 @@ and typed_inline_call program analysis mode current_function path call_stack
               ~loc:(location_of_span summary.loc)
               formula
           in
-          formula_theory_symbols program.registry formula
+          formula_theory_symbols program.registry formula_env formula
           |> List.iter (use_theory_symbol generic_calls);
           typed_formula program.registry formula_env formula
         in
@@ -1138,10 +1266,12 @@ and typed_inline_call program analysis mode current_function path call_stack
               ~loc:(location_of_span summary.loc)
               summary.post
           in
-          formula_theory_symbols program.registry formula
+          formula_theory_symbols program.registry
+            (("result", (result, function_def.result)) :: formula_env)
+            formula
           |> List.iter (use_theory_symbol generic_calls);
           typed_formula program.registry
-            (("result", result) :: formula_env)
+            (("result", (result, function_def.result)) :: formula_env)
             formula
         in
         generic_calls.side_conditions <-
@@ -1371,7 +1501,9 @@ let typed_datatype_prelude program function_def =
         axiom.body
     in
     let env =
-      List.map (fun (name, _) -> (name, smt_identifier name)) axiom.variables
+      List.map
+        (fun (name, sort) -> (name, (smt_identifier name, sort)))
+        axiom.variables
     in
     let body = typed_formula ~scope:axiom.scope program.registry env formula in
     let binders =
@@ -1499,7 +1631,8 @@ let typed_obligation (program : Typed_core.program) analysis
   in
   let formula_env =
     List.map2
-      (fun (symbol, _) (_, value) -> (symbol.Typed_core.display, value.term))
+      (fun (symbol, sort) (_, value) ->
+        (symbol.Typed_core.display, (value.term, sort)))
       function_def.arguments env
   in
   let pre_expression =
@@ -1522,8 +1655,10 @@ let typed_obligation (program : Typed_core.program) analysis
   in
   let roots =
     generic_calls.used_theory_symbols
-    @ formula_theory_symbols program.registry pre_expression
-    @ formula_theory_symbols program.registry post_expression
+    @ formula_theory_symbols program.registry formula_env pre_expression
+    @ formula_theory_symbols program.registry
+        (("result", ("result", function_def.result)) :: formula_env)
+        post_expression
     |> List.sort_uniq String.compare
   in
   let program, _enabled_symbols = slice_program_theory program ~roots in
@@ -1533,7 +1668,7 @@ let typed_obligation (program : Typed_core.program) analysis
   in
   let post =
     typed_formula program.registry
-      (("result", result_name) :: formula_env)
+      (("result", (result_name, function_def.result)) :: formula_env)
       post_expression
   in
   let buffer = Buffer.create 4096 in
@@ -1623,13 +1758,17 @@ let lemma_obligations registry lemmas =
         ~loc:(location_of_span lemma.loc)
         lemma.body
     in
-    let roots = formula_theory_symbols ~scope:lemma.scope registry formula in
+    let env =
+      List.map
+        (fun (name, sort) -> (name, (smt_identifier name, sort)))
+        lemma.variables
+    in
+    let roots =
+      formula_theory_symbols ~scope:lemma.scope registry env formula
+    in
     let program = Typed_core.{ registry; functions = [] } in
     let program, _enabled_symbols = slice_program_theory program ~roots in
     let sliced_registry = program.Typed_core.registry in
-    let env =
-      List.map (fun (name, _) -> (name, smt_identifier name)) lemma.variables
-    in
     let body = typed_formula ~scope:lemma.scope sliced_registry env formula in
     let binders =
       String.concat " "

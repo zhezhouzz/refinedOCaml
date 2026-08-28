@@ -57,8 +57,9 @@ val f : (x : int) -> int
 axiom[@refined.axiom] name = "forall ..."
 ```
 
-字符串中的逻辑先复用 OCaml expression parser；成熟版本应有独立、带 sort checking 的逻辑 AST，
-并支持 quantifier、set、map、bitvector、浮点语义与 ghost binders。
+字符串中的逻辑先复用 OCaml expression parser，随后 elaboration 到与 compiler-libs 隔离、每个节点
+带 sort 的 Logic AST。当前支持 expected-sort constructor/field 消歧；后续仍需独立 surface parser、
+quantifier、set、map、bitvector、浮点语义与 ghost binders。
 
 ## 4. Datatype theory
 
@@ -144,7 +145,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-typed logic AST/expected-sort elaboration、可重放 proof certificate、增量缓存。
+abstract type/module theory、可重放 proof certificate、增量缓存。
 
 ### M2
 

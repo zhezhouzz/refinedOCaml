@@ -255,8 +255,14 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 Checker 只为当前 obligation 及其 inline 调用实际出现的闭合实例生成 theory。仍含 `S_var` 的开放
 ADT obligation 会 fail closed，因为它无法有限 monomorphise。同一 VC 可以在程序表达式中使用同一
-constructor 的多个实例；但未带类型信息的 contract 字符串若直接写这个歧义 constructor/field，仍会
-拒绝，等待 typed logic AST 提供 expected-sort disambiguation。
+constructor 的多个实例。
+
+Contract 字符串在 OCaml parsing 后会 elaboration 成 compiler-independent 的 typed Logic AST。Equality
+会双向传播 operand sort；constructor 从 expected result sort 和 argument sorts 选择实例；record field
+从 receiver sort 选择 selector。因此同一 VC 中的 `result = Box x`、`Nothing = result` 和
+`left.value`/`right.value` 可以分别解析到不同 ADT 实例。每个 Logic AST node 都带 sort，SMT translation
+和 theory slicing 只消费 resolved symbols。真正没有任何类型信息的表达式（例如同时存在多个实例时的
+`Nothing = Nothing`）仍会明确拒绝。
 
 Theory 发射还会做 dependency-driven slicing。Roots 来自 contract、Core 中实际使用的
 constructor/field/pattern、logic call 和 function summary；命中 statement 后，把该 axiom/lemma 中的
@@ -278,6 +284,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 普通多态函数的 first-order 调用 | 支持 | Typedtree + inlining |
 | module predicate/axiom/checked lemma 与 `.rmi` | 支持 | scoped FOL + verification artifact |
 | dependency-driven theory slicing | 支持 | symbol/dependency least closure |
+| typed Logic AST / expected-sort elaboration | 支持 | resolved constructor/selector symbols |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
 | 二选一 nondeterministic `choose` | 支持 | demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
@@ -296,7 +303,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 带 expected sort 的 typed logic AST，消除多实例 constructor/field 歧义；
+1. module alias 与 abstract type theory；
 2. functor/theory transformer 与 generativity；
 3. 关系化 mutation、exception 和 effect handler。
 

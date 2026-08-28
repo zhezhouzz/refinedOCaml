@@ -11,7 +11,7 @@
 | B. Module theory | 用 module/signature 管理 predicates 和 axioms | `.mli` 可导出 `[@@refined.predicate]` 和 `[@@@refined.axiom]`；`.cmti -> .rmi`；客户端通过 `--theory` 导入 | MVP 已完成 | 支持 abstract type theory、module alias、functor theory transformer |
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` 保存 OCaml version、unit name、`.cmi` digest；加载时检查 imports 和 digest | MVP 已完成 | 设计 `.rmi` 稳定格式，避免直接 `Marshal` 作为长期 artifact |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
-| B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT use-site monomorphisation 与 dependency-driven slicing 已完成；roots 经 statement symbols、lemma artifact dependencies 求 least closure；opaque flow 不发射代数 bundle | Slicing MVP 已完成 | 为 logic AST 增加 expected-sort 消歧；研究更细的 constructor axiom bundle |
+| B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
 | C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn fixpoint 与 safety 函数 summary、递归 call-graph SCC、路径敏感 termination VC 已完成 | Safety/Generic 阶段完成 | 设计 compositional coverage judgment 与 under-summary |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 当前 coverage 是 `forall result. post(result) => exists input. pre(input) /\ result = f(input)` 的 SMT obligation | 未完成 | 设计 coverage judgment、subtyping/entailment、witness/inverse 支持 |
@@ -103,6 +103,10 @@ Dependency-driven ADT/axiom slicing 也已完成。Contract/Core/summary symbols
 lemma symbols 及 verification-artifact dependencies 构成保守 least closure；logic declarations、
 provenance、artifacts 与 ADT bundle 一起过滤。只作为值流过的 ADT 保持 opaque sort。
 
-roadmap 的下一实现步骤是带 expected sort 的 typed logic AST，解决同一 VC 多个 ADT 实例下的
-constructor/field 消歧。递归 coverage 暂不借用 safety summary：它需要先定义固定实参下可组合的
-under-summary 和 witness 规则。
+带 expected sort 的 typed Logic AST 也已完成。Equality 双向传播 sort，constructor 使用 expected
+result/argument sorts，field 使用 receiver sort；SMT translation 与 slicing 共享同一个 resolved AST，
+不再各自猜测短名。
+
+roadmap 的下一实现步骤是 module alias 与 abstract type theory，然后进入 functor theory transformer。
+递归 coverage 暂不借用 safety summary：它需要先定义固定实参下可组合的 under-summary 和 witness
+规则。
