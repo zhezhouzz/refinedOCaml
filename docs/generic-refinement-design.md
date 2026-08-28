@@ -94,8 +94,12 @@ timeout and dependency lists separately from trusted-axiom provenance; invalid o
 atomic artifact export.
 This is an auditable verification record, not a kernel-checkable Z3 proof certificate.
 
-The next implementation slice is use-site monomorphisation for parameterized user ADTs. A later coverage slice
-must define its own call judgment and witness-carrying under-summary instead of reusing the safety rule.
+Use-site monomorphisation for parameterized user ADTs is now implemented. Closed instances are collected per
+obligation, constructor families are keyed by result sort, recursive fields are substituted, and polymorphic
+first-order inline calls instantiate their complete Core body. Open ADT instances fail closed.
+
+The next implementation slice is dependency-driven ADT/axiom slicing. A later coverage slice must define its
+own call judgment and witness-carrying under-summary instead of reusing the safety rule.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

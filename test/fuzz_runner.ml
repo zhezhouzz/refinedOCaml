@@ -392,6 +392,7 @@ let fuzz_function_scc random case =
       lemmas = [];
       checked_lemmas = [];
       proof_artifacts = [];
+      datatype_templates = [];
       datatypes = [];
     }
   in

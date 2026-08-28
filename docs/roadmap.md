@@ -11,13 +11,13 @@
 | B. Module theory | 用 module/signature 管理 predicates 和 axioms | `.mli` 可导出 `[@@refined.predicate]` 和 `[@@@refined.axiom]`；`.cmti -> .rmi`；客户端通过 `--theory` 导入 | MVP 已完成 | 支持 abstract type theory、module alias、functor theory transformer |
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` 保存 OCaml version、unit name、`.cmi` digest；加载时检查 imports 和 digest | MVP 已完成 | 设计 `.rmi` 稳定格式，避免直接 `Marshal` 作为长期 artifact |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
-| B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态 variant/record 已支持；constructor、recognizer、selector 和基本代数 axioms 已生成 | MVP 已完成 | 支持参数化用户 ADT 的 use-site monomorphisation；加入 axiom slicing |
+| B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态及参数化 variant/record 已支持；每个 obligation 收集闭合实例并生成隔离的 constructor/recognizer/selector 与代数 axioms；多态 inline 会实例化 Core body | Monomorphisation MVP 已完成 | 加入 dependency-driven ADT/axiom slicing；为 logic AST 增加 expected-sort 消歧 |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
 | C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn fixpoint 与 safety 函数 summary、递归 call-graph SCC、路径敏感 termination VC 已完成 | Safety/Generic 阶段完成 | 设计 compositional coverage judgment 与 under-summary |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 当前 coverage 是 `forall result. post(result) => exists input. pre(input) /\ result = f(input)` 的 SMT obligation | 未完成 | 设计 coverage judgment、subtyping/entailment、witness/inverse 支持 |
 | 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
-| 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 的 type variable 可按 obligation 实例化；普通多态函数可 first-order inlining | 部分完成 | 用户参数化 ADT 的 monomorphisation；处理 polymorphic recursion 的拒绝/抽象机制 |
-| OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 int/bool、算术、if、简单 let、tuple、单态 ADT/record、exhaustive match；拒绝高阶、递归、mutation、exception、effect 等 | MVP 已完成 | 按优先级扩展 match/records/modules，再考虑 effectful core |
+| 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
+| OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 int/bool、算术、if、简单 let、tuple、单态/参数化 ADT/record、exhaustive match 与受 measure 检查的 safety recursion；拒绝高阶、mutation、exception、effect 等 | MVP 已完成 | 按优先级扩展 match/records/modules，再考虑 effectful core |
 | Solver 工程 | 生成 SMT-LIB，调用 Z3，输出 model | 已支持 `--emit-smt`、Z3 `sat/unsat/unknown`、model 输出 | MVP 已完成 | 记录 solver version、timeout、enabled axioms；改进 `unknown` 诊断 |
 | 工程可复现性 | 让项目能在干净环境中稳定构建和测试 | 已有本机 OCaml 5.3.0 switch、direct-dependency lock、setup script、GitHub Actions、format gate、autofix.ci、deterministic property fuzzing 和版本升级规约 | 已完成 | CI 通过后保护主分支；新增 frontend 时扩展版本矩阵 |
 
@@ -95,5 +95,10 @@ Checked lemma 与 verification-artifact 导出也已经落实：失败或 unknow
 checked lemma 不计入 trusted axiom provenance。当前 artifact 记录 VC digest、solver identity 和 timeout，
 但还不是可由小型 kernel 独立重放的 proof certificate。
 
-roadmap 的下一实现步骤是参数化用户 ADT 的 use-site monomorphisation。递归 coverage 暂不借用
-safety summary：它需要先定义固定实参下可组合的 under-summary 和 witness 规则。
+参数化用户 ADT 的 use-site monomorphisation 也已完成。每个 obligation 只实例化实际出现的闭合
+sort；constructor family 按 result sort 隔离；多态 first-order inline 会同步替换 body/pattern/field
+sort。开放实例无法有限化时 fail closed。
+
+roadmap 的下一实现步骤是 dependency-driven ADT/axiom slicing，减少当前仍会整体发射的 theory
+bundle。递归 coverage 暂不借用 safety summary：它需要先定义固定实参下可组合的 under-summary 和
+witness 规则。

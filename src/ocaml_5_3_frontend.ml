@@ -83,6 +83,7 @@ let new_typed_registry () =
       lemmas = [];
       checked_lemmas = [];
       proof_artifacts = [];
+      datatype_templates = [];
       datatypes = [];
     }
 
@@ -116,82 +117,95 @@ let typed_register_types registry structure =
         | _ -> ())
       structure.Typedtree.str_items
   and register declaration =
-    if declaration.Typedtree.typ_params <> [] then ()
-    else
-      let owner_symbol =
-        symbol_of_ident ~display:declaration.typ_name.txt declaration.typ_id
-      in
-      let owner = S_app (owner_symbol, []) in
-      match declaration.typ_kind with
-      | Typedtree.Ttype_variant declarations ->
-          let constructors =
-            List.map
-              (fun typed_constructor ->
-                let arguments =
-                  match typed_constructor.Typedtree.cd_args with
-                  | Cstr_tuple types ->
-                      List.map
-                        (fun (core_type : Typedtree.core_type) ->
-                          typed_sort_of_type core_type.ctyp_type)
-                        types
-                  | Cstr_record labels ->
-                      List.map
-                        (fun (label : Typedtree.label_declaration) ->
-                          typed_sort_of_type label.Typedtree.ld_type.ctyp_type)
-                        labels
-                in
-                let constructor =
-                  {
-                    symbol =
-                      symbol_of_uid ~name:typed_constructor.cd_name.txt
-                        typed_constructor.cd_uid;
-                    arguments;
-                  }
-                in
-                typed_register_constructor registry constructor
-                  typed_constructor.cd_uid typed_constructor.cd_name.txt;
-                constructor)
-              declarations
-          in
-          registry.datatypes <- { owner; constructors } :: registry.datatypes
-      | Ttype_record labels ->
-          let arguments =
-            List.map
-              (fun label ->
-                typed_sort_of_type label.Typedtree.ld_type.ctyp_type)
-              labels
-          in
-          let constructor =
-            {
-              symbol =
+    let owner_symbol =
+      symbol_of_ident ~display:declaration.typ_name.txt declaration.typ_id
+    in
+    let parameters =
+      List.map
+        (fun (parameter, _) -> typed_sort_of_type parameter.Typedtree.ctyp_type)
+        declaration.Typedtree.typ_params
+    in
+    let owner = S_app (owner_symbol, parameters) in
+    match declaration.typ_kind with
+    | Typedtree.Ttype_variant declarations ->
+        let constructors =
+          List.map
+            (fun typed_constructor ->
+              let arguments =
+                match typed_constructor.Typedtree.cd_args with
+                | Cstr_tuple types ->
+                    List.map
+                      (fun (core_type : Typedtree.core_type) ->
+                        typed_sort_of_type core_type.ctyp_type)
+                      types
+                | Cstr_record labels ->
+                    List.map
+                      (fun (label : Typedtree.label_declaration) ->
+                        typed_sort_of_type label.Typedtree.ld_type.ctyp_type)
+                      labels
+              in
+              let constructor =
                 {
-                  key = owner_symbol.key ^ ".record";
-                  display = "record_" ^ declaration.typ_name.txt;
-                };
-              arguments;
-            }
-          in
-          List.iteri
-            (fun index (label : Typedtree.label_declaration) ->
-              Hashtbl.replace registry.fields_by_uid (uid_key label.ld_uid)
-                (constructor, index);
-              Hashtbl.replace registry.fields_by_name label.ld_name.txt
-                (constructor, index))
-            labels;
-          registry.datatypes <-
-            { owner; constructors = [ constructor ] } :: registry.datatypes
-      | Ttype_abstract | Ttype_open -> ()
+                  symbol =
+                    symbol_of_uid ~name:typed_constructor.cd_name.txt
+                      typed_constructor.cd_uid;
+                  arguments;
+                  result = owner;
+                }
+              in
+              typed_register_constructor registry constructor
+                typed_constructor.cd_uid typed_constructor.cd_name.txt;
+              constructor)
+            declarations
+        in
+        registry.datatype_templates <-
+          { owner; constructors } :: registry.datatype_templates
+    | Ttype_record labels ->
+        let arguments =
+          List.map
+            (fun label -> typed_sort_of_type label.Typedtree.ld_type.ctyp_type)
+            labels
+        in
+        let constructor =
+          {
+            symbol =
+              {
+                key = owner_symbol.key ^ ".record";
+                display = "record_" ^ declaration.typ_name.txt;
+              };
+            arguments;
+            result = owner;
+          }
+        in
+        List.iteri
+          (fun index (label : Typedtree.label_declaration) ->
+            Hashtbl.replace registry.fields_by_uid (uid_key label.ld_uid)
+              (constructor, index);
+            Hashtbl.replace registry.fields_by_name label.ld_name.txt
+              (constructor, index))
+          labels;
+        registry.datatype_templates <-
+          { owner; constructors = [ constructor ] }
+          :: registry.datatype_templates
+    | Ttype_abstract | Ttype_open -> ()
   in
   visit_structure structure
 
-let typed_lookup_constructor registry ~loc uid name =
+let typed_lookup_constructor registry ~loc
+    (description : Types.constructor_description) =
   match
-    Hashtbl.find_opt registry.Typed_core.constructors_by_uid (uid_key uid)
+    Hashtbl.find_opt registry.Typed_core.constructors_by_uid
+      (uid_key description.cstr_uid)
   with
-  | Some constructor -> constructor
+  | Some constructor ->
+      {
+        constructor with
+        arguments = List.map typed_sort_of_type description.cstr_args;
+        result = typed_sort_of_type description.cstr_res;
+      }
   | None ->
       typed_error ~loc "constructor `%s` is outside the supported datatype set"
-        name
+        description.cstr_name
 
 let rec typed_pattern registry (pattern : Typedtree.pattern) =
   let open Typed_core in
@@ -209,10 +223,22 @@ let rec typed_pattern registry (pattern : Typedtree.pattern) =
       Pat_bool false
   | Tpat_construct (_, description, patterns, _) ->
       let constructor =
-        typed_lookup_constructor registry ~loc:pattern.pat_loc
-          description.cstr_uid description.cstr_name
+        typed_lookup_constructor registry ~loc:pattern.pat_loc description
       in
-      Pat_construct (constructor, List.map (typed_pattern registry) patterns)
+      let patterns = List.map (typed_pattern registry) patterns in
+      Pat_construct
+        ( {
+            constructor with
+            arguments =
+              List.map
+                (fun (pattern : Typedtree.pattern) ->
+                  typed_sort_of_type pattern.pat_type)
+                (match pattern.pat_desc with
+                | Tpat_construct (_, _, patterns, _) -> patterns
+                | _ -> assert false);
+            result = typed_sort_of_type pattern.pat_type;
+          },
+          patterns )
   | Tpat_tuple patterns ->
       Pat_tuple
         ( typed_sort_of_type pattern.pat_type,
@@ -225,12 +251,20 @@ let value_pattern_of_computation ~loc pattern =
   | _ ->
       typed_error ~loc "exception/effect patterns are not part of the MVP Core"
 
-let typed_field registry ~loc description =
+let typed_field registry ~loc (description : Types.label_description) =
   match
     Hashtbl.find_opt registry.Typed_core.fields_by_uid
       (uid_key description.Types.lbl_uid)
   with
-  | Some entry -> entry
+  | Some (constructor, index) ->
+      ( {
+          constructor with
+          arguments =
+            Array.to_list description.lbl_all
+            |> List.map (fun label -> typed_sort_of_type label.Types.lbl_arg);
+          result = typed_sort_of_type description.lbl_res;
+        },
+        index )
   | None ->
       typed_error ~loc "record field `%s` is outside the supported datatype set"
         description.lbl_name
@@ -521,11 +555,18 @@ let rec typed_expression registry (expression : Typedtree.expression) =
   | Texp_construct (name, _, []) when name.txt = Longident.Lident "false" ->
       make (Bool false)
   | Texp_construct (_, description, arguments) ->
+      let arguments = List.map recurse arguments in
       let constructor =
-        typed_lookup_constructor registry ~loc:expression.exp_loc
-          description.cstr_uid description.cstr_name
+        typed_lookup_constructor registry ~loc:expression.exp_loc description
       in
-      make (Construct (constructor, List.map recurse arguments))
+      make
+        (Construct
+           ( {
+               constructor with
+               arguments = List.map (fun argument -> argument.sort) arguments;
+               result = typed_sort_of_type expression.exp_type;
+             },
+             arguments ))
   | Texp_tuple expressions -> make (Tuple (List.map recurse expressions))
   | Texp_apply ({ exp_desc = Texp_ident (path, _, description); _ }, arguments)
     ->
@@ -605,12 +646,23 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                 typed_error ~loc:expression.exp_loc
                   "record literal is missing a field")
       in
-      make (Record (constructor, values))
+      make
+        (Record
+           ( {
+               constructor with
+               arguments = List.map (fun value -> value.sort) values;
+               result = typed_sort_of_type expression.exp_type;
+             },
+             values ))
   | Texp_field (record, _, description) ->
       let constructor, index =
         typed_field registry ~loc:expression.exp_loc description
       in
-      make (Field (constructor, index, recurse record))
+      make
+        (Field
+           ( { constructor with result = typed_sort_of_type record.exp_type },
+             index,
+             recurse record ))
   | _ ->
       typed_error ~loc:expression.exp_loc
         "unsupported Typedtree expression in the MVP Core"

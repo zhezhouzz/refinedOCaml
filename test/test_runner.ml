@@ -332,6 +332,8 @@ let () =
     "typed_recursive_missing_summary";
   compile "../examples/recursive_coverage.ml" "typed_recursive_coverage";
   compile "../examples/mutual_recursive.ml" "typed_mutual_recursive";
+  compile "../examples/parameterized_adt.ml" "typed_parameterized_adt";
+  compile "../examples/open_parameterized_adt.ml" "typed_open_parameterized_adt";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -351,6 +353,44 @@ let () =
         failwith "recursive call did not emit a decreasing-measure obligation";
       require `Valid obligation);
   obligations_of_cmt "typed_mutual_recursive.cmt" |> List.iter (require `Valid);
+  obligations_of_cmt "typed_parameterized_adt.cmt"
+  |> List.iter (fun obligation ->
+      let has_box = contains obligation.smt "T_box_" in
+      let has_int_box = has_box && contains obligation.smt "_Int" in
+      let has_bool_box = has_box && contains obligation.smt "_Bool" in
+      (match obligation.name with
+      | "int_box" | "int_roundtrip" ->
+          if (not has_int_box) || has_bool_box then
+            failwith "int box obligation was not monomorphised in isolation"
+      | "bool_box" ->
+          if (not has_bool_box) || has_int_box then
+            failwith "bool box obligation was not monomorphised in isolation"
+      | "both_boxes" ->
+          if not (has_int_box && has_bool_box) then
+            failwith "two concrete instances were not emitted together"
+      | "int_cell" ->
+          if
+            not
+              (contains obligation.smt "T_cell_"
+              && contains obligation.smt "_Int")
+          then failwith "parameterized record was not monomorphised"
+      | "bool_cell_roundtrip" ->
+          if
+            not
+              (contains obligation.smt "T_cell_"
+              && contains obligation.smt "_Bool")
+          then failwith "polymorphic record helper was not instantiated"
+      | "int_tree" ->
+          if
+            not
+              (contains obligation.smt "T_tree_"
+              && contains obligation.smt "_Int")
+          then failwith "recursive parameterized ADT was not monomorphised"
+      | name -> failwith ("unexpected parameterized ADT obligation " ^ name));
+      require `Valid obligation);
+  (match obligations_of_cmt "typed_open_parameterized_adt.cmt" with
+  | _ -> failwith "an open parameterized ADT obligation was accepted"
+  | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);
   (match obligations_of_cmt "typed_recursive_missing_measure.cmt" with

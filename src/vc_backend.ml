@@ -68,7 +68,10 @@ let typed_smt_sort =
   translate
 
 let typed_constructor_name (constructor : Typed_core.constructor) =
-  "C_" ^ smt_identifier constructor.Typed_core.symbol.key
+  "C_"
+  ^ smt_identifier constructor.Typed_core.symbol.key
+  ^ "__"
+  ^ smt_identifier (typed_smt_sort constructor.result)
 
 let typed_recognizer (constructor : Typed_core.constructor) =
   "is_" ^ typed_constructor_name constructor
@@ -142,7 +145,7 @@ let typed_specialize_program (program : Typed_core.program)
                     (fun (candidate : Typed_core.constructor) ->
                       candidate.symbol.key = constructor.Typed_core.symbol.key)
                     datatype.constructors)
-                program.registry.datatypes
+                program.registry.datatype_templates
             with
             | Some datatype -> datatype.owner
             | None ->
@@ -279,6 +282,159 @@ let typed_specialize_program (program : Typed_core.program)
       { program.registry with logic_by_name; axioms; checked_lemmas }
     in
     { program with registry }
+
+let typed_monomorphize_datatypes (program : Typed_core.program)
+    (function_def : Typed_core.function_def) =
+  let templates = program.registry.Typed_core.datatype_templates in
+  let template_for = function
+    | Typed_core.S_app (symbol, _) ->
+        List.find_opt
+          (fun (datatype : Typed_core.datatype) ->
+            match datatype.owner with
+            | S_app (owner, _) -> owner.key = symbol.key
+            | _ -> false)
+          templates
+    | _ -> None
+  in
+  let rec closed = function
+    | Typed_core.S_var _ -> false
+    | S_tuple sorts | S_app (_, sorts) -> List.for_all closed sorts
+    | S_int | S_bool | S_unit -> true
+  in
+  let instances = Hashtbl.create 16 in
+  let open_instance = ref None in
+  let rec collect sort =
+    (match template_for sort with
+    | Some _ when closed sort ->
+        Hashtbl.replace instances (typed_smt_sort sort) sort
+    | Some _ -> open_instance := Some sort
+    | None -> ());
+    match sort with
+    | Typed_core.S_tuple sorts | S_app (_, sorts) -> List.iter collect sorts
+    | S_int | S_bool | S_unit | S_var _ -> ()
+  in
+  let rec collect_pattern = function
+    | Typed_core.Pat_construct (constructor, patterns) ->
+        collect constructor.result;
+        List.iter collect constructor.arguments;
+        List.iter collect_pattern patterns
+    | Pat_tuple (sort, patterns) ->
+        collect sort;
+        List.iter collect_pattern patterns
+    | Pat_alias (pattern, _) -> collect_pattern pattern
+    | Pat_any | Pat_var _ | Pat_int _ | Pat_bool _ -> ()
+  in
+  let rec collect_expression (expression : Typed_core.expr) =
+    collect expression.sort;
+    match expression.desc with
+    | Var _ | Int _ | Bool _ -> ()
+    | Construct (constructor, expressions) | Record (constructor, expressions)
+      ->
+        collect constructor.result;
+        List.iter collect constructor.arguments;
+        List.iter collect_expression expressions
+    | Tuple expressions | Choose expressions | Apply (_, expressions) ->
+        List.iter collect_expression expressions
+    | If (condition, if_true, if_false) ->
+        List.iter collect_expression [ condition; if_true; if_false ]
+    | Let (_, value, body) -> List.iter collect_expression [ value; body ]
+    | Match (scrutinee, cases) ->
+        collect_expression scrutinee;
+        List.iter
+          (fun (pattern, body) ->
+            collect_pattern pattern;
+            collect_expression body)
+          cases
+    | Field (constructor, _, record) ->
+        collect constructor.result;
+        List.iter collect constructor.arguments;
+        collect_expression record
+  in
+  List.iter (fun (_, sort) -> collect sort) function_def.arguments;
+  collect function_def.result;
+  collect_expression function_def.body;
+  (match !open_instance with
+  | Some sort ->
+      typed_error_at function_def.body.loc
+        "parameterized ADT `%s` has no finite closed use-site instance"
+        (typed_smt_sort sort)
+  | None -> ());
+  let instantiate (template : Typed_core.datatype) concrete =
+    let substitutions = Sort_evars.create () in
+    (match
+       Sort_evars.unify substitutions ~formal:template.owner ~actual:concrete
+     with
+    | Ok () -> ()
+    | Error _ -> assert false);
+    let substitute = Sort_evars.substitute substitutions in
+    {
+      Typed_core.owner = concrete;
+      constructors =
+        List.map
+          (fun (constructor : Typed_core.constructor) ->
+            {
+              constructor with
+              arguments = List.map substitute constructor.arguments;
+              result = substitute constructor.result;
+            })
+          template.constructors;
+    }
+  in
+  let datatypes =
+    Hashtbl.fold
+      (fun _ concrete result ->
+        match template_for concrete with
+        | Some template -> instantiate template concrete :: result
+        | None -> result)
+      instances []
+    |> List.sort (fun left right ->
+        String.compare
+          (typed_smt_sort left.Typed_core.owner)
+          (typed_smt_sort right.Typed_core.owner))
+  in
+  let constructors_by_name = Hashtbl.create 32 in
+  let constructors_by_uid = Hashtbl.create 32 in
+  let constructor_candidates symbol_key =
+    List.concat_map
+      (fun (datatype : Typed_core.datatype) ->
+        List.filter
+          (fun (constructor : Typed_core.constructor) ->
+            constructor.symbol.key = symbol_key)
+          datatype.constructors)
+      datatypes
+  in
+  Hashtbl.iter
+    (fun name (template : Typed_core.constructor) ->
+      match constructor_candidates template.symbol.key with
+      | [ constructor ] -> Hashtbl.replace constructors_by_name name constructor
+      | _ -> ())
+    program.registry.constructors_by_name;
+  Hashtbl.iter
+    (fun uid (template : Typed_core.constructor) ->
+      match constructor_candidates template.symbol.key with
+      | [ constructor ] -> Hashtbl.replace constructors_by_uid uid constructor
+      | _ -> ())
+    program.registry.constructors_by_uid;
+  let fields_by_name = Hashtbl.create 32 in
+  let fields_by_uid = Hashtbl.create 32 in
+  let specialize_field table key ((template : Typed_core.constructor), index) =
+    match constructor_candidates template.Typed_core.symbol.key with
+    | [ constructor ] -> Hashtbl.replace table key (constructor, index)
+    | _ -> ()
+  in
+  Hashtbl.iter (specialize_field fields_by_name) program.registry.fields_by_name;
+  Hashtbl.iter (specialize_field fields_by_uid) program.registry.fields_by_uid;
+  let registry =
+    {
+      program.registry with
+      constructors_by_uid;
+      constructors_by_name;
+      fields_by_uid;
+      fields_by_name;
+      datatypes;
+    }
+  in
+  { program with registry }
 
 let typed_formula ?(scope = []) registry env expression =
   let rec translate env expression =
@@ -480,6 +636,109 @@ let generic_constraint_smt ~loc (constraint_ : Generic_refinement.constraint_) =
 
 let under_path path condition =
   match path with [] -> condition | _ -> app "=>" [ and_ path; condition ]
+
+let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
+    arguments result_sort =
+  let open Typed_core in
+  let substitutions = Sort_evars.create () in
+  let unify formal actual =
+    match Sort_evars.unify substitutions ~formal ~actual with
+    | Ok () -> ()
+    | Error (Occurs (variable, actual)) ->
+        typed_error_at loc "cyclic call-site type instance `%s` in %s" variable
+          (typed_smt_sort actual)
+    | Error (Shape_mismatch (formal, actual)) ->
+        typed_error_at loc "call-site type mismatch: expected %s but got %s"
+          (typed_smt_sort formal) (typed_smt_sort actual)
+  in
+  List.iter2
+    (fun (_, formal) (actual : Typed_core.expr) -> unify formal actual.sort)
+    function_def.arguments arguments;
+  unify function_def.result result_sort;
+  let substitute = Sort_evars.substitute substitutions in
+  let constructor (constructor : Typed_core.constructor) =
+    {
+      constructor with
+      arguments = List.map substitute constructor.arguments;
+      result = substitute constructor.result;
+    }
+  in
+  let constructor_for_result constructor_ result =
+    let constructor_ = constructor constructor_ in
+    let local = Sort_evars.create () in
+    match Sort_evars.unify local ~formal:constructor_.result ~actual:result with
+    | Ok () ->
+        let substitute = Sort_evars.substitute local in
+        {
+          constructor_ with
+          arguments = List.map substitute constructor_.arguments;
+          result;
+        }
+    | Error _ -> { constructor_ with result }
+  in
+  let rec pattern expected = function
+    | Typed_core.Pat_tuple (_, patterns) ->
+        let elements =
+          match expected with
+          | S_tuple elements when List.length elements = List.length patterns ->
+              elements
+          | _ -> List.map (fun _ -> S_unit) patterns
+        in
+        Pat_tuple (expected, List.map2 pattern elements patterns)
+    | Pat_construct (constructor_, patterns) ->
+        let constructor_ = constructor_for_result constructor_ expected in
+        Pat_construct
+          (constructor_, List.map2 pattern constructor_.arguments patterns)
+    | Pat_alias (inner, symbol) -> Pat_alias (pattern expected inner, symbol)
+    | (Pat_any | Pat_var _ | Pat_int _ | Pat_bool _) as pattern -> pattern
+  in
+  let rec map_expression (current : Typed_core.expr) =
+    let sort = substitute current.sort in
+    let desc =
+      match current.desc with
+      | (Var _ | Int _ | Bool _) as desc -> desc
+      | Tuple expressions -> Tuple (List.map map_expression expressions)
+      | Construct (constructor_, expressions) ->
+          Construct
+            ( constructor_for_result constructor_ sort,
+              List.map map_expression expressions )
+      | Choose expressions -> Choose (List.map map_expression expressions)
+      | Apply (symbol, expressions) ->
+          Apply (symbol, List.map map_expression expressions)
+      | If (condition, if_true, if_false) ->
+          If
+            ( map_expression condition,
+              map_expression if_true,
+              map_expression if_false )
+      | Let (symbol, value, body) ->
+          Let (symbol, map_expression value, map_expression body)
+      | Match (scrutinee, cases) ->
+          let scrutinee = map_expression scrutinee in
+          Match
+            ( scrutinee,
+              List.map
+                (fun (pattern_, body) ->
+                  (pattern scrutinee.sort pattern_, map_expression body))
+                cases )
+      | Record (constructor_, expressions) ->
+          Record
+            ( constructor_for_result constructor_ sort,
+              List.map map_expression expressions )
+      | Field (constructor_, index, record) ->
+          let record = map_expression record in
+          Field (constructor_for_result constructor_ record.sort, index, record)
+    in
+    { current with desc; sort }
+  in
+  {
+    function_def with
+    arguments =
+      List.map
+        (fun (symbol, sort) -> (symbol, substitute sort))
+        function_def.arguments;
+    result = substitute function_def.result;
+    body = map_expression function_def.body;
+  }
 
 let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
     current_function path call_stack choices generic_calls env expression =
@@ -685,6 +944,22 @@ and typed_inline_call program analysis mode current_function path call_stack
       if List.length arguments <> List.length function_def.arguments then
         typed_error_at expression.loc
           "call to `%s` has unsupported partial arity" symbol.display;
+      let function_def =
+        instantiate_function_at_call ~loc:expression.loc function_def arguments
+          expression.sort
+      in
+      let call_program = typed_monomorphize_datatypes program function_def in
+      List.iter
+        (fun (datatype : Typed_core.datatype) ->
+          if
+            not
+              (List.exists
+                 (fun (existing : Typed_core.datatype) ->
+                   existing.owner = datatype.owner)
+                 program.registry.datatypes)
+          then
+            program.registry.datatypes <- datatype :: program.registry.datatypes)
+        call_program.registry.datatypes;
       let values =
         List.map
           (typed_expr_smt_with_choices program analysis mode current_function
@@ -892,6 +1167,10 @@ let typed_datatype_prelude program function_def =
         sort <> "Int" && sort <> "Bool"
         && not (List.mem sort datatype_sort_names)
       then line "(declare-sort %s 0)" sort);
+  List.iter
+    (fun (datatype : Typed_core.datatype) ->
+      line "(declare-sort %s 0)" (typed_smt_sort datatype.Typed_core.owner))
+    program.registry.datatypes;
   typed_collect_sort_values program function_def
   |> List.iter (function
     | Typed_core.S_tuple elements as tuple_sort ->
@@ -936,10 +1215,6 @@ let typed_datatype_prelude program function_def =
         line "(assert (forall ((v %s)) (= v %s)))" tuple_name
           (app constructor fields)
     | _ -> ());
-  List.iter
-    (fun (datatype : Typed_core.datatype) ->
-      line "(declare-sort %s 0)" (typed_smt_sort datatype.Typed_core.owner))
-    program.registry.datatypes;
   let declared_logic = Hashtbl.create 16 in
   Hashtbl.iter
     (fun _ (logic_symbol : Typed_core.logic_symbol) ->
@@ -1101,6 +1376,7 @@ let typed_obligation (program : Typed_core.program) analysis
   let program =
     typed_specialize_program program function_def pre_expression post_expression
   in
+  let program = typed_monomorphize_datatypes program function_def in
   let body, choices, generic_calls =
     typed_expr_smt program analysis contract.mode function_def env
       function_def.body

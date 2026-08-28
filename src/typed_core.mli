@@ -8,7 +8,7 @@ type sort =
   | S_tuple of sort list
   | S_app of symbol * sort list
 
-type constructor = { symbol : symbol; arguments : sort list }
+type constructor = { symbol : symbol; arguments : sort list; result : sort }
 type datatype = { owner : sort; constructors : constructor list }
 
 type logic_symbol = {
@@ -82,6 +82,7 @@ type registry = {
   mutable lemmas : axiom list;
   mutable checked_lemmas : axiom list;
   mutable proof_artifacts : Refined_types.proof_artifact list;
+  mutable datatype_templates : datatype list;
   mutable datatypes : datatype list;
 }
 

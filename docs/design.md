@@ -144,7 +144,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-用户 ADT monomorphisation、可重放 proof certificate、增量缓存。
+dependency-driven axiom slicing、可重放 proof certificate、增量缓存。
 
 ### M2
 

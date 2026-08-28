@@ -248,6 +248,16 @@ constructor coverage，从而得到 disjointness、injectivity 与 exhaustivenes
 默认**没有 induction axiom**，所以模型仍可能包含非标准或循环元素。需要归纳时必须通过
 well-founded measure、checked lemma 或有限展开显式引入。
 
+参数化用户 ADT 会在每个 obligation 中按实际闭合类型实例化。例如 `'a box` 在两个不同使用点会
+得到独立的 `T_box_Int` 与 `T_box_Bool` theory；constructor、recognizer、selector 和代数 axioms 的
+名字也包含实例 sort，不会跨实例混用。递归参数化 ADT 会递归替换其 field sorts，多态一阶 helper
+在 inline 时根据 Typedtree call-site types 实例化整个 Core body。
+
+Checker 只为当前 obligation 及其 inline 调用实际出现的闭合实例生成 theory。仍含 `S_var` 的开放
+ADT obligation 会 fail closed，因为它无法有限 monomorphise。同一 VC 可以在程序表达式中使用同一
+constructor 的多个实例；但未带类型信息的 contract 字符串若直接写这个歧义 constructor/field，仍会
+拒绝，等待 typed logic AST 提供 expected-sort disambiguation。
+
 ## 支持范围
 
 | 特性 | 状态 | 编码 |
@@ -256,8 +266,8 @@ well-founded measure、checked lemma 或有限展开显式引入。
 | `int` / `bool`、算术、比较、布尔连接 | 支持 | SMT Int/Bool |
 | `if`、简单局部 `let` | 支持 | `ite` / substitution |
 | tuple | 支持 | uninterpreted product + selectors |
-| 单态 variant、constructor、exhaustive `match` | 支持 | uninterpreted sort + axioms |
-| immutable record、字段读取 | 支持 | 单 constructor + selectors |
+| 单态/参数化 variant、constructor、exhaustive `match` | 支持 | use-site monomorphisation + axioms |
+| 单态/参数化 immutable record、字段读取 | 支持 | instance-specific constructor/selectors |
 | 普通多态函数的 first-order 调用 | 支持 | Typedtree + inlining |
 | module predicate/axiom/checked lemma 与 `.rmi` | 支持 | scoped FOL + verification artifact |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
@@ -265,7 +275,7 @@ well-founded measure、checked lemma 或有限展开显式引入。
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
 | safety 函数 summary、直接/互递归 | 支持 | call-graph SCC + `int` measure |
 | 递归 coverage | 明确拒绝 | 需要 compositional under-summary/witness |
-| 多态用户 ADT、高阶值 | 明确拒绝 | 需要 monomorphisation/closure |
+| 开放 polymorphic ADT obligation、高阶值 | 明确拒绝 | 需要 finite instances/closure |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
@@ -278,7 +288,7 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 参数化用户 ADT 的按使用点 monomorphisation；
+1. ADT/axiom slicing，只发射当前 VC 可达的 theory bundle；
 2. functor/theory transformer 与 generativity；
 3. 关系化 mutation、exception 和 effect handler。
 
