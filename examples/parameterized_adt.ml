@@ -34,3 +34,7 @@ let[@refined.over { pre = "true"; post = "true" }] int_tree (x : int) : int tree
 let[@refined.over { pre = "true"; post = "true" }] both_boxes (x : int)
     (flag : bool) : int box * bool box =
   (Box x, Box flag)
+
+let[@refined.over { pre = "true"; post = "result = input" }] opaque_box
+    (input : int box) : int box =
+  input

@@ -1236,9 +1236,12 @@ let read_rmi path =
   let rec validate_artifacts checked = function
     | [] -> ()
     | (artifact : Refined_types.proof_artifact) :: rest ->
+        let subset members available =
+          List.for_all (fun member -> List.mem member available) members
+        in
         if
-          artifact.trusted_axioms <> trusted_axioms
-          || artifact.checked_dependencies <> checked
+          (not (subset artifact.trusted_axioms trusted_axioms))
+          || (not (subset artifact.checked_dependencies checked))
           || artifact.vc_digest = "" || artifact.solver = ""
           || artifact.timeout_seconds <= 0
         then

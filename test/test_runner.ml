@@ -368,6 +368,10 @@ let () =
       | "both_boxes" ->
           if not (has_int_box && has_bool_box) then
             failwith "two concrete instances were not emitted together"
+      | "opaque_box" ->
+          if not has_int_box then failwith "opaque ADT sort was not declared";
+          if contains obligation.smt "(declare-fun C_" then
+            failwith "opaque ADT flow emitted an unused constructor bundle"
       | "int_cell" ->
           if
             not
@@ -465,6 +469,49 @@ let () =
   | exception Location.Error _ ->
       if Sys.file_exists "invalid_lemma_theory.rmi" then
         failwith "failed lemma checking left an .rmi artifact");
+  run
+    "ocamlc -bin-annot -c ../examples/slicing_theory.mli -o slicing_theory.cmi";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/slicing_theory.ml -o \
+     slicing_theory.cmo";
+  run
+    "ocamlc -bin-annot -I . -c ../examples/slicing_client.ml -o \
+     slicing_client.cmo";
+  write_rmi ~cmti:"slicing_theory.cmti" ~output:"slicing_theory.rmi";
+  obligations_of_cmt_with_theories ~theories:[ "slicing_theory.rmi" ]
+    "slicing_client.cmt"
+  |> List.iter (fun obligation ->
+      (match obligation.name with
+      | "use_left" ->
+          if
+            obligation.trusted_axioms <> [ "Slicing_theory.p_implies_q" ]
+            || obligation.checked_lemmas
+               <> [ "Slicing_theory.not_q_implies_not_p" ]
+          then failwith "left theory slice has the wrong provenance";
+          if
+            contains obligation.smt "r_implies_s"
+            || contains obligation.smt "not_s_implies_not_r"
+          then failwith "left theory slice retained the disjoint right cluster"
+      | "use_right" ->
+          if
+            obligation.trusted_axioms <> [ "Slicing_theory.r_implies_s" ]
+            || obligation.checked_lemmas
+               <> [ "Slicing_theory.not_s_implies_not_r" ]
+          then failwith "right theory slice has the wrong provenance";
+          if
+            contains obligation.smt "p_implies_q"
+            || contains obligation.smt "not_q_implies_not_p"
+          then failwith "right theory slice retained the disjoint left cluster"
+      | "identity" ->
+          if
+            obligation.trusted_axioms <> []
+            || obligation.checked_lemmas <> []
+            || obligation.proof_artifacts <> []
+          then failwith "theory-free obligation retained imported statements";
+          if contains obligation.smt "L_Slicing_theory" then
+            failwith "theory-free obligation retained logic declarations"
+      | name -> failwith ("unexpected slicing obligation " ^ name));
+      require `Valid obligation);
   run "ocamlc -bin-annot -c ../examples/list_theory.mli -o list_theory.cmi";
   run "ocamlc -bin-annot -I . -c ../examples/list_theory.ml -o list_theory.cmo";
   run

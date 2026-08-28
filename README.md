@@ -258,6 +258,13 @@ ADT obligation 会 fail closed，因为它无法有限 monomorphise。同一 VC 
 constructor 的多个实例；但未带类型信息的 contract 字符串若直接写这个歧义 constructor/field，仍会
 拒绝，等待 typed logic AST 提供 expected-sort disambiguation。
 
+Theory 发射还会做 dependency-driven slicing。Roots 来自 contract、Core 中实际使用的
+constructor/field/pattern、logic call 和 function summary；命中 statement 后，把该 axiom/lemma 中的
+全部 symbols 加入闭包。Checked lemma 会同时保留 verification artifact 记录的 trusted 和 checked
+dependencies。未使用的 logic declarations、statements、artifacts 和 ADT bundles 不进入 SMT；只有 ADT
+sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory symbol 的全局算术 axiom 会被保守
+切掉，除非被 artifact 显式依赖。
+
 ## 支持范围
 
 | 特性 | 状态 | 编码 |
@@ -270,6 +277,7 @@ constructor 的多个实例；但未带类型信息的 contract 字符串若直�
 | 单态/参数化 immutable record、字段读取 | 支持 | instance-specific constructor/selectors |
 | 普通多态函数的 first-order 调用 | 支持 | Typedtree + inlining |
 | module predicate/axiom/checked lemma 与 `.rmi` | 支持 | scoped FOL + verification artifact |
+| dependency-driven theory slicing | 支持 | symbol/dependency least closure |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
 | 二选一 nondeterministic `choose` | 支持 | demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
@@ -279,7 +287,7 @@ constructor 的多个实例；但未带类型信息的 contract 字符串若直�
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
-| Evar/Hindley/Horn/function-SCC fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
+| Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
 
 未支持的 Typedtree node 会报错。
@@ -288,7 +296,7 @@ constructor 的多个实例；但未带类型信息的 contract 字符串若直�
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. ADT/axiom slicing，只发射当前 VC 可达的 theory bundle；
+1. 带 expected sort 的 typed logic AST，消除多实例 constructor/field 歧义；
 2. functor/theory transformer 与 generativity；
 3. 关系化 mutation、exception 和 effect handler。
 

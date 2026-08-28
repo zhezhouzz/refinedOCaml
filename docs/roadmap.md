@@ -11,7 +11,7 @@
 | B. Module theory | 用 module/signature 管理 predicates 和 axioms | `.mli` 可导出 `[@@refined.predicate]` 和 `[@@@refined.axiom]`；`.cmti -> .rmi`；客户端通过 `--theory` 导入 | MVP 已完成 | 支持 abstract type theory、module alias、functor theory transformer |
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` 保存 OCaml version、unit name、`.cmi` digest；加载时检查 imports 和 digest | MVP 已完成 | 设计 `.rmi` 稳定格式，避免直接 `Marshal` 作为长期 artifact |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
-| B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态及参数化 variant/record 已支持；每个 obligation 收集闭合实例并生成隔离的 constructor/recognizer/selector 与代数 axioms；多态 inline 会实例化 Core body | Monomorphisation MVP 已完成 | 加入 dependency-driven ADT/axiom slicing；为 logic AST 增加 expected-sort 消歧 |
+| B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT use-site monomorphisation 与 dependency-driven slicing 已完成；roots 经 statement symbols、lemma artifact dependencies 求 least closure；opaque flow 不发射代数 bundle | Slicing MVP 已完成 | 为 logic AST 增加 expected-sort 消歧；研究更细的 constructor axiom bundle |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
 | C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn fixpoint 与 safety 函数 summary、递归 call-graph SCC、路径敏感 termination VC 已完成 | Safety/Generic 阶段完成 | 设计 compositional coverage judgment 与 under-summary |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 当前 coverage 是 `forall result. post(result) => exists input. pre(input) /\ result = f(input)` 的 SMT obligation | 未完成 | 设计 coverage judgment、subtyping/entailment、witness/inverse 支持 |
@@ -83,7 +83,7 @@ forall result. post(result) => exists input. pre(input) /\ result = f(input)
 
 仓库现在固定 OCaml 5.3.0，提交 `refined_ocaml.opam.locked`，提供 `dev/setup-switch.sh`，并由 GitHub
 Actions 运行 `@all/@install/@refined/@fmt/@fuzz`，autofix.ci 自动提交 `dune fmt` 修复。fuzz job 固定
-seed 跑 20,000 个 evar/Hindley/Horn/function-SCC cases，并用图可达性作 oracle。`refined_ocaml.ir`
+seed 跑 20,000 个 evar/Hindley/Horn/function-SCC/theory-slice cases，并用图闭包作 oracle。`refined_ocaml.ir`
 不依赖 compiler-libs；所有版本敏感 API 集中在 `Ocaml_5_3_frontend`。升级流程记录在
 `docs/versioning.md`。
 
@@ -99,6 +99,10 @@ checked lemma 不计入 trusted axiom provenance。当前 artifact 记录 VC dig
 sort；constructor family 按 result sort 隔离；多态 first-order inline 会同步替换 body/pattern/field
 sort。开放实例无法有限化时 fail closed。
 
-roadmap 的下一实现步骤是 dependency-driven ADT/axiom slicing，减少当前仍会整体发射的 theory
-bundle。递归 coverage 暂不借用 safety summary：它需要先定义固定实参下可组合的 under-summary 和
-witness 规则。
+Dependency-driven ADT/axiom slicing 也已完成。Contract/Core/summary symbols 构成 roots，axiom 与
+lemma symbols 及 verification-artifact dependencies 构成保守 least closure；logic declarations、
+provenance、artifacts 与 ADT bundle 一起过滤。只作为值流过的 ADT 保持 opaque sort。
+
+roadmap 的下一实现步骤是带 expected sort 的 typed logic AST，解决同一 VC 多个 ADT 实例下的
+constructor/field 消歧。递归 coverage 暂不借用 safety summary：它需要先定义固定实参下可组合的
+under-summary 和 witness 规则。

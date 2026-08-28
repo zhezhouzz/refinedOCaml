@@ -517,6 +517,114 @@ let typed_formula ?(scope = []) registry env expression =
   in
   translate env expression
 
+let formula_theory_symbols ?(scope = []) registry expression =
+  let symbols = Hashtbl.create 16 in
+  let add symbol = Hashtbl.replace symbols symbol () in
+  let rec collect expression =
+    match expression.Parsetree.pexp_desc with
+    | Pexp_ident { txt; _ } ->
+        let name = longident_name txt in
+        Option.iter
+          (fun (logic_symbol : Typed_core.logic_symbol) ->
+            add logic_symbol.logic_name.key)
+          (typed_lookup_logic registry scope name)
+    | Pexp_construct ({ txt; _ }, argument) ->
+        let name = longident_last txt in
+        Option.iter
+          (fun (constructor : Typed_core.constructor) ->
+            add constructor.symbol.key)
+          (Hashtbl.find_opt registry.Typed_core.constructors_by_name name);
+        Option.iter collect argument
+    | Pexp_apply (function_, arguments) ->
+        collect function_;
+        List.iter (fun (_, argument) -> collect argument) arguments
+    | Pexp_field (record, { txt; _ }) ->
+        let name = longident_last txt in
+        Option.iter
+          (fun ((constructor : Typed_core.constructor), _) ->
+            add constructor.symbol.key)
+          (Hashtbl.find_opt registry.fields_by_name name);
+        collect record
+    | Pexp_tuple expressions -> List.iter collect expressions
+    | Pexp_constant _ -> ()
+    | _ -> ()
+  in
+  collect expression;
+  Hashtbl.fold (fun symbol () result -> symbol :: result) symbols []
+
+let slice_program_theory (program : Typed_core.program) ~roots =
+  let registry = program.registry in
+  let artifacts_by_name = Hashtbl.create 16 in
+  List.iter
+    (fun (artifact : Refined_types.proof_artifact) ->
+      Hashtbl.replace artifacts_by_name artifact.lemma_name artifact)
+    registry.proof_artifacts;
+  let statement kind (axiom : Typed_core.axiom) =
+    let formula =
+      parse_formula ~filename:axiom.loc.file
+        ~loc:(location_of_span axiom.loc)
+        axiom.body
+    in
+    let symbols =
+      formula_theory_symbols ~scope:axiom.scope registry formula
+      |> List.sort_uniq String.compare
+    in
+    let requires =
+      match kind with
+      | `Axiom -> []
+      | `Lemma -> (
+          match Hashtbl.find_opt artifacts_by_name axiom.axiom_name with
+          | Some artifact ->
+              artifact.trusted_axioms @ artifact.checked_dependencies
+          | None -> [])
+    in
+    Theory_slice.{ name = axiom.axiom_name; symbols; requires }
+  in
+  let axioms = List.rev registry.axioms in
+  let lemmas = List.rev registry.checked_lemmas in
+  let statements =
+    List.map (statement `Axiom) axioms @ List.map (statement `Lemma) lemmas
+  in
+  let slice = Theory_slice.close ~roots statements in
+  let selected_name name = List.mem name slice.statement_names in
+  let selected_symbol symbol = List.mem symbol slice.symbols in
+  let axioms =
+    List.filter (fun axiom -> selected_name axiom.Typed_core.axiom_name) axioms
+  in
+  let checked_lemmas =
+    List.filter (fun lemma -> selected_name lemma.Typed_core.axiom_name) lemmas
+  in
+  let proof_artifacts =
+    List.rev registry.proof_artifacts
+    |> List.filter (fun artifact -> selected_name artifact.lemma_name)
+  in
+  let logic_by_name = Hashtbl.create 16 in
+  Hashtbl.iter
+    (fun name (logic_symbol : Typed_core.logic_symbol) ->
+      if selected_symbol logic_symbol.logic_name.key then
+        Hashtbl.replace logic_by_name name logic_symbol)
+    registry.logic_by_name;
+  let datatypes =
+    List.filter
+      (fun (datatype : Typed_core.datatype) ->
+        List.exists
+          (fun (constructor : Typed_core.constructor) ->
+            selected_symbol constructor.symbol.key)
+          datatype.constructors)
+      registry.datatypes
+  in
+  let registry =
+    {
+      registry with
+      logic_by_name;
+      axioms = List.rev axioms;
+      checked_lemmas = List.rev checked_lemmas;
+      proof_artifacts = List.rev proof_artifacts;
+      datatypes;
+    }
+  in
+  ({ program with registry }, slice.symbols)
+
 type smt_value = { term : string; refinement : Generic_refinement.type_ option }
 
 let typed_pattern_smt env scrutinee pattern =
@@ -567,6 +675,7 @@ type generic_call_state = {
   mutable side_conditions : string list;
   mutable summary_assumptions : string list;
   mutable ghost_instantiations : string list;
+  mutable used_theory_symbols : string list;
 }
 
 let new_generic_call_state () =
@@ -575,7 +684,20 @@ let new_generic_call_state () =
     side_conditions = [];
     summary_assumptions = [];
     ghost_instantiations = [];
+    used_theory_symbols = [];
   }
+
+let use_theory_symbol state symbol =
+  if not (List.mem symbol state.used_theory_symbols) then
+    state.used_theory_symbols <- symbol :: state.used_theory_symbols
+
+let rec use_pattern_theory state = function
+  | Typed_core.Pat_construct (constructor, patterns) ->
+      use_theory_symbol state constructor.symbol.key;
+      List.iter (use_pattern_theory state) patterns
+  | Pat_tuple (_, patterns) -> List.iter (use_pattern_theory state) patterns
+  | Pat_alias (pattern, _) -> use_pattern_theory state pattern
+  | Pat_any | Pat_var _ | Pat_int _ | Pat_bool _ -> ()
 
 let rec generic_term_smt =
   let open Generic_refinement in
@@ -765,6 +887,7 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
   | Int value -> make (string_of_int value)
   | Bool value -> make (string_of_bool value)
   | Construct (constructor, arguments) | Record (constructor, arguments) ->
+      use_theory_symbol generic_calls constructor.symbol.key;
       let arguments = List.map recurse_term arguments in
       make
         (if arguments = [] then typed_constructor_name constructor
@@ -829,6 +952,7 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
       | None -> (
           match typed_lookup_logic registry [] symbol.key with
           | Some logic_symbol ->
+              use_theory_symbol generic_calls logic_symbol.logic_name.key;
               if List.length logic_symbol.arguments <> 2 then
                 typed_error_at expression.loc
                   "logical predicate `%s` has an unsupported application arity"
@@ -851,6 +975,7 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
       in
       match typed_lookup_logic registry [] symbol.key with
       | Some logic_symbol ->
+          use_theory_symbol generic_calls logic_symbol.logic_name.key;
           if List.length arguments <> List.length logic_symbol.arguments then
             typed_error_at expression.loc
               "logical predicate `%s` has an unsupported application arity"
@@ -884,6 +1009,9 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
         body
   | Match (scrutinee, cases) ->
       let scrutinee = recurse_term scrutinee in
+      List.iter
+        (fun (pattern, _) -> use_pattern_theory generic_calls pattern)
+        cases;
       let translated =
         let rec translate previous = function
           | [] -> []
@@ -921,6 +1049,7 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
       in
       make ~refinement (tree translated)
   | Field (constructor, index, record) ->
+      use_theory_symbol generic_calls constructor.symbol.key;
       make (app (typed_selector constructor index) [ recurse_term record ])
   | Tuple elements ->
       make
@@ -993,17 +1122,27 @@ and typed_inline_call program analysis mode current_function path call_stack
             function_def.arguments terms
         in
         let translate formula =
-          parse_formula ~filename:summary.loc.file
-            ~loc:(location_of_span summary.loc)
-            formula
-          |> typed_formula program.registry formula_env
+          let formula =
+            parse_formula ~filename:summary.loc.file
+              ~loc:(location_of_span summary.loc)
+              formula
+          in
+          formula_theory_symbols program.registry formula
+          |> List.iter (use_theory_symbol generic_calls);
+          typed_formula program.registry formula_env formula
         in
         let pre = translate summary.pre in
         let post =
-          parse_formula ~filename:summary.loc.file
-            ~loc:(location_of_span summary.loc)
-            summary.post
-          |> typed_formula program.registry (("result", result) :: formula_env)
+          let formula =
+            parse_formula ~filename:summary.loc.file
+              ~loc:(location_of_span summary.loc)
+              summary.post
+          in
+          formula_theory_symbols program.registry formula
+          |> List.iter (use_theory_symbol generic_calls);
+          typed_formula program.registry
+            (("result", result) :: formula_env)
+            formula
         in
         generic_calls.side_conditions <-
           under_path path pre :: generic_calls.side_conditions;
@@ -1381,6 +1520,13 @@ let typed_obligation (program : Typed_core.program) analysis
     typed_expr_smt program analysis contract.mode function_def env
       function_def.body
   in
+  let roots =
+    generic_calls.used_theory_symbols
+    @ formula_theory_symbols program.registry pre_expression
+    @ formula_theory_symbols program.registry post_expression
+    |> List.sort_uniq String.compare
+  in
+  let program, _enabled_symbols = slice_program_theory program ~roots in
   let pre = typed_formula program.registry formula_env pre_expression in
   let result_name =
     match contract.mode with Over -> "result" | Under -> "missing_result"
@@ -1472,16 +1618,19 @@ let lemma_obligations registry lemmas =
           measure = None;
         }
     in
-    let program = Typed_core.{ registry; functions = [] } in
     let formula =
       parse_formula ~filename:lemma.loc.file
         ~loc:(location_of_span lemma.loc)
         lemma.body
     in
+    let roots = formula_theory_symbols ~scope:lemma.scope registry formula in
+    let program = Typed_core.{ registry; functions = [] } in
+    let program, _enabled_symbols = slice_program_theory program ~roots in
+    let sliced_registry = program.Typed_core.registry in
     let env =
       List.map (fun (name, _) -> (name, smt_identifier name)) lemma.variables
     in
-    let body = typed_formula ~scope:lemma.scope registry env formula in
+    let body = typed_formula ~scope:lemma.scope sliced_registry env formula in
     let binders =
       String.concat " "
         (List.map
@@ -1508,12 +1657,12 @@ let lemma_obligations registry lemmas =
       trusted_axioms =
         List.rev_map
           (fun (axiom : Typed_core.axiom) -> axiom.axiom_name)
-          registry.axioms;
+          sliced_registry.axioms;
       checked_lemmas =
         List.rev_map
           (fun (lemma : Typed_core.axiom) -> lemma.axiom_name)
-          registry.checked_lemmas;
-      proof_artifacts = List.rev registry.proof_artifacts;
+          sliced_registry.checked_lemmas;
+      proof_artifacts = List.rev sliced_registry.proof_artifacts;
       ghost_instantiations = [];
     }
   in

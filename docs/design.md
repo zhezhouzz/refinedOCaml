@@ -144,7 +144,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-dependency-driven axiom slicing、可重放 proof certificate、增量缓存。
+typed logic AST/expected-sort elaboration、可重放 proof certificate、增量缓存。
 
 ### M2
 

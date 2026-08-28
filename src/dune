@@ -6,6 +6,7 @@
   refined_types
   typed_core
   function_analysis
+  theory_slice
   evar_context
   horn_fixpoint
   generic_refinement

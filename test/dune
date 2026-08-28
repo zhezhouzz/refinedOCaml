@@ -35,7 +35,10 @@
   ../examples/lemma_client.ml
   ../examples/invalid_lemma_theory.mli
   ../examples/parameterized_adt.ml
-  ../examples/open_parameterized_adt.ml))
+  ../examples/open_parameterized_adt.ml
+  ../examples/slicing_theory.mli
+  ../examples/slicing_theory.ml
+  ../examples/slicing_client.ml))
 
 (executable
  (name ppx_sample)

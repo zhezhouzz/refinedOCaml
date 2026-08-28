@@ -98,8 +98,14 @@ Use-site monomorphisation for parameterized user ADTs is now implemented. Closed
 obligation, constructor families are keyed by result sort, recursive fields are substituted, and polymorphic
 first-order inline calls instantiate their complete Core body. Open ADT instances fail closed.
 
-The next implementation slice is dependency-driven ADT/axiom slicing. A later coverage slice must define its
-own call judgment and witness-carrying under-summary instead of reusing the safety rule.
+Dependency-driven ADT/axiom slicing is now implemented as a least closure over contract/Core/summary roots,
+statement symbols, and checked-lemma artifact dependencies. Logic declarations, provenance, proof artifacts
+and complete ADT bundles are filtered together; an ADT used only as a value sort stays opaque. Random dependency
+graphs are checked against an independent fixed-point oracle.
+
+The next implementation slice is a typed logic AST with expected-sort elaboration for constructor/field
+disambiguation. A later coverage slice must define its own call judgment and witness-carrying under-summary
+instead of reusing the safety rule.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

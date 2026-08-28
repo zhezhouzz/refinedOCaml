@@ -436,6 +436,94 @@ let fuzz_function_scc random case =
     done
   done
 
+let fuzz_theory_slice random case =
+  let statement_count = 1 + Random.State.int random 8 in
+  let symbol_count = 1 + Random.State.int random 8 in
+  let names =
+    Array.init statement_count (fun index -> "A" ^ string_of_int index)
+  in
+  let symbols =
+    Array.init symbol_count (fun index -> "S" ^ string_of_int index)
+  in
+  let statement_symbols =
+    Array.make_matrix statement_count symbol_count false
+  in
+  let requirements = Array.make_matrix statement_count statement_count false in
+  let statements =
+    List.init statement_count (fun statement ->
+        let used_symbols =
+          List.init symbol_count Fun.id
+          |> List.filter_map (fun symbol ->
+              let used = Random.State.int random 4 = 0 in
+              statement_symbols.(statement).(symbol) <- used;
+              if used then Some symbols.(symbol) else None)
+        in
+        let requires =
+          List.init statement_count Fun.id
+          |> List.filter_map (fun dependency ->
+              let required = Random.State.int random 8 = 0 in
+              requirements.(statement).(dependency) <- required;
+              if required then Some names.(dependency) else None)
+        in
+        Refined_ir.Theory_slice.
+          { name = names.(statement); symbols = used_symbols; requires })
+  in
+  let active_symbols =
+    Array.init symbol_count (fun _ -> Random.State.int random 4 = 0)
+  in
+  let roots =
+    List.init symbol_count Fun.id
+    |> List.filter_map (fun symbol ->
+        if active_symbols.(symbol) then Some symbols.(symbol) else None)
+  in
+  let selected = Array.make statement_count false in
+  let required_names = Array.make statement_count false in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    for statement = 0 to statement_count - 1 do
+      let touches_active =
+        let found = ref false in
+        for symbol = 0 to symbol_count - 1 do
+          found :=
+            !found
+            || statement_symbols.(statement).(symbol)
+               && active_symbols.(symbol)
+        done;
+        !found
+      in
+      if
+        (required_names.(statement) || touches_active)
+        && not selected.(statement)
+      then (
+        selected.(statement) <- true;
+        changed := true;
+        for symbol = 0 to symbol_count - 1 do
+          if statement_symbols.(statement).(symbol) then
+            active_symbols.(symbol) <- true
+        done;
+        for dependency = 0 to statement_count - 1 do
+          if requirements.(statement).(dependency) then
+            required_names.(dependency) <- true
+        done)
+    done
+  done;
+  let expected_names =
+    List.init statement_count Fun.id
+    |> List.filter_map (fun statement ->
+        if selected.(statement) then Some names.(statement) else None)
+  in
+  let expected_symbols =
+    List.init symbol_count Fun.id
+    |> List.filter_map (fun symbol ->
+        if active_symbols.(symbol) then Some symbols.(symbol) else None)
+  in
+  let actual = Refined_ir.Theory_slice.close ~roots statements in
+  if actual.statement_names <> expected_names then
+    fail case "theory slice statement closure disagreed with graph oracle";
+  if actual.symbols <> expected_symbols then
+    fail case "theory slice symbol closure disagreed with graph oracle"
+
 let () =
   let cases = env_int "REFINED_FUZZ_CASES" 5_000 in
   let seed = env_int "REFINED_FUZZ_SEED" 0x5eed_2026 in
@@ -447,7 +535,8 @@ let () =
       fuzz_hindley random case;
       fuzz_horn random case;
       fuzz_recursive_horn random case;
-      fuzz_function_scc random case
+      fuzz_function_scc random case;
+      fuzz_theory_slice random case
     done;
     Printf.printf "fuzz: %d cases passed (seed=%d)\n%!" cases seed
   with Fuzz_failure (case, message) ->
