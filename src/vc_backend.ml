@@ -263,7 +263,9 @@ let typed_specialize_program (program : Typed_core.program)
         recurse scrutinee;
         List.iter (fun (_, body) -> recurse body) cases
     | Field (_, _, record) -> recurse record
-    | Var _ | Int _ | Bool _ | Raise _ | Perform _ | Deref _ -> ()
+    | Var _ | Int _ | Bool _ | Raise (_, None) | Perform (_, None) | Deref _ ->
+        ()
+    | Raise (_, Some payload) | Perform (_, Some payload) -> recurse payload
     | Try (body, cases) ->
         recurse body;
         List.iter (fun (_, handler) -> recurse handler) cases
@@ -277,7 +279,7 @@ let typed_specialize_program (program : Typed_core.program)
     | Handle (body, handlers) ->
         recurse body;
         List.iter
-          (fun (_, action) ->
+          (fun (_, _, action) ->
             match action with
             | Typed_core.Abort handler | Typed_core.Resume handler ->
                 recurse handler)
@@ -377,7 +379,10 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
   let rec collect_expression (expression : Typed_core.expr) =
     collect expression.sort;
     match expression.desc with
-    | Var _ | Int _ | Bool _ | Raise _ | Perform _ | Deref _ -> ()
+    | Var _ | Int _ | Bool _ | Raise (_, None) | Perform (_, None) | Deref _ ->
+        ()
+    | Raise (_, Some payload) | Perform (_, Some payload) ->
+        collect_expression payload
     | Construct (constructor, expressions) | Record (constructor, expressions)
       ->
         collect constructor.result;
@@ -413,7 +418,7 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
     | Handle (body, handlers) ->
         collect_expression body;
         List.iter
-          (fun (_, action) ->
+          (fun (_, _, action) ->
             match action with
             | Typed_core.Abort handler | Typed_core.Resume handler ->
                 collect_expression handler)
@@ -1011,7 +1016,11 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
     let sort = substitute current.sort in
     let desc =
       match current.desc with
-      | (Var _ | Int _ | Bool _ | Raise _ | Perform _ | Deref _) as desc -> desc
+      | (Var _ | Int _ | Bool _ | Deref _) as desc -> desc
+      | Raise (exception_, payload) ->
+          Raise (exception_, Option.map map_expression payload)
+      | Perform (operation, payload) ->
+          Perform (operation, Option.map map_expression payload)
       | Tuple expressions -> Tuple (List.map map_expression expressions)
       | Construct (constructor_, expressions) ->
           Construct
@@ -1061,7 +1070,7 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
           Handle
             ( map_expression body,
               List.map
-                (fun (operation, action) ->
+                (fun (operation, payload, action) ->
                   let action =
                     match action with
                     | Typed_core.Abort handler ->
@@ -1069,7 +1078,7 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
                     | Typed_core.Resume value ->
                         Typed_core.Resume (map_expression value)
                   in
-                  (operation, action))
+                  (operation, payload, action))
                 handlers )
     in
     { current with desc; sort }
@@ -1576,16 +1585,83 @@ let typed_local_cells expression =
     | Record (_, expressions) ->
         List.fold_left collect cells expressions
     | Assign (_, value) | Field (_, _, value) -> collect cells value
-    | Var _ | Int _ | Bool _ | Raise _ | Perform _ | Deref _ -> cells
+    | Var _ | Int _ | Bool _ | Raise (_, None) | Perform (_, None) | Deref _ ->
+        cells
+    | Raise (_, Some payload) | Perform (_, Some payload) ->
+        collect cells payload
     | Handle (body, handlers) ->
         List.fold_left
-          (fun cells (_, action) ->
+          (fun cells (_, _, action) ->
             match action with
             | Typed_core.Abort handler | Typed_core.Resume handler ->
                 collect cells handler)
           (collect cells body) handlers
   in
   collect [] expression |> List.sort_uniq compare
+
+let typed_outcome_payload_sorts ?program expression =
+  let rec collect visited outcomes (expression : Typed_core.expr) =
+    match expression.desc with
+    | Raise (symbol, payload) ->
+        ( `Raised,
+          symbol.display,
+          Option.map (fun value -> value.Typed_core.sort) payload )
+        :: Option.fold ~none:outcomes ~some:(collect visited outcomes) payload
+    | Perform (symbol, payload) ->
+        ( `Performed,
+          symbol.display,
+          Option.map (fun value -> value.Typed_core.sort) payload )
+        :: Option.fold ~none:outcomes ~some:(collect visited outcomes) payload
+    | Let (_, value, body) | Sequence (value, body) ->
+        collect visited (collect visited outcomes value) body
+    | Let_ref (_, _, initial, body) ->
+        collect visited (collect visited outcomes initial) body
+    | If (condition, if_true, if_false) ->
+        collect visited
+          (collect visited (collect visited outcomes condition) if_true)
+          if_false
+    | Try (body, cases) ->
+        List.fold_left
+          (fun outcomes (_, handler) -> collect visited outcomes handler)
+          (collect visited outcomes body)
+          cases
+    | Match (body, cases) ->
+        List.fold_left
+          (fun outcomes (_, handler) -> collect visited outcomes handler)
+          (collect visited outcomes body)
+          cases
+    | Handle (body, handlers) ->
+        List.fold_left
+          (fun outcomes (_, _, action) ->
+            match action with
+            | Typed_core.Abort handler | Resume handler ->
+                collect visited outcomes handler)
+          (collect visited outcomes body)
+          handlers
+    | Apply (symbol, expressions) -> (
+        let outcomes = List.fold_left (collect visited) outcomes expressions in
+        match program with
+        | Some (program : Typed_core.program)
+          when not (List.mem symbol.key visited) -> (
+            match
+              List.find_opt
+                (fun (callee : Typed_core.function_def) ->
+                  callee.symbol.key = symbol.key)
+                program.functions
+            with
+            | Some callee ->
+                collect (symbol.key :: visited) outcomes callee.body
+            | None -> outcomes)
+        | None | Some _ -> outcomes)
+    | Tuple expressions
+    | Construct (_, expressions)
+    | Choose expressions
+    | Record (_, expressions) ->
+        List.fold_left (collect visited) outcomes expressions
+    | Assign (_, value) | Field (_, _, value) -> collect visited outcomes value
+    | Var _ | Int _ | Bool _ | Deref _ -> outcomes
+  in
+  collect [] [] expression |> List.sort_uniq compare
 
 let typed_relational_expr program analysis function_def env expression =
   let module R = Relational_outcome in
@@ -1595,32 +1671,227 @@ let typed_relational_expr program analysis function_def env expression =
   let continuation_counter = ref 0 in
   let rec translate env state (expression : Typed_core.expr) continuation =
     match expression.desc with
-    | Raise exception_ -> R.raise_ ~state exception_.display
-    | Perform operation ->
-        let id = "continuation_" ^ string_of_int !continuation_counter in
-        incr continuation_counter;
-        Hashtbl.add continuations id continuation;
-        R.perform ~state ~operation:operation.display ~payload:id
+    | Raise (exception_, None) -> R.raise_ ~state exception_.display
+    | Raise (exception_, Some payload) ->
+        translate env state payload (fun payload state ->
+            R.raise_ ~state ~payload exception_.display)
+    | Perform (operation, payload) -> (
+        let perform payload state =
+          let id = "continuation_" ^ string_of_int !continuation_counter in
+          incr continuation_counter;
+          Hashtbl.add continuations id continuation;
+          R.perform ?payload ~state ~operation:operation.display
+            ~continuation:id ()
+        in
+        match payload with
+        | None -> perform None state
+        | Some payload ->
+            translate env state payload (fun payload state ->
+                perform (Some payload) state))
+    | Apply (symbol, arguments) -> (
+        match
+          List.find_opt
+            (fun (callee : Typed_core.function_def) ->
+              callee.symbol.key = symbol.key && typed_has_exception callee.body)
+            program.Typed_core.functions
+        with
+        | None ->
+            let value =
+              typed_expr_smt_with_choices program analysis Over function_def []
+                [] choices generic_calls env expression
+            in
+            continuation value.term state
+        | Some callee ->
+            if
+              Function_analysis.is_recursive_edge analysis
+                ~caller:function_def.symbol.key ~callee:callee.symbol.key
+            then
+              typed_error_at expression.loc
+                "recursive effectful outcome summaries are not yet supported";
+            if List.length arguments <> List.length callee.arguments then
+              typed_error_at expression.loc
+                "effectful call `%s` has unsupported partial arity"
+                symbol.display;
+            if List.exists typed_has_exception arguments then
+              typed_error_at expression.loc
+                "effectful call arguments must be evaluated before the call";
+            let callee =
+              instantiate_function_at_call ~loc:expression.loc callee arguments
+                expression.sort
+            in
+            let contracts =
+              List.filter
+                (fun (contract : Typed_core.contract) -> contract.mode = Over)
+                callee.contracts
+            in
+            let summary =
+              match contracts with
+              | [ summary ] -> summary
+              | [] ->
+                  typed_error_at expression.loc
+                    "effectful call `%s` needs one safety outcome summary"
+                    symbol.display
+              | _ ->
+                  typed_error_at expression.loc
+                    "effectful call `%s` has ambiguous safety summaries"
+                    symbol.display
+            in
+            if summary.state <> [] then
+              typed_error_at expression.loc
+                "cross-function state summaries are not yet supported";
+            let values =
+              List.map
+                (fun argument ->
+                  typed_expr_smt_with_choices program analysis Over function_def
+                    [] [] choices generic_calls env argument)
+                arguments
+            in
+            let terms = List.map (fun value -> value.term) values in
+            let formula_env =
+              List.map2
+                (fun ((formal : Typed_core.symbol), sort) term ->
+                  (formal.display, (term, sort)))
+                callee.arguments terms
+            in
+            let parse text =
+              parse_formula ~filename:summary.loc.file
+                ~loc:(location_of_span summary.loc)
+                text
+            in
+            let mark env formula =
+              formula_theory_symbols program.registry env formula
+              |> List.iter (use_theory_symbol generic_calls)
+            in
+            let pre_formula = parse summary.pre in
+            mark formula_env pre_formula;
+            generic_calls.side_conditions <-
+              typed_formula program.registry formula_env pre_formula
+              :: generic_calls.side_conditions;
+            let fresh prefix sort =
+              let name = prefix ^ string_of_int (List.length !choices) in
+              choices := (name, sort) :: !choices;
+              name
+            in
+            let result = fresh "call_result_" callee.result in
+            let result_env =
+              ("result", (result, callee.result)) :: formula_env
+            in
+            let post_formula = parse summary.post in
+            mark result_env post_formula;
+            let normal =
+              Relational_outcome.
+                {
+                  guard = typed_formula program.registry result_env post_formula;
+                  initial_state = state;
+                  final_state = state;
+                  outcome = Return result;
+                }
+            in
+            let payloads = typed_outcome_payload_sorts callee.body in
+            let payload_sort kind name =
+              let rec find = function
+                | [] -> None
+                | (candidate, candidate_name, sort) :: rest ->
+                    if candidate = kind && candidate_name = name then sort
+                    else find rest
+              in
+              find payloads
+            in
+            let exceptional =
+              List.map
+                (fun (name, predicate) ->
+                  let sort = payload_sort `Raised name in
+                  let payload = Option.map (fresh "call_exception_") sort in
+                  let env =
+                    match (sort, payload) with
+                    | Some sort, Some payload ->
+                        ("payload", (payload, sort)) :: formula_env
+                    | _ -> formula_env
+                  in
+                  let predicate = parse predicate in
+                  mark env predicate;
+                  Relational_outcome.
+                    {
+                      guard = typed_formula program.registry env predicate;
+                      initial_state = state;
+                      final_state = state;
+                      outcome = Raised { exception_ = name; payload };
+                    })
+                summary.raises
+            in
+            let continuation_id =
+              "continuation_" ^ string_of_int !continuation_counter
+            in
+            incr continuation_counter;
+            Hashtbl.add continuations continuation_id continuation;
+            let performed =
+              List.map
+                (fun (name, predicate) ->
+                  let sort = payload_sort `Performed name in
+                  let payload = Option.map (fresh "call_effect_") sort in
+                  let env =
+                    match (sort, payload) with
+                    | Some sort, Some payload ->
+                        ("payload", (payload, sort)) :: formula_env
+                    | _ -> formula_env
+                  in
+                  let predicate = parse predicate in
+                  mark env predicate;
+                  Relational_outcome.
+                    {
+                      guard = typed_formula program.registry env predicate;
+                      initial_state = state;
+                      final_state = state;
+                      outcome =
+                        Performed
+                          {
+                            operation = name;
+                            payload;
+                            continuation = Some continuation_id;
+                          };
+                    })
+                summary.performs
+            in
+            R.bind ((normal :: exceptional) @ performed) continuation)
     | Handle (body, handlers) ->
         let boundary value state = R.return ~state value in
         let rec discharge relation =
           List.fold_left
-            (fun relation (operation, action) ->
+            (fun relation (operation, payload_binder, action) ->
               R.handle_effect ~operation:operation.Typed_core.display relation
-                (fun ~payload ~state ->
+                (fun ~payload ~continuation ~state ->
+                  let continuation_id =
+                    match continuation with
+                    | Some id -> id
+                    | None ->
+                        typed_error_at expression.loc
+                          "effect handler received no continuation"
+                  in
+                  let handler_env =
+                    match (payload_binder, payload) with
+                    | Some (binder : Typed_core.symbol), Some payload ->
+                        (binder.key, { term = payload; refinement = None })
+                        :: env
+                    | None, _ -> env
+                    | Some _, None ->
+                        typed_error_at expression.loc
+                          "effect handler expected a payload"
+                  in
                   let generated =
                     match action with
                     | Typed_core.Abort handler ->
-                        translate env state handler boundary
+                        translate handler_env state handler boundary
                     | Typed_core.Resume value ->
                         let captured =
-                          match Hashtbl.find_opt continuations payload with
+                          match
+                            Hashtbl.find_opt continuations continuation_id
+                          with
                           | Some continuation -> continuation
                           | None ->
                               typed_error_at expression.loc
                                 "effect continuation escaped its handler"
                         in
-                        translate env state value captured
+                        translate handler_env state value captured
                   in
                   discharge generated))
             relation handlers
@@ -1646,16 +1917,28 @@ let typed_relational_expr program analysis function_def env expression =
         let boundary value state = R.return ~state value in
         let handled =
           R.try_with (translate env state body boundary)
-            (fun exception_ state ->
+            (fun ~exception_ ~payload ~state ->
               match
                 List.find_opt
                   (fun (pattern, _) ->
                     match pattern with
                     | Typed_core.Exn_any -> true
-                    | Exn symbol -> symbol.display = exception_)
+                    | Exn (symbol, _) -> symbol.display = exception_)
                   cases
               with
-              | Some (_, handler) -> translate env state handler boundary
+              | Some (pattern, handler) ->
+                  let handler_env =
+                    match (pattern, payload) with
+                    | ( Typed_core.Exn (_, Some (binder : Typed_core.symbol)),
+                        Some payload ) ->
+                        (binder.key, { term = payload; refinement = None })
+                        :: env
+                    | Exn (_, None), _ | Exn_any, _ -> env
+                    | Exn (_, Some _), None ->
+                        typed_error_at expression.loc
+                          "exception handler expected a payload"
+                  in
+                  translate handler_env state handler boundary
               | None -> R.raise_ ~state exception_)
         in
         R.bind handled continuation
@@ -1687,7 +1970,8 @@ let typed_relational_expr program analysis function_def env expression =
         continuation value.term state
   in
   let boundary value state = R.return ~state value in
-  (translate env [] expression boundary, List.rev !choices, generic_calls)
+  let relation = translate env [] expression boundary in
+  (relation, List.rev !choices, generic_calls)
 
 let typed_collect_sorts program function_def =
   let module Set = Set.Make (String) in
@@ -2134,13 +2418,26 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   in
   let pre_expression = parse contract.pre in
   let post_expression = parse contract.post in
+  let outcome_payloads =
+    typed_outcome_payload_sorts ~program function_def.body
+  in
+  let payload_sort kind name =
+    let rec find = function
+      | [] -> None
+      | (candidate, candidate_name, sort) :: rest ->
+          if candidate = kind && candidate_name = name then sort else find rest
+    in
+    find outcome_payloads
+  in
   let raised_expressions =
     contract.raises
-    |> List.map (fun (name, predicate) -> (name, parse predicate))
+    |> List.map (fun (name, predicate) ->
+        (name, payload_sort `Raised name, parse predicate))
   in
   let performed_expressions =
     contract.performs
-    |> List.map (fun (name, predicate) -> (name, parse predicate))
+    |> List.map (fun (name, predicate) ->
+        (name, payload_sort `Performed name, parse predicate))
   in
   let local_cells = typed_local_cells function_def.body in
   let state_expressions =
@@ -2174,12 +2471,9 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   let relation, choices, generic_calls =
     typed_relational_expr program analysis function_def env function_def.body
   in
-  if
-    generic_calls.side_conditions <> []
-    || generic_calls.summary_assumptions <> []
-  then
+  if generic_calls.summary_assumptions <> [] then
     typed_error_at contract.loc
-      "exceptionful calls with refinement summaries are not yet supported";
+      "effectful outcome summaries cannot use value-only assumptions";
   let roots =
     generic_calls.used_theory_symbols
     @ formula_theory_symbols program.registry formula_env pre_expression
@@ -2187,12 +2481,22 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         (("result", ("result", function_def.result)) :: formula_env)
         post_expression
     @ List.concat_map
-        (fun (_, expression) ->
-          formula_theory_symbols program.registry formula_env expression)
+        (fun (_, payload_sort, expression) ->
+          let env =
+            match payload_sort with
+            | Some sort -> ("payload", ("payload", sort)) :: formula_env
+            | None -> formula_env
+          in
+          formula_theory_symbols program.registry env expression)
         raised_expressions
     @ List.concat_map
-        (fun (_, expression) ->
-          formula_theory_symbols program.registry formula_env expression)
+        (fun (_, payload_sort, expression) ->
+          let env =
+            match payload_sort with
+            | Some sort -> ("payload", ("payload", sort)) :: formula_env
+            | None -> formula_env
+          in
+          formula_theory_symbols program.registry env expression)
         performed_expressions
     @ List.concat_map
         (fun (_, _, sort, expression) ->
@@ -2213,14 +2517,24 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   in
   let raised =
     List.map
-      (fun (name, expression) ->
-        (name, typed_formula program.registry formula_env expression))
+      (fun (name, payload_sort, expression) ->
+        let env =
+          match payload_sort with
+          | Some sort -> ("payload", ("payload", sort)) :: formula_env
+          | None -> formula_env
+        in
+        (name, payload_sort, typed_formula program.registry env expression))
       raised_expressions
   in
   let performed =
     List.map
-      (fun (name, expression) ->
-        (name, typed_formula program.registry formula_env expression))
+      (fun (name, payload_sort, expression) ->
+        let env =
+          match payload_sort with
+          | Some sort -> ("payload", ("payload", sort)) :: formula_env
+          | None -> formula_env
+        in
+        (name, payload_sort, typed_formula program.registry env expression))
       performed_expressions
   in
   let state_posts =
@@ -2250,11 +2564,33 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         in
         Printf.sprintf "(let ((result %s)) %s)" value
           (and_ (post :: state_obligations)))
-      ~raised:(fun ~exception_ ~initial:_ ~final:_ ->
-        Option.value (List.assoc_opt exception_ raised) ~default:"false")
-      ~performed:(fun ~operation ~payload:_ ~initial:_ ~final:_ ->
-        Option.value (List.assoc_opt operation performed) ~default:"false")
+      ~raised:(fun ~exception_ ~payload ~initial:_ ~final:_ ->
+        match List.find_opt (fun (name, _, _) -> name = exception_) raised with
+        | Some (_, None, predicate) -> predicate
+        | Some (_, Some _, predicate) -> (
+            match payload with
+            | Some payload ->
+                Printf.sprintf "(let ((payload %s)) %s)" payload predicate
+            | None -> "false")
+        | None -> "false")
+      ~performed:(fun ~operation ~payload ~continuation:_ ~initial:_ ~final:_ ->
+        match
+          List.find_opt (fun (name, _, _) -> name = operation) performed
+        with
+        | Some (_, None, predicate) -> predicate
+        | Some (_, Some _, predicate) -> (
+            match payload with
+            | Some payload ->
+                Printf.sprintf "(let ((payload %s)) %s)" payload predicate
+            | None -> "false")
+        | None -> "false")
       relation
+  in
+  let obligation =
+    match generic_calls.side_conditions with
+    | [] -> obligation
+    | conditions ->
+        and_ [ app "=>" [ pre; and_ (List.rev conditions) ]; obligation ]
   in
   let buffer = Buffer.create 4096 in
   Buffer.add_string buffer

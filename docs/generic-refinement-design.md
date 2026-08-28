@@ -126,9 +126,10 @@ carry initial/final ghost state and Return/Raised/Performed outcomes; bind propa
 discharge matching paths, and Safety/Coverage produce outcome-sensitive obligations. Unit tests and deterministic
 fuzzing cover propagation and state threading.
 
-Nullary `raise`/`try` Typedtree lowering and exceptional safety contracts are now connected to the production
-backend. Normal and Raised paths use separate postconditions; exact and catch-all handlers discharge matching
-paths. Payload exceptions, exception coverage and exceptionful call summaries remain fail closed.
+Single-payload exceptions/effects, payload binders and effectful safety call summaries are now connected to the
+production backend. Summary application creates symbolic normal results and Raised/Performed payload paths;
+callee preconditions remain side obligations and caller handlers can discharge callee outcomes. Cross-function
+state and recursive outcome summaries remain fail closed.
 
 Non-escaping local references and final-state contracts are now connected to production relational VCs. Lexical
 cells thread through sequence, branch, raise and handlers; normal posts can constrain each final cell. Reference
@@ -139,7 +140,8 @@ safety contracts are connected to production VCs. CPS translation captures the c
 `continue k value` resumes it, deep handlers process re-performed operations, and relational state is preserved.
 Handler `retc` must be identity and `exnc` must re-raise.
 
-The next implementation slice is payload exception/effect outcomes and effectful call summaries.
+The next implementation slice is witness-carrying exception/effect coverage, followed by measured recursive
+outcome summaries.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

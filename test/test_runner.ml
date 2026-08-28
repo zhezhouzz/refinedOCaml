@@ -319,7 +319,7 @@ let test_relational_outcomes () =
   let abnormal =
     R.bind
       (R.branch ~condition:"c" ~if_true:(R.raise_ ~state "E")
-         ~if_false:(R.perform ~state ~operation:"Choose" ~payload:"p"))
+         ~if_false:(R.perform ~state ~operation:"Choose" ~payload:"p" ()))
       (fun _ _ ->
         continued := true;
         R.return ~state "impossible")
@@ -327,17 +327,27 @@ let test_relational_outcomes () =
   if !continued then failwith "relational bind continued an abnormal outcome";
   if
     not
-      (List.exists (fun path -> path.R.outcome = Raised "E") abnormal
+      (List.exists
+         (fun path ->
+           path.R.outcome = Raised { exception_ = "E"; payload = None })
+         abnormal
       && List.exists
            (fun path ->
-             path.R.outcome = Performed { operation = "Choose"; payload = "p" })
+             path.R.outcome
+             = Performed
+                 {
+                   operation = "Choose";
+                   payload = Some "p";
+                   continuation = None;
+                 })
            abnormal)
   then failwith "branch lost raised/performed outcomes";
   let handled =
     R.handle_effect ~operation:"Choose"
-      (R.try_with abnormal (fun exception_ state ->
+      (R.try_with abnormal (fun ~exception_ ~payload:_ ~state ->
            R.return ~state ("caught_" ^ exception_)))
-      (fun ~payload ~state -> R.return ~state ("handled_" ^ payload))
+      (fun ~payload ~continuation:_ ~state ->
+        R.return ~state ("handled_" ^ Option.get payload))
   in
   if
     not
@@ -351,9 +361,10 @@ let test_relational_outcomes () =
   let safety =
     R.safety_obligation ~pre:"pre"
       ~normal:(fun ~value ~initial:_ ~final:_ -> "normal_" ^ value)
-      ~raised:(fun ~exception_ ~initial:_ ~final:_ -> "raised_" ^ exception_)
-      ~performed:(fun ~operation ~payload ~initial:_ ~final:_ ->
-        operation ^ "_" ^ payload)
+      ~raised:(fun ~exception_ ~payload:_ ~initial:_ ~final:_ ->
+        "raised_" ^ exception_)
+      ~performed:(fun ~operation ~payload ~continuation:_ ~initial:_ ~final:_ ->
+        operation ^ "_" ^ Option.get payload)
       abnormal
   in
   if not (contains safety "raised_E" && contains safety "Choose_p") then
@@ -361,7 +372,9 @@ let test_relational_outcomes () =
   let coverage =
     R.coverage_obligation ~target:"target"
       ~matches:(fun path ->
-        match path.R.outcome with Raised "E" -> "wanted" | _ -> "false")
+        match path.R.outcome with
+        | Raised { exception_ = "E"; _ } -> "wanted"
+        | _ -> "false")
       abnormal
   in
   if not (contains coverage "wanted") then
@@ -418,6 +431,12 @@ let () =
   compile "../examples/effect_valid.ml" "typed_effect_valid";
   compile "../examples/effect_invalid.ml" "typed_effect_invalid";
   compile "../examples/effect_resume.ml" "typed_effect_resume";
+  compile "../examples/payload_outcomes.ml" "typed_payload_outcomes";
+  compile "../examples/payload_outcomes_invalid.ml"
+    "typed_payload_outcomes_invalid";
+  compile "../examples/outcome_calls.ml" "typed_outcome_calls";
+  compile "../examples/outcome_recursive_unsupported.ml"
+    "typed_outcome_recursive_unsupported";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -562,6 +581,26 @@ let () =
       if not (contains obligation.smt "42") then
         failwith "resumed continuation result did not reach the VC";
       require `Valid obligation);
+  obligations_of_cmt "typed_payload_outcomes.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "payload_raise"
+        || obligation.name = "payload_perform")
+        && not (contains obligation.smt "payload")
+      then failwith "payload outcome did not reach the VC";
+      require `Valid obligation);
+  obligations_of_cmt "typed_payload_outcomes_invalid.cmt"
+  |> List.iter (require `Invalid);
+  obligations_of_cmt "typed_outcome_calls.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "catches_call" || obligation.name = "handles_call")
+        && not (contains obligation.smt "call_result_")
+      then failwith "effectful call did not use its outcome summary";
+      require `Valid obligation);
+  (match obligations_of_cmt "typed_outcome_recursive_unsupported.cmt" with
+  | _ -> failwith "recursive effectful outcome summary was accepted"
+  | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);
   (match obligations_of_cmt "typed_recursive_missing_measure.cmt" with

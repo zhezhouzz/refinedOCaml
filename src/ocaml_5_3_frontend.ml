@@ -589,31 +589,53 @@ let rec typed_expression registry (expression : Typedtree.expression) =
   | Texp_tuple expressions -> make (Tuple (List.map recurse expressions))
   | Texp_apply
       ( { exp_desc = Texp_ident (path, _, _); _ },
-        [ (Nolabel, Some { exp_desc = Texp_construct (_, exception_, []); _ }) ]
-      )
+        [
+          ( Nolabel,
+            Some { exp_desc = Texp_construct (_, exception_, payloads); _ } );
+        ] )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | "raise" :: _ -> true
          | _ -> false -> (
       match exception_.Types.cstr_tag with
       | Cstr_extension _ ->
+          let payload =
+            match payloads with
+            | [] -> None
+            | [ payload ] -> Some (recurse payload)
+            | _ ->
+                typed_error ~loc:expression.exp_loc
+                  "exception payload requires at most one argument"
+          in
           make
             (Raise
-               (symbol_of_uid ~name:exception_.cstr_name exception_.cstr_uid))
+               ( symbol_of_uid ~name:exception_.cstr_name exception_.cstr_uid,
+                 payload ))
       | _ ->
           typed_error ~loc:expression.exp_loc
             "raise currently requires a nullary exception constructor")
   | Texp_apply
       ( { exp_desc = Texp_ident (path, _, _); _ },
-        [ (Nolabel, Some { exp_desc = Texp_construct (_, operation, []); _ }) ]
-      )
+        [
+          ( Nolabel,
+            Some { exp_desc = Texp_construct (_, operation, payloads); _ } );
+        ] )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | "perform" :: _ -> true
          | _ -> false -> (
       match operation.Types.cstr_tag with
       | Cstr_extension _ ->
+          let payload =
+            match payloads with
+            | [] -> None
+            | [ payload ] -> Some (recurse payload)
+            | _ ->
+                typed_error ~loc:expression.exp_loc
+                  "effect payload requires at most one argument"
+          in
           make
             (Perform
-               (symbol_of_uid ~name:operation.cstr_name operation.cstr_uid))
+               ( symbol_of_uid ~name:operation.cstr_name operation.cstr_uid,
+                 payload ))
       | _ ->
           typed_error ~loc:expression.exp_loc
             "Effect.perform currently requires a nullary effect operation")
@@ -696,7 +718,7 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                     case.c_lhs
                 in
                 match (pattern.pat_desc, case.c_rhs.exp_desc) with
-                | ( Tpat_construct (_, operation, [], _),
+                | ( Tpat_construct (_, operation, payload_patterns, _),
                     Texp_construct
                       ( _,
                         _,
@@ -709,6 +731,15 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                         ] ) ) -> (
                     match operation.Types.cstr_tag with
                     | Cstr_extension _ ->
+                        let payload_binder =
+                          match payload_patterns with
+                          | [] -> None
+                          | [ { pat_desc = Tpat_var (ident, name, _); _ } ] ->
+                              Some (symbol_of_ident ~display:name.txt ident)
+                          | _ ->
+                              typed_error ~loc:pattern.pat_loc
+                                "effect payload handler requires a variable"
+                        in
                         let action =
                           match handler_body.exp_desc with
                           | Texp_apply
@@ -729,6 +760,7 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                         Some
                           ( symbol_of_uid ~name:operation.cstr_name
                               operation.cstr_uid,
+                            payload_binder,
                             action )
                     | _ -> None)
                 | Tpat_any, Texp_construct (_, _, []) -> None
@@ -841,12 +873,22 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       let exception_pattern (pattern : Typedtree.pattern) =
         match pattern.pat_desc with
         | Tpat_any -> Exn_any
-        | Tpat_construct (_, description, [], _) -> (
+        | Tpat_construct (_, description, payload_patterns, _) -> (
             match description.Types.cstr_tag with
             | Cstr_extension _ ->
+                let payload_binder =
+                  match payload_patterns with
+                  | [] -> None
+                  | [ { pat_desc = Tpat_var (ident, name, _); _ } ] ->
+                      Some (symbol_of_ident ~display:name.txt ident)
+                  | _ ->
+                      typed_error ~loc:pattern.pat_loc
+                        "exception payload handler requires a variable"
+                in
                 Exn
-                  (symbol_of_uid ~name:description.cstr_name
-                     description.cstr_uid)
+                  ( symbol_of_uid ~name:description.cstr_name
+                      description.cstr_uid,
+                    payload_binder )
             | _ ->
                 typed_error ~loc:pattern.pat_loc
                   "exception handler pattern is not an exception")
@@ -1000,20 +1042,27 @@ let typed_normalize expression =
   and anf expression continuation =
     match expression.desc with
     | Var _ | Int _ | Bool _ -> continuation expression
-    | Raise _ -> expression
-    | Perform operation ->
-        bind_operation expression (Perform operation) continuation
+    | Raise (exception_, payload) ->
+        let payload = Option.map (fun payload -> anf payload Fun.id) payload in
+        { expression with desc = Raise (exception_, payload) }
+    | Perform (operation, None) ->
+        bind_operation expression (Perform (operation, None)) continuation
+    | Perform (operation, Some payload) ->
+        anf payload (fun payload ->
+            bind_operation expression
+              (Perform (operation, Some payload))
+              continuation)
     | Handle (body, handlers) ->
         let body = anf body Fun.id in
         let handlers =
           List.map
-            (fun (operation, action) ->
+            (fun (operation, payload, action) ->
               let action =
                 match action with
                 | Abort handler -> Abort (anf handler Fun.id)
                 | Resume value -> Resume (anf value Fun.id)
               in
-              (operation, action))
+              (operation, payload, action))
             handlers
         in
         bind_operation expression (Handle (body, handlers)) continuation

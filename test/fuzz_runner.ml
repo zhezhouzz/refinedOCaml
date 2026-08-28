@@ -540,7 +540,9 @@ let fuzz_relational_outcomes random case =
             R.return ~state ("v" ^ string_of_int index)
         | 1 -> R.raise_ ~state ("E" ^ string_of_int index)
         | _ ->
-            R.perform ~state ~operation:"Op" ~payload:("p" ^ string_of_int index))
+            R.perform ~state ~operation:"Op"
+              ~payload:("p" ^ string_of_int index)
+              ())
     |> List.concat
   in
   let continued = ref 0 in
@@ -552,7 +554,8 @@ let fuzz_relational_outcomes random case =
   if !continued <> !return_count || List.length bound <> List.length relation
   then fail case "relational bind violated abnormal-outcome propagation";
   let caught =
-    R.try_with bound (fun exception_ state -> R.return ~state exception_)
+    R.try_with bound (fun ~exception_ ~payload:_ ~state ->
+        R.return ~state exception_)
   in
   if
     List.exists
@@ -560,8 +563,9 @@ let fuzz_relational_outcomes random case =
       caught
   then fail case "exception handler left a raised path";
   let handled =
-    R.handle_effect ~operation:"Op" caught (fun ~payload ~state ->
-        R.return ~state payload)
+    R.handle_effect ~operation:"Op" caught
+      (fun ~payload ~continuation:_ ~state ->
+        R.return ~state (Option.get payload))
   in
   if
     List.exists

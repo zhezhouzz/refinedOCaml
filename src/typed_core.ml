@@ -66,16 +66,16 @@ and expr_desc =
   | Match of expr * (pattern * expr) list
   | Record of constructor * expr list
   | Field of constructor * int * expr
-  | Raise of symbol
+  | Raise of symbol * expr option
   | Try of expr * (exception_pattern * expr) list
   | Let_ref of symbol * sort * expr * expr
   | Deref of symbol
   | Assign of symbol * expr
   | Sequence of expr * expr
-  | Perform of symbol
-  | Handle of expr * (symbol * handler_action) list
+  | Perform of symbol * expr option
+  | Handle of expr * (symbol * symbol option * handler_action) list
 
-and exception_pattern = Exn_any | Exn of symbol
+and exception_pattern = Exn_any | Exn of symbol * symbol option
 and handler_action = Abort of expr | Resume of expr
 
 type contract = {

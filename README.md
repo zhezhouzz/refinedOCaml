@@ -332,9 +332,9 @@ let[@refined.over
   if x < 0 then raise Negative else x
 ```
 
-Normal paths 检查 `post`，Raised paths 按异常名检查 `raises`；未列出的异常对应 `false`。Payload
-exceptions、exceptionful function summary 和 exceptionful coverage 仍 fail closed。Non-local mutation
-与 effect handlers 也会等到对应 lowering 完成后才开放。
+Normal paths 检查 `post`，Raised paths 按异常名检查 `raises`；未列出的异常对应 `false`。单 payload
+exception 已支持，predicate 可引用 `payload`；handler pattern `E payload` 会把实际 payload 绑定进 handler
+Core。Exceptionful coverage 仍 fail closed。Non-local mutation 也会等到对应 lowering 完成后才开放。
 
 Frontend 还支持非逃逸的局部 references：`let cell = ref init`、`!cell`、`cell := value`、sequence 和
 条件分支。Safety contract 可为 normal outcomes 声明 final-state predicate：
@@ -379,8 +379,13 @@ let[@refined.over
 的 computation；resumed continuation 再次 perform 时仍由同一个 deep handler set 处理，state 也会穿过
 resumption。`retc` 必须是 identity，`exnc` 必须是 `raise`。
 
-Payload operation、同一 handler 中多次/条件式 continuation 使用、非 literal handler record、
-effectful coverage/call summary 仍 fail closed。
+单 payload operation 已支持；`performs` predicate 与 handler pattern 都可引用/bind `payload`。同一
+handler 中多次/条件式 continuation 使用、非 literal handler record和 effectful coverage 仍 fail closed。
+
+本地 effectful safety calls 可使用 outcome summary。Caller 为 callee normal result、exception payload、
+effect payload 建立 fresh symbolic values，并产生 Return/Raised/Performed paths；Performed path 携带 caller
+continuation，因此 caller 的 `try`/deep handler 可以跨函数边界处理 outcome。Callee precondition 作为独立
+side obligation。跨函数 state summary 与递归 effectful summary 当前仍拒绝。
 
 参数化用户 ADT 会在每个 obligation 中按实际闭合类型实例化。例如 `'a box` 在两个不同使用点会
 得到独立的 `T_box_Int` 与 `T_box_Bool` theory；constructor、recognizer、selector 和代数 axioms 的
@@ -433,9 +438,11 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
 | non-escaping local refs / final-state safety | 支持 | relational ghost-cell threading |
 | nullary Effect.perform / abortive+one-shot Deep handler | 支持 | CPS continuation paths |
-| payload exception、exception coverage/call summary | 明确拒绝 | 需要 payload/outcome witnesses |
+| single-payload exception/effect | 支持 | payload-sorted outcome predicates |
+| effectful safety call summary | 支持 | normal/Raised/Performed symbolic paths |
+| exception/effect coverage summary | 明确拒绝 | 需要 outcome witnesses |
 | reference parameters/alias/escape | 明确拒绝 | 仅支持 lexical local cells |
-| payload/multi-shot effect handlers | 明确拒绝 | 需要 payload binders/continuation multiplicity |
+| multi-payload/multi-shot handlers | 明确拒绝 | 需要 richer binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
@@ -446,9 +453,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. payload exception/effect 与 outcome call summaries；
-2. heap/reference summaries 与 coverage state witnesses；
-3. multi-shot/conditional continuation contracts。
+1. exception/effect coverage outcome witnesses；
+2. recursive effectful summaries 与 measure；
+3. heap/reference summaries 与 coverage state witnesses。
 
 当前模块边界：
 

@@ -9,7 +9,10 @@ let calls expression =
       List.fold_left collect accumulator expressions
     in
     match expression.desc with
-    | Var _ | Int _ | Bool _ | Raise _ | Perform _ | Deref _ -> accumulator
+    | Var _ | Int _ | Bool _ | Raise (_, None) | Perform (_, None) | Deref _ ->
+        accumulator
+    | Raise (_, Some payload) | Perform (_, Some payload) ->
+        collect accumulator payload
     | Tuple expressions
     | Choose expressions
     | Construct (_, expressions)
@@ -37,7 +40,7 @@ let calls expression =
         List.fold_left collect accumulator [ first; second ]
     | Handle (body, handlers) ->
         List.fold_left
-          (fun accumulator (_, action) ->
+          (fun accumulator (_, _, action) ->
             match action with
             | Typed_core.Abort handler | Typed_core.Resume handler ->
                 collect accumulator handler)

@@ -2,8 +2,12 @@ type state = (string * string) list
 
 type outcome =
   | Return of string
-  | Raised of string
-  | Performed of { operation : string; payload : string }
+  | Raised of { exception_ : string; payload : string option }
+  | Performed of {
+      operation : string;
+      payload : string option;
+      continuation : string option;
+    }
 
 type path = {
   guard : string;
@@ -36,23 +40,23 @@ let return ~state value =
     };
   ]
 
-let raise_ ~state exception_ =
+let raise_ ?payload ~state exception_ =
   [
     {
       guard = "true";
       initial_state = state;
       final_state = state;
-      outcome = Raised exception_;
+      outcome = Raised { exception_; payload };
     };
   ]
 
-let perform ~state ~operation ~payload =
+let perform ?payload ?continuation ~state ~operation () =
   [
     {
       guard = "true";
       initial_state = state;
       final_state = state;
-      outcome = Performed { operation; payload };
+      outcome = Performed { operation; payload; continuation };
     };
   ]
 
@@ -102,8 +106,10 @@ let try_with relation handler =
   List.concat_map
     (fun path ->
       match path.outcome with
-      | Raised exception_ ->
-          handler exception_ path.final_state |> List.map (compose path)
+      | Raised raised ->
+          handler ~exception_:raised.exception_ ~payload:raised.payload
+            ~state:path.final_state
+          |> List.map (compose path)
       | Return _ | Performed _ -> [ path ])
     relation
 
@@ -112,7 +118,8 @@ let handle_effect ~operation relation handler =
     (fun path ->
       match path.outcome with
       | Performed performed when performed.operation = operation ->
-          handler ~payload:performed.payload ~state:path.final_state
+          handler ~payload:performed.payload
+            ~continuation:performed.continuation ~state:path.final_state
           |> List.map (compose path)
       | Return _ | Raised _ | Performed _ -> [ path ])
     relation
@@ -124,12 +131,12 @@ let safety_obligation ~pre ~normal ~raised ~performed relation =
         match path.outcome with
         | Return value ->
             normal ~value ~initial:path.initial_state ~final:path.final_state
-        | Raised exception_ ->
-            raised ~exception_ ~initial:path.initial_state
-              ~final:path.final_state
-        | Performed { operation; payload } ->
-            performed ~operation ~payload ~initial:path.initial_state
-              ~final:path.final_state
+        | Raised raised_ ->
+            raised ~exception_:raised_.exception_ ~payload:raised_.payload
+              ~initial:path.initial_state ~final:path.final_state
+        | Performed { operation; payload; continuation } ->
+            performed ~operation ~payload ~continuation
+              ~initial:path.initial_state ~final:path.final_state
       in
       app "=>" [ conjunction [ pre; path.guard ]; post ])
   |> conjunction
