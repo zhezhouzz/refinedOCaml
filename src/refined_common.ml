@@ -206,6 +206,23 @@ let contract_of_attribute attribute =
                           "outcomes must contain (kind, name, post, witnesses) \
                            tuples")
           in
+          let outcome_state =
+            match find_expression "outcome_state" with
+            | None -> []
+            | Some expression ->
+                expression_list expression
+                |> List.map (fun expression ->
+                    match expression.pexp_desc with
+                    | Pexp_tuple [ kind; name; cell; predicate ] ->
+                        ( string_constant kind,
+                          string_constant name,
+                          string_constant cell,
+                          string_constant predicate )
+                    | _ ->
+                        error ~loc:expression.pexp_loc
+                          "outcome_state must contain (kind, name, cell, \
+                           predicate) string tuples")
+          in
           if mode = Over && witnesses <> [] then
             error ~loc:attribute.attr_loc
               "safety contracts cannot declare coverage witnesses";
@@ -231,7 +248,8 @@ let contract_of_attribute attribute =
               requires_state,
               state_witnesses,
               performs,
-              outcomes )
+              outcomes,
+              outcome_state )
       | _ ->
           error ~loc:attribute.attr_loc
             "expected [@%s { pre = \"...\"; post = \"...\" }]"

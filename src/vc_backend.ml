@@ -2100,11 +2100,31 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                           "unknown coverage outcome kind `%s`" kind
                   in
                   let payload = Option.map (fresh "call_payload_") sort in
-                  let target_env =
+                  let payload_env =
                     match (sort, payload) with
                     | Some sort, Some payload ->
                         [ ("payload", (payload, sort)) ]
                     | _ -> []
+                  in
+                  let state_targets =
+                    summary.outcome_state
+                    |> List.filter_map (fun (kind, name, cell, predicate) ->
+                        if kind <> outcome.kind || name <> outcome.name then
+                          None
+                        else
+                          let actual, sort = actual_cell cell in
+                          Some
+                            ( cell,
+                              actual,
+                              sort,
+                              fresh "call_outcome_state_" sort,
+                              predicate ))
+                  in
+                  let target_env =
+                    List.map
+                      (fun (name, _, sort, target, _) -> (name, (target, sort)))
+                      state_targets
+                    @ payload_env
                   in
                   let post = parse outcome.post in
                   formula_theory_symbols program.registry target_env post
@@ -2137,12 +2157,39 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                             ])
                         reference_formals)
                   in
+                  let state_post_guards, final_state =
+                    List.fold_left
+                      (fun (guards, final_state)
+                           (_name, actual, sort, target, predicate) ->
+                        let old = heap_select state actual sort in
+                        let predicate = parse predicate in
+                        let state_env =
+                          ("value", (target, sort))
+                          :: ("old", (old, sort))
+                          :: target_env
+                        in
+                        formula_theory_symbols program.registry state_env
+                          predicate
+                        |> List.iter (use_theory_symbol generic_calls);
+                        ( typed_formula program.registry state_env predicate
+                          :: guards,
+                          heap_store final_state actual sort target ))
+                      ([], state) state_targets
+                  in
+                  let alias_guards =
+                    state_targets
+                    |> List.map
+                         (fun (_name, actual, sort, target, _predicate) ->
+                           (actual, sort, target))
+                    |> alias_consistency
+                  in
                   let guard =
                     and_
                       (termination
                        :: typed_formula program.registry target_env post
                        :: equations target_env outcome.witnesses
-                      @ state_witness_guards)
+                      @ state_witness_guards @ state_post_guards @ alias_guards
+                      )
                   in
                   let path =
                     match kind with
@@ -2151,7 +2198,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                           {
                             guard;
                             initial_state = state;
-                            final_state = state;
+                            final_state;
                             outcome =
                               Raised { exception_ = outcome.name; payload };
                           }
@@ -2160,7 +2207,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                           {
                             guard;
                             initial_state = state;
-                            final_state = state;
+                            final_state;
                             outcome =
                               Performed
                                 {
@@ -2195,13 +2242,6 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       "effectful call `%s` has ambiguous safety summaries"
                       symbol.display
               in
-              if
-                summary.state <> []
-                && (summary.raises <> [] || summary.performs <> [])
-              then
-                typed_error_at expression.loc
-                  "abnormal cross-function state summaries are not yet \
-                   supported";
               let values =
                 List.map
                   (fun argument ->
@@ -2324,6 +2364,32 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 in
                 find payloads
               in
+              let outcome_state kind outcome target_env =
+                let guards, final_state, updates =
+                  summary.outcome_state
+                  |> List.filter (fun (candidate_kind, candidate, _, _) ->
+                      candidate_kind = kind && candidate = outcome)
+                  |> List.fold_left
+                       (fun (guards, final_state, updates)
+                            (_kind, _outcome, name, predicate) ->
+                         let actual, sort = actual_cell name in
+                         let old = heap_select state actual sort in
+                         let value = fresh "call_outcome_state_" sort in
+                         let predicate = parse predicate in
+                         let state_env =
+                           ("value", (value, sort))
+                           :: ("old", (old, sort))
+                           :: target_env
+                         in
+                         mark state_env predicate;
+                         ( typed_formula program.registry state_env predicate
+                           :: guards,
+                           heap_store final_state actual sort value,
+                           (actual, sort, value) :: updates ))
+                       ([], state, [])
+                in
+                (alias_consistency updates @ guards, final_state)
+              in
               let exceptional =
                 List.map
                   (fun (name, predicate) ->
@@ -2337,11 +2403,17 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                     in
                     let predicate = parse predicate in
                     mark env predicate;
+                    let state_guards, final_state =
+                      outcome_state "raise" name env
+                    in
                     Relational_outcome.
                       {
-                        guard = typed_formula program.registry env predicate;
+                        guard =
+                          and_
+                            (typed_formula program.registry env predicate
+                            :: state_guards);
                         initial_state = state;
-                        final_state = state;
+                        final_state;
                         outcome = Raised { exception_ = name; payload };
                       })
                   summary.raises
@@ -2364,11 +2436,17 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                     in
                     let predicate = parse predicate in
                     mark env predicate;
+                    let state_guards, final_state =
+                      outcome_state "perform" name env
+                    in
                     Relational_outcome.
                       {
-                        guard = typed_formula program.registry env predicate;
+                        guard =
+                          and_
+                            (typed_formula program.registry env predicate
+                            :: state_guards);
                         initial_state = state;
-                        final_state = state;
+                        final_state;
                         outcome =
                           Performed
                             {
@@ -2380,6 +2458,12 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   summary.performs
               in
               R.bind ((normal :: exceptional) @ performed) continuation)
+    | Choose [ left; right ] ->
+        translate env state path left continuation
+        @ translate env state path right continuation
+    | Choose _ ->
+        typed_error_at expression.loc
+          "the relational choose primitive requires exactly two alternatives"
     | Handle (body, handlers) ->
         let boundary value state = R.return ~state value in
         let rec discharge relation =
@@ -3087,6 +3171,40 @@ let typed_exception_obligation (program : Typed_core.program) analysis
               "requires_state names non-reference parameter `%s`" name)
       contract.requires_state
   in
+  let outcome_state_expressions =
+    List.map
+      (fun (kind, outcome, name, predicate) ->
+        let payload_sort =
+          match kind with
+          | "raise" ->
+              if not (List.mem_assoc outcome contract.raises) then
+                typed_error_at contract.loc
+                  "outcome_state names undeclared raised outcome `%s`" outcome;
+              payload_sort `Raised outcome
+          | "perform" ->
+              if not (List.mem_assoc outcome contract.performs) then
+                typed_error_at contract.loc
+                  "outcome_state names undeclared performed outcome `%s`"
+                  outcome;
+              payload_sort `Performed outcome
+          | _ ->
+              typed_error_at contract.loc
+                "outcome_state kind must be `raise` or `perform`"
+        in
+        match List.find_opt (fun (cell, _, _) -> cell = name) state_cells with
+        | Some (_, key, sort) ->
+            ( kind,
+              outcome,
+              name,
+              smt_identifier key,
+              sort,
+              payload_sort,
+              parse predicate )
+        | None ->
+            typed_error_at contract.loc "outcome_state names unknown cell `%s`"
+              name)
+      contract.outcome_state
+  in
   let state_names = List.map fst contract.state in
   if
     List.length state_names
@@ -3101,6 +3219,17 @@ let typed_exception_obligation (program : Typed_core.program) analysis
     <> List.length (List.sort_uniq String.compare operation_names)
   then
     typed_error_at contract.loc "performs clauses must name each operation once";
+  let outcome_state_names =
+    List.map
+      (fun (kind, outcome, name, _) -> (kind, outcome, name))
+      contract.outcome_state
+  in
+  if
+    List.length outcome_state_names
+    <> List.length (List.sort_uniq compare outcome_state_names)
+  then
+    typed_error_at contract.loc
+      "outcome_state clauses must name each outcome cell once";
   let program =
     typed_specialize_program program function_def pre_expression post_expression
     |> fun program -> typed_monomorphize_datatypes program function_def
@@ -3146,6 +3275,20 @@ let typed_exception_obligation (program : Typed_core.program) analysis
             :: formula_env)
             expression)
         state_expressions
+    @ List.concat_map
+        (fun (_kind, _outcome, _name, _key, sort, payload_sort, expression) ->
+          let env =
+            ("value", ("state_value", sort))
+            :: ("old", ("old_state_value", sort))
+            :: formula_env
+          in
+          let env =
+            match payload_sort with
+            | Some payload_sort -> ("payload", ("payload", payload_sort)) :: env
+            | None -> env
+          in
+          formula_theory_symbols program.registry env expression)
+        outcome_state_expressions
     @ List.concat_map
         (fun (_, _, sort, expression) ->
           formula_theory_symbols program.registry
@@ -3214,6 +3357,51 @@ let typed_exception_obligation (program : Typed_core.program) analysis
             expression ))
       state_expressions
   in
+  let outcome_state_posts =
+    List.map
+      (fun (kind, outcome, name, key, sort, payload_sort, expression) ->
+        let env =
+          ("value", ("state_value", sort))
+          :: ("old", ("old_state_value", sort))
+          :: formula_env
+        in
+        let env =
+          match payload_sort with
+          | Some payload_sort -> ("payload", ("payload", payload_sort)) :: env
+          | None -> env
+        in
+        ( kind,
+          outcome,
+          name,
+          key,
+          sort,
+          payload_sort,
+          typed_formula program.registry env expression ))
+      outcome_state_expressions
+  in
+  let bind_payload payload_sort payload predicate =
+    match (payload_sort, payload) with
+    | None, _ -> predicate
+    | Some _, Some payload ->
+        Printf.sprintf "(let ((payload %s)) %s)" payload predicate
+    | Some _, None -> "false"
+  in
+  let abnormal_state kind outcome payload initial final =
+    outcome_state_posts
+    |> List.filter_map
+         (fun
+           (candidate_kind, candidate, _name, key, sort, payload_sort, predicate)
+         ->
+           if candidate_kind <> kind || candidate <> outcome then None
+           else
+             let value = heap_select final key sort in
+             let old = heap_select initial key sort in
+             Some
+               (bind_payload payload_sort payload
+                  (Printf.sprintf
+                     "(let ((state_value %s) (old_state_value %s)) %s)" value
+                     old predicate)))
+  in
   let obligation =
     Relational_outcome.safety_obligation ~pre
       ~normal:(fun ~value ~initial ~final ->
@@ -3229,26 +3417,26 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         in
         Printf.sprintf "(let ((result %s)) %s)" value
           (and_ (post :: state_obligations)))
-      ~raised:(fun ~exception_ ~payload ~initial:_ ~final:_ ->
-        match List.find_opt (fun (name, _, _) -> name = exception_) raised with
-        | Some (_, None, predicate) -> predicate
-        | Some (_, Some _, predicate) -> (
-            match payload with
-            | Some payload ->
-                Printf.sprintf "(let ((payload %s)) %s)" payload predicate
-            | None -> "false")
-        | None -> "false")
-      ~performed:(fun ~operation ~payload ~continuation:_ ~initial:_ ~final:_ ->
-        match
-          List.find_opt (fun (name, _, _) -> name = operation) performed
-        with
-        | Some (_, None, predicate) -> predicate
-        | Some (_, Some _, predicate) -> (
-            match payload with
-            | Some payload ->
-                Printf.sprintf "(let ((payload %s)) %s)" payload predicate
-            | None -> "false")
-        | None -> "false")
+      ~raised:(fun ~exception_ ~payload ~initial ~final ->
+        let post =
+          match
+            List.find_opt (fun (name, _, _) -> name = exception_) raised
+          with
+          | Some (_, payload_sort, predicate) ->
+              bind_payload payload_sort payload predicate
+          | None -> "false"
+        in
+        and_ (post :: abnormal_state "raise" exception_ payload initial final))
+      ~performed:(fun ~operation ~payload ~continuation:_ ~initial ~final ->
+        let post =
+          match
+            List.find_opt (fun (name, _, _) -> name = operation) performed
+          with
+          | Some (_, payload_sort, predicate) ->
+              bind_payload payload_sort payload predicate
+          | None -> "false"
+        in
+        and_ (post :: abnormal_state "perform" operation payload initial final))
       relation
   in
   let obligation =
@@ -3416,9 +3604,33 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     in
     find payload_sorts
   in
-  let outcomes =
+  let outcome_state_names =
     List.map
-      (fun (outcome : Typed_core.coverage_outcome) ->
+      (fun (kind, outcome, name, _) -> (kind, outcome, name))
+      contract.outcome_state
+  in
+  List.iter
+    (fun (kind, outcome, _name, _) ->
+      if
+        (kind <> "raise" && kind <> "perform")
+        || not
+             (List.exists
+                (fun (candidate : Typed_core.coverage_outcome) ->
+                  candidate.kind = kind && candidate.name = outcome)
+                contract.outcomes)
+      then
+        typed_error_at contract.loc
+          "outcome_state names undeclared coverage outcome `%s:%s`" kind outcome)
+    contract.outcome_state;
+  if
+    List.length outcome_state_names
+    <> List.length (List.sort_uniq compare outcome_state_names)
+  then
+    typed_error_at contract.loc
+      "outcome_state clauses must name each outcome cell once";
+  let outcomes =
+    List.mapi
+      (fun outcome_index (outcome : Typed_core.coverage_outcome) ->
         let kind =
           match outcome.kind with
           | "raise" -> `Raised
@@ -3428,11 +3640,31 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
                 kind
         in
         let sort = payload_sort kind outcome.name in
+        let outcome_state =
+          contract.outcome_state
+          |> List.filter (fun (candidate_kind, candidate, _, _) ->
+              candidate_kind = outcome.kind && candidate = outcome.name)
+          |> List.mapi (fun state_index (_, _, name, predicate) ->
+              match
+                List.find_opt (fun (cell, _, _) -> cell = name) state_cells
+              with
+              | Some (_, key, sort) ->
+                  ( name,
+                    key,
+                    sort,
+                    Printf.sprintf "missing_outcome_state_%d_%d" outcome_index
+                      state_index,
+                    parse predicate )
+              | None ->
+                  typed_error_at contract.loc
+                    "outcome_state names unknown cell `%s`" name)
+        in
         ( kind,
           outcome.name,
           sort,
           parse outcome.post,
-          validate_witnesses outcome.witnesses ))
+          validate_witnesses outcome.witnesses,
+          outcome_state ))
       contract.outcomes
   in
   let state_target_env =
@@ -3460,18 +3692,35 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             witnesses)
         normal_witnesses
     @ List.concat_map
-        (fun (_, _, sort, post, witnesses) ->
-          let target_env =
+        (fun (_, _, sort, post, witnesses, outcome_state) ->
+          let payload_env =
             match sort with
             | Some sort -> [ ("payload", ("missing_payload", sort)) ]
             | None -> []
+          in
+          let target_env =
+            List.map
+              (fun (name, _, sort, target, _) -> (name, (target, sort)))
+              outcome_state
+            @ payload_env
           in
           formula_theory_symbols program.registry target_env post
           @ List.concat_map
               (fun (_, formal_sort, expression) ->
                 formula_theory_symbols ~expected:formal_sort program.registry
                   target_env expression)
-              witnesses)
+              witnesses
+          @ List.concat_map
+              (fun (_name, _key, state_sort, target, predicate) ->
+                formula_theory_symbols program.registry
+                  (("value", (target, state_sort)) :: target_env)
+                  predicate)
+              outcome_state
+          @ List.concat_map
+              (fun (_, witness_sort, expression) ->
+                formula_theory_symbols ~expected:witness_sort program.registry
+                  target_env expression)
+              state_witnesses)
         outcomes
     @ List.concat_map
         (fun (_name, _key, sort, target, predicate) ->
@@ -3639,31 +3888,55 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   let payload_declarations = ref [] in
   let outcome_obligations =
     List.mapi
-      (fun index (kind, name, sort, post, witnesses) ->
+      (fun index (kind, name, sort, post, witnesses, outcome_state) ->
         let target = "missing_payload_" ^ string_of_int index in
-        let target_env =
+        let payload_env =
           match sort with
           | Some sort ->
               payload_declarations := (target, sort) :: !payload_declarations;
               [ ("payload", (target, sort)) ]
           | None -> []
         in
+        let target_env =
+          List.map
+            (fun (name, _, sort, target, _) -> (name, (target, sort)))
+            outcome_state
+          @ payload_env
+        in
         let matching =
           relation
-          |> List.filter_map (fun path ->
+          |> List.filter_map (fun (path : R.path) ->
+              let state_equalities =
+                List.map
+                  (fun (_name, key, state_sort, state_target, _) ->
+                    app "="
+                      [
+                        heap_select path.final_state key state_sort;
+                        state_target;
+                      ])
+                  outcome_state
+              in
               match (kind, path.R.outcome) with
               | `Raised, Raised raised when raised.exception_ = name -> (
                   match (sort, raised.payload) with
                   | Some _, Some payload ->
-                      Some (and_ [ path.guard; app "=" [ payload; target ] ])
-                  | None, None -> Some path.guard
+                      Some
+                        (and_
+                           (path.guard
+                           :: app "=" [ payload; target ]
+                           :: state_equalities))
+                  | None, None -> Some (and_ (path.guard :: state_equalities))
                   | _ -> None)
               | `Performed, Performed performed when performed.operation = name
                 -> (
                   match (sort, performed.payload) with
                   | Some _, Some payload ->
-                      Some (and_ [ path.guard; app "=" [ payload; target ] ])
-                  | None, None -> Some path.guard
+                      Some
+                        (and_
+                           (path.guard
+                           :: app "=" [ payload; target ]
+                           :: state_equalities))
+                  | None, None -> Some (and_ (path.guard :: state_equalities))
                   | _ -> None)
               | _ -> None)
           |> or_
@@ -3674,7 +3947,19 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
           |> exists_choices
           |> let_arguments target_env witnesses
         in
-        app "=>" [ typed_formula program.registry target_env post; reachable ])
+        let state_posts =
+          List.map
+            (fun (_name, _key, state_sort, state_target, predicate) ->
+              typed_formula program.registry
+                (("value", (state_target, state_sort)) :: target_env)
+                predicate)
+            outcome_state
+        in
+        app "=>"
+          [
+            and_ (typed_formula program.registry target_env post :: state_posts);
+            reachable;
+          ])
       outcomes
   in
   let obligation = and_ (obligations @ outcome_obligations) in
@@ -3720,6 +4005,15 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
       Buffer.add_string buffer
         (Printf.sprintf "(declare-const %s %s)\n" target (typed_smt_sort sort)))
     state_targets;
+  List.iter
+    (fun (_, _, _, _, _, outcome_state) ->
+      List.iter
+        (fun (_name, _key, sort, target, _) ->
+          Buffer.add_string buffer
+            (Printf.sprintf "(declare-const %s %s)\n" target
+               (typed_smt_sort sort)))
+        outcome_state)
+    outcomes;
   List.iter
     (fun (name, sort) ->
       Buffer.add_string buffer

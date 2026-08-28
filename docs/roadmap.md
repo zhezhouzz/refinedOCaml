@@ -12,12 +12,12 @@
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v5 保存 OCaml version、unit/digest、abstract sorts、aliases、functor templates 和 proof metadata | MVP 已完成 | 设计非 `Marshal` 的长期稳定格式 |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
-| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Outcome/state paths、measured recursion、alias-aware heap summaries、dynamic allocation 与 conditional-linear continuation actions 已组合 | Alias-aware relational heap MVP 完成 | nondeterministic heap/outcome relations 与 abnormal state summaries |
+| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Stateful `choose`、Outcome/state paths、alias-aware heap summaries、dynamic allocation 与 conditional-linear continuations 已组合 | Relational heap/outcome MVP 完成 | relational/ghost witnesses 与 abnormal-state preconditions |
 | C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、summary、递归 SCC/measure 与 relational outcome algebra 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | outcome contracts 与 domain-specific state witnesses |
-| C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | Result/outcome inverses 加 state final targets 与 initial heap witnesses；under calls 以 alias-consistent store 更新 caller heap | Alias-aware heap coverage MVP 已完成 | nondeterministic relations 与 relational witnesses |
+| C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | Result/outcome inverses、normal/abnormal final heap targets 与 initial heap witnesses；`choose` 以 path union 表示 angelic reachability | Nondeterministic heap coverage MVP 已完成 | relational witnesses 与 ghost-state synthesis |
 | 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
-| OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 reference identity/local alias、conditional tail Resume/Abort；顺序 multi-use continuation fail closed | Heap identity + linear continuation MVP | abnormal heap effects；显式 clone API 出现后再做 multi-shot |
+| OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 reference identity/local alias、stateful `choose`、abnormal heap effects、conditional tail Resume/Abort | Relational effects + linear continuation MVP | pointer equality/escaping refs；显式 clone API 出现后再做 multi-shot |
 | Solver 工程 | 生成 SMT-LIB，调用 Z3，输出 model | 已支持 `--emit-smt`、Z3 `sat/unsat/unknown`、model 输出 | MVP 已完成 | 记录 solver version、timeout、enabled axioms；改进 `unknown` 诊断 |
 | 工程可复现性 | 让项目能在干净环境中稳定构建和测试 | 已有本机 OCaml 5.3.0 switch、direct-dependency lock、setup script、GitHub Actions、format gate、autofix.ci、deterministic property fuzzing 和版本升级规约 | 已完成 | CI 通过后保护主分支；新增 frontend 时扩展版本矩阵 |
 
@@ -139,7 +139,8 @@ Resumptive effect continuation semantics 已完成。CPS translator 为 Perform 
 
 Single-payload exception/effect 与 effectful safety call summaries 已完成。Payload 有独立 sort 和 symbolic
 term；caller summary 同时生成 normal/Raised/Performed paths，callee precondition 单独检查，Performed
-path 捕获 caller continuation。Cross-function state 保持 fail closed。
+path 捕获 caller continuation。`outcome_state` 可分别描述 Raised/Performed 的 final heap，并在 caller
+捕获或处理 outcome 前完成 heap update。
 
 Exception/effect coverage outcome witnesses 已完成。`outcomes=(kind,name,post,witnesses)` 分别生成
 payload target reachability VC；under callers 可组合 callee normal/Raised/Performed constructive paths，
@@ -158,4 +159,8 @@ Conditional-linear continuation contracts 已完成。Handler action 可递归�
 和 outer state 可参与条件。Non-tail 或同一路径多次 resume 会拒绝，因为 OCaml Deep continuation 是
 one-shot，不能伪装成 multi-shot。
 
-roadmap 的下一实现步骤是 nondeterministic relations 与 abnormal outcome state summaries。
+Stateful nondeterminism 已完成。Frontend 不再把 `choose` alternatives 预先 ANF 成顺序求值；relational
+backend 将两个 computation 保留为 path union，因此 Safety 对所有分支检查，Coverage 只需为目标找到
+至少一条分支。分支可独立写 heap、raise 或 perform。
+
+roadmap 的下一实现步骤是 relational witnesses 与 ghost-state synthesis。

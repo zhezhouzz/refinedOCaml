@@ -135,7 +135,11 @@ uninterpreted identities; dereference and assignment use `select` and `store`. `
 heap contents; normal posts constrain final contents with `old/value/result`; Coverage introduces missing final
 targets and `state_witnesses` for the initial heap. Safety and under call summaries update caller heaps, aliased
 actuals receive consistency guards, and local allocation produces fresh identities. Pointer equality, escaping
-references and abnormal-outcome heap summaries remain fail closed.
+references remain fail closed.
+
+Abnormal heap summaries are now expressed by `outcome_state` clauses keyed by Raise/Perform kind and outcome
+name. Safety checks final heaps on the concrete abnormal path; Coverage introduces per-outcome final-state
+targets. Safety and under call summaries update the caller heap before a caller handler consumes the outcome.
 
 Nullary `Effect.perform`, canonical abortive/one-shot-resumptive `Effect.Deep.match_with`, and performed-outcome
 safety contracts are connected to production VCs. CPS translation captures the computation after Perform;
@@ -154,7 +158,11 @@ Conditional-linear continuation actions are now implemented. Handler tails may b
 guards, payloads and state flow through both paths. Non-tail or repeated continuation use on one path fails
 closed, matching OCaml's one-shot Deep continuation semantics.
 
-The next implementation slice is nondeterministic relations and abnormal-outcome heap summaries.
+Stateful nondeterminism is now relational. The frontend preserves `choose` alternatives as computations instead
+of ANF-evaluating them sequentially. The backend takes their path union, giving demonic Safety and angelic
+Coverage while retaining independent heap and abnormal outcomes.
+
+The next implementation slice is relational witnesses and ghost-state synthesis.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

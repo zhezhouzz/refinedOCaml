@@ -133,6 +133,10 @@ let[@refined.over
 如果实现改成恒定返回 `0`，safety 仍成立，但 coverage 会报告 `missing_result = 1`。
 `refined.under` 是 `refined.coverage` 的兼容别名。
 
+`choose` alternatives 可以包含 heap writes、raise 或 perform。Frontend 保留两个 computation，不会按
+OCaml 普通函数实参规则预先顺序求值；Safety 将 path union 解释为 demonic choice，Coverage 将其解释为
+angelic reachability。
+
 ## Module theories 与 separate compilation
 
 Module signature 可以导出 uninterpreted predicates 和 trusted axioms：
@@ -334,7 +338,7 @@ let[@refined.over
 
 Normal paths 检查 `post`，Raised paths 按异常名检查 `raises`；未列出的异常对应 `false`。单 payload
 exception 已支持，predicate 可引用 `payload`；handler pattern `E payload` 会把实际 payload 绑定进 handler
-Core。Exceptionful coverage 仍 fail closed。Non-local mutation 也会等到对应 lowering 完成后才开放。
+Core。Coverage 用 `outcomes` 为 Raised/Performed paths 提供 constructive inverses。
 
 Frontend 还支持局部 references：`let cell = ref init`、`!cell`、`cell := value`、sequence 和
 条件分支。Safety contract 可为 normal outcomes 声明 final-state predicate：
@@ -367,7 +371,20 @@ state_witnesses = [ ("cell", "result - 1") ];
 每种 content sort 对应一个 SMT array heap，dereference/assignment 分别使用 `select`/`store`。
 Safety/coverage call summaries 会把 callee final contents 更新回 caller heap；同一实际 identity 传给多个
 ref formals 时生成 final-value consistency constraints。局部 `ref` 分配 fresh identity，并支持 lexical
-alias。Pointer equality、reference 跨当前关系边界逃逸以及 abnormal-outcome heap summaries 仍 fail closed。
+alias。Pointer equality 与 reference 跨当前关系边界逃逸仍 fail closed。
+
+异常与效果的 final heap 用 `outcome_state` 分别描述：
+
+```ocaml
+outcome_state = [
+  ("raise", "Bad", "cell", "value = 1");
+  ("perform", "Send", "cell", "value = payload");
+]
+```
+
+Safety predicate 可引用 `value`、`old` 和可选 `payload`。Coverage 把这些内容作为对应 outcome 的 final
+heap targets；跨函数 safety/under summaries 会在异常被 `try` 捕获或效果被 handler 处理之前更新 caller
+heap。Pointer equality 与 reference 跨当前关系边界逃逸仍 fail closed。
 
 OCaml 5.3 的标准 effect surface 通过 `Effect.perform` 与 `Effect.Deep.match_with` 提供。当前 frontend
 支持 nullary operation 和 canonical abortive handler：
@@ -463,7 +480,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | over / coverage contract | 支持 | upper validity / lower image coverage |
 | constructive coverage call summary | 支持 | result-indexed inverse witnesses |
 | relational state/outcome semantic algebra | 支持 | guarded transition paths |
-| 二选一 nondeterministic `choose` | 支持 | demonic upper / angelic lower |
+| stateful/outcome nondeterministic `choose` | 支持 | path union；demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
 | safety 函数 summary、直接/互递归 | 支持 | call-graph SCC + `int` measure |
 | 递归 coverage | 有条件支持 | complete witnesses + SCC measure |
@@ -477,7 +494,8 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | effectful safety call summary | 支持 | normal/Raised/Performed symbolic paths |
 | exception/effect coverage summary | 支持 | per-outcome payload inverse witnesses |
 | aliased reference parameters / state summaries | 支持 | identity select/store + consistency guards |
-| pointer equality / escaping refs / abnormal heap summaries | 明确拒绝 | 需要 observable identity 与 outcome-state contracts |
+| abnormal outcome heap summaries | 支持 | `outcome_state` + caller heap update |
+| pointer equality / escaping refs | 明确拒绝 | 需要 observable/first-class identity contracts |
 | multi-payload/multi-shot handlers | 明确拒绝 | 需要 richer binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
@@ -489,7 +507,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. nondeterministic relations 与 abnormal outcome state summaries；
+1. relational witnesses 与 ghost-state synthesis；
 2. 可重放 proof certificate 与稳定 artifact 格式；
 3. 显式 continuation cloning（若未来 OCaml API 支持）。
 

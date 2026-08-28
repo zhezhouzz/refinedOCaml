@@ -74,6 +74,10 @@
   ../examples/reference_state_invalid.ml
   ../examples/reference_state_alias.ml
   ../examples/reference_fresh.ml
+  ../examples/nondeterministic_state.ml
+  ../examples/nondeterministic_state_invalid.ml
+  ../examples/abnormal_state.ml
+  ../examples/abnormal_state_invalid.ml
   ../examples/conditional_resume.ml
   ../examples/multishot_unsupported.ml))
 

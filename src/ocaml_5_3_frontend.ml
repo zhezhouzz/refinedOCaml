@@ -979,7 +979,8 @@ let typed_contracts attributes =
             requires_state,
             state_witnesses,
             performs,
-            outcomes ) ->
+            outcomes,
+            outcome_state ) ->
           Some
             Typed_core.
               {
@@ -997,6 +998,7 @@ let typed_contracts attributes =
                     (fun (kind, name, post, witnesses) ->
                       Typed_core.{ kind; name; post; witnesses })
                     outcomes;
+                outcome_state;
                 loc = span_of_location attribute.attr_loc;
               })
     attributes
@@ -1163,8 +1165,10 @@ let typed_normalize expression =
               (Record (constructor, expressions))
               continuation)
     | Choose expressions ->
-        atoms expressions (fun expressions ->
-            bind_operation expression (Choose expressions) continuation)
+        bind_operation expression
+          (Choose
+             (List.map (fun expression -> anf expression Fun.id) expressions))
+          continuation
     | Apply (symbol, expressions) ->
         atoms expressions (fun expressions ->
             bind_operation expression (Apply (symbol, expressions)) continuation)

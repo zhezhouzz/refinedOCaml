@@ -446,6 +446,11 @@ let () =
     "typed_reference_state_invalid";
   compile "../examples/reference_state_alias.ml" "typed_reference_state_alias";
   compile "../examples/reference_fresh.ml" "typed_reference_fresh";
+  compile "../examples/nondeterministic_state.ml" "typed_nondeterministic_state";
+  compile "../examples/nondeterministic_state_invalid.ml"
+    "typed_nondeterministic_state_invalid";
+  compile "../examples/abnormal_state.ml" "typed_abnormal_state";
+  compile "../examples/abnormal_state_invalid.ml" "typed_abnormal_state_invalid";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
@@ -660,6 +665,32 @@ let () =
       if not (contains obligation.smt "(distinct ref_") then
         failwith "dynamic allocations lost freshness";
       require `Valid obligation);
+  obligations_of_cmt "typed_nondeterministic_state.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "(store") then
+        failwith "nondeterministic state paths lost their heaps";
+      if
+        obligation.name = "nondeterministic_outcome"
+        && not (contains obligation.smt " 3" && contains obligation.smt " 4")
+      then failwith "nondeterministic outcome paths were not both retained";
+      require `Valid obligation);
+  obligations_of_cmt "typed_nondeterministic_state_invalid.cmt"
+  |> List.iter (require `Invalid);
+  obligations_of_cmt "typed_abnormal_state.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "catches_abnormal_state"
+        || obligation.name = "handles_abnormal_state")
+        && not (contains obligation.smt "call_outcome_state_")
+      then failwith "abnormal state summary did not update caller heap";
+      if
+        obligation.name = "abnormal_write"
+        && obligation.mode = Under
+        && not (contains obligation.smt "missing_outcome_state_")
+      then failwith "abnormal state summary did not update caller heap";
+      require `Valid obligation);
+  obligations_of_cmt "typed_abnormal_state_invalid.cmt"
+  |> List.iter (require `Invalid);
   obligations_of_cmt "typed_conditional_resume.cmt"
   |> List.iter (fun obligation ->
       if obligation.name = "conditional" && not (contains obligation.smt "flag")
