@@ -352,9 +352,21 @@ let[@refined.over
   !cell
 ```
 
-`value` 表示该 path 的最终 cell 内容。State 会穿过 branch、raise 和 handler；因此 handler 可以观察
-异常发生前的写入。Reference 参数、alias、escape、heap allocation summary、coverage state witnesses
-和跨函数 state summary 仍 fail closed。
+`value` 表示该 path 的最终 cell 内容，`old` 表示 initial content。State 会穿过 branch、raise 和
+handler；因此 handler 可以观察异常发生前的写入。
+
+Non-aliased reference 参数也作为 relational cells。`requires_state`约束 initial contents；Coverage 用
+`state_witnesses`从目标 result/final cells 构造 initial contents：
+
+```ocaml
+requires_state = [ ("cell", "value >= 0") ];
+state = [ ("cell", "value = result") ];
+state_witnesses = [ ("cell", "result - 1") ];
+```
+
+Safety/coverage call summaries 会把 callee final cell 更新映射回 caller state。Reference alias、escape、
+动态 heap allocation summary 和 pointer equality 仍 fail closed；同一实际 cell 传给多个 ref formals 会
+明确拒绝。
 
 OCaml 5.3 的标准 effect surface 通过 `Effect.perform` 与 `Effect.Deep.match_with` 提供。当前 frontend
 支持 nullary operation 和 canonical abortive handler：
@@ -459,7 +471,8 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | single-payload exception/effect | 支持 | payload-sorted outcome predicates |
 | effectful safety call summary | 支持 | normal/Raised/Performed symbolic paths |
 | exception/effect coverage summary | 支持 | per-outcome payload inverse witnesses |
-| reference parameters/alias/escape | 明确拒绝 | 仅支持 lexical local cells |
+| non-aliased reference parameters / state summaries | 支持 | initial/final relational cells |
+| reference alias/escape/pointer equality | 明确拒绝 | 需要 heap identity model |
 | multi-payload/multi-shot handlers | 明确拒绝 | 需要 richer binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
@@ -471,8 +484,8 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. heap/reference summaries 与 coverage state witnesses；
-2. multi-shot/conditional continuation contracts；
+1. multi-shot/conditional continuation contracts；
+2. heap identity、aliasing 与 dynamic allocation summaries；
 3. 可重放 proof certificate 与稳定 artifact 格式。
 
 当前模块边界：

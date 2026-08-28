@@ -149,6 +149,22 @@ let contract_of_attribute attribute =
                         error ~loc:expression.pexp_loc
                           "state must contain (cell, predicate) string pairs")
           in
+          let state_pairs field =
+            match find_expression field with
+            | None -> []
+            | Some expression ->
+                expression_list expression
+                |> List.map (fun expression ->
+                    match expression.pexp_desc with
+                    | Pexp_tuple [ cell; predicate ] ->
+                        (string_constant cell, string_constant predicate)
+                    | _ ->
+                        error ~loc:expression.pexp_loc
+                          "%s must contain (cell, expression) string pairs"
+                          field)
+          in
+          let requires_state = state_pairs "requires_state" in
+          let state_witnesses = state_pairs "state_witnesses" in
           let performs =
             match find_expression "performs" with
             | None -> []
@@ -196,9 +212,9 @@ let contract_of_attribute attribute =
           if mode = Under && raises <> [] then
             error ~loc:attribute.attr_loc
               "coverage contracts cannot yet declare raised outcomes";
-          if mode = Under && state <> [] then
+          if mode = Over && state_witnesses <> [] then
             error ~loc:attribute.attr_loc
-              "coverage state witnesses are not yet supported";
+              "safety contracts cannot declare state witnesses";
           if mode = Under && performs <> [] then
             error ~loc:attribute.attr_loc
               "coverage performed-outcome witnesses are not yet supported";
@@ -212,6 +228,8 @@ let contract_of_attribute attribute =
               witnesses,
               raises,
               state,
+              requires_state,
+              state_witnesses,
               performs,
               outcomes )
       | _ ->

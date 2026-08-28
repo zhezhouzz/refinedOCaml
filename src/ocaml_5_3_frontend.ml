@@ -962,7 +962,17 @@ let typed_contracts attributes =
     (fun attribute ->
       match contract_of_attribute attribute with
       | None -> None
-      | Some (mode, pre, post, witnesses, raises, state, performs, outcomes) ->
+      | Some
+          ( mode,
+            pre,
+            post,
+            witnesses,
+            raises,
+            state,
+            requires_state,
+            state_witnesses,
+            performs,
+            outcomes ) ->
           Some
             Typed_core.
               {
@@ -972,6 +982,8 @@ let typed_contracts attributes =
                 witnesses;
                 raises;
                 state;
+                requires_state;
+                state_witnesses;
                 performs;
                 outcomes =
                   List.map

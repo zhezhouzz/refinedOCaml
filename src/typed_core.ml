@@ -85,6 +85,8 @@ type contract = {
   witnesses : (string * string) list;
   raises : (string * string) list;
   state : (string * string) list;
+  requires_state : (string * string) list;
+  state_witnesses : (string * string) list;
   performs : (string * string) list;
   outcomes : coverage_outcome list;
   loc : Source_span.t;

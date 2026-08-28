@@ -441,6 +441,10 @@ let () =
     "typed_outcome_recursive_coverage";
   compile "../examples/outcome_recursive_missing_measure.ml"
     "typed_outcome_recursive_missing_measure";
+  compile "../examples/reference_state.ml" "typed_reference_state";
+  compile "../examples/reference_state_invalid.ml"
+    "typed_reference_state_invalid";
+  compile "../examples/reference_state_alias.ml" "typed_reference_state_alias";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
   compile "../examples/outcome_coverage_invalid.ml"
     "typed_outcome_coverage_invalid";
@@ -631,6 +635,21 @@ let () =
   (match obligations_of_cmt "typed_outcome_coverage_incomplete.cmt" with
   | _ -> failwith "incomplete outcome witnesses were accepted"
   | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_reference_state.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "initial_") then
+        failwith "reference state did not expose its initial value";
+      if
+        (obligation.name = "safety_wrapper"
+        || obligation.name = "coverage_wrapper")
+        && not (contains obligation.smt "call_state_")
+      then failwith "cross-function state summary was not composed";
+      require `Valid obligation);
+  obligations_of_cmt "typed_reference_state_invalid.cmt"
+  |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_reference_state_alias.cmt" with
+  | _ -> failwith "aliased reference summary arguments were accepted"
+  | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);
   (match obligations_of_cmt "typed_recursive_missing_measure.cmt" with
@@ -642,9 +661,7 @@ let () =
   (match obligations_of_cmt "typed_recursive_coverage.cmt" with
   | _ -> failwith "safety summary was unsoundly reused for recursive coverage"
   | exception Location.Error _ -> ());
-  (match obligations_of_cmt "typed_unsupported.cmt" with
-  | _ -> failwith "an unsupported effectful Typedtree was accepted"
-  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_unsupported.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_choice_incomplete.cmt"
   |> List.iter (fun obligation ->
       match (obligation.mode, solve obligation) with
