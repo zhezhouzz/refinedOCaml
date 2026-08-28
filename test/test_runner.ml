@@ -445,6 +445,8 @@ let () =
   compile "../examples/reference_state_invalid.ml"
     "typed_reference_state_invalid";
   compile "../examples/reference_state_alias.ml" "typed_reference_state_alias";
+  compile "../examples/conditional_resume.ml" "typed_conditional_resume";
+  compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
   compile "../examples/outcome_coverage_invalid.ml"
     "typed_outcome_coverage_invalid";
@@ -649,6 +651,14 @@ let () =
   |> List.iter (require `Invalid);
   (match obligations_of_cmt "typed_reference_state_alias.cmt" with
   | _ -> failwith "aliased reference summary arguments were accepted"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_conditional_resume.cmt"
+  |> List.iter (fun obligation ->
+      if obligation.name = "conditional" && not (contains obligation.smt "flag")
+      then failwith "conditional continuation lost its branch guard";
+      require `Valid obligation);
+  (match obligations_of_cmt "typed_multishot_unsupported.cmt" with
+  | _ -> failwith "sequential multi-shot continuation was accepted"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);

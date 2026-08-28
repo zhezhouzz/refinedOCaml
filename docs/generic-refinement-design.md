@@ -149,8 +149,11 @@ Measured recursive outcome summaries are now implemented. Source path conditions
 strict-decrease checks for Safety; Coverage includes measure constraints in constructive reachability paths.
 Missing measures fail closed.
 
-The next implementation slice is multi-shot/conditional continuation contracts, followed by heap identity and
-alias-aware summaries.
+Conditional-linear continuation actions are now implemented. Handler tails may branch between Abort and Resume;
+guards, payloads and state flow through both paths. Non-tail or repeated continuation use on one path fails
+closed, matching OCaml's one-shot Deep continuation semantics.
+
+The next implementation slice is heap identity, alias-aware summaries and dynamic allocation.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

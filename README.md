@@ -387,17 +387,20 @@ let[@refined.over
 未处理的 Performed path 按 operation 名检查 `performs` predicate；未列出的 operation 失败。
 `Effect.Deep.match_with (fun () -> body) () handler` 的 `effc` 可将匹配 operation 映射到 abortive
 `Some (fun _continuation -> handler_body)`，或 one-shot resumptive
-`Some (fun continuation -> Effect.Deep.continue continuation value)`。Translator 使用 CPS 捕获 perform 后
+`Some (fun continuation -> Effect.Deep.continue continuation value)`。Handler tail 也可以用 `if` 在
+Abort 与 Resume 间分支。Translator 使用 CPS 捕获 perform 后
 的 computation；resumed continuation 再次 perform 时仍由同一个 deep handler set 处理，state 也会穿过
 resumption。`retc` 必须是 identity，`exnc` 必须是 `raise`。
 
-单 payload operation 已支持；`performs` predicate 与 handler pattern 都可引用/bind `payload`。同一
-handler 中多次/条件式 continuation 使用和非 literal handler record仍 fail closed。
+单 payload operation 和 conditional-linear continuation 已支持；`performs` predicate 与 handler
+pattern 都可引用/bind `payload`。同一路径 non-tail 或顺序多次使用 continuation，以及非 literal handler
+record仍 fail closed。OCaml Deep continuation 是 one-shot，verifier 不会把非法重复 `continue` 当成
+multi-shot。
 
 本地 effectful safety calls 可使用 outcome summary。Caller 为 callee normal result、exception payload、
 effect payload 建立 fresh symbolic values，并产生 Return/Raised/Performed paths；Performed path 携带 caller
 continuation，因此 caller 的 `try`/deep handler 可以跨函数边界处理 outcome。Callee precondition 作为独立
-side obligation。跨函数 state summary 当前仍拒绝。
+side obligation。跨函数 normal state summary 也会更新 caller cells。
 
 Coverage contract 可为 abnormal outcomes 提供独立 constructive inverse clauses：
 
@@ -468,6 +471,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
 | non-escaping local refs / final-state safety | 支持 | relational ghost-cell threading |
 | nullary Effect.perform / abortive+one-shot Deep handler | 支持 | CPS continuation paths |
+| conditional linear continuation | 支持 | guarded Abort/Resume actions |
 | single-payload exception/effect | 支持 | payload-sorted outcome predicates |
 | effectful safety call summary | 支持 | normal/Raised/Performed symbolic paths |
 | exception/effect coverage summary | 支持 | per-outcome payload inverse witnesses |
@@ -484,9 +488,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. multi-shot/conditional continuation contracts；
-2. heap identity、aliasing 与 dynamic allocation summaries；
-3. 可重放 proof certificate 与稳定 artifact 格式。
+1. heap identity、aliasing 与 dynamic allocation summaries；
+2. 可重放 proof certificate 与稳定 artifact 格式；
+3. 显式 continuation cloning（若未来 OCaml API 支持）。
 
 当前模块边界：
 

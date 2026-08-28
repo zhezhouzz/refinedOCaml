@@ -278,12 +278,15 @@ let typed_specialize_program (program : Typed_core.program)
         recurse second
     | Handle (body, handlers) ->
         recurse body;
-        List.iter
-          (fun (_, _, action) ->
-            match action with
-            | Typed_core.Abort handler | Typed_core.Resume handler ->
-                recurse handler)
-          handlers
+        let rec recurse_action = function
+          | Typed_core.Abort handler | Typed_core.Resume handler ->
+              recurse handler
+          | Typed_core.Conditional (condition, if_true, if_false) ->
+              recurse condition;
+              recurse_action if_true;
+              recurse_action if_false
+        in
+        List.iter (fun (_, _, action) -> recurse_action action) handlers
   in
   ignore (infer_formula [] formula_env pre_expression);
   ignore
@@ -417,12 +420,15 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
         collect_expression second
     | Handle (body, handlers) ->
         collect_expression body;
-        List.iter
-          (fun (_, _, action) ->
-            match action with
-            | Typed_core.Abort handler | Typed_core.Resume handler ->
-                collect_expression handler)
-          handlers
+        let rec collect_action = function
+          | Typed_core.Abort handler | Typed_core.Resume handler ->
+              collect_expression handler
+          | Typed_core.Conditional (condition, if_true, if_false) ->
+              collect_expression condition;
+              collect_action if_true;
+              collect_action if_false
+        in
+        List.iter (fun (_, _, action) -> collect_action action) handlers
   in
   List.iter (fun (_, sort) -> collect sort) function_def.arguments;
   collect function_def.result;
@@ -1067,18 +1073,22 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
       | Sequence (first, second) ->
           Sequence (map_expression first, map_expression second)
       | Handle (body, handlers) ->
+          let rec map_action = function
+            | Typed_core.Abort handler ->
+                Typed_core.Abort (map_expression handler)
+            | Typed_core.Resume value ->
+                Typed_core.Resume (map_expression value)
+            | Typed_core.Conditional (condition, if_true, if_false) ->
+                Typed_core.Conditional
+                  ( map_expression condition,
+                    map_action if_true,
+                    map_action if_false )
+          in
           Handle
             ( map_expression body,
               List.map
                 (fun (operation, payload, action) ->
-                  let action =
-                    match action with
-                    | Typed_core.Abort handler ->
-                        Typed_core.Abort (map_expression handler)
-                    | Typed_core.Resume value ->
-                        Typed_core.Resume (map_expression value)
-                  in
-                  (operation, payload, action))
+                  (operation, payload, map_action action))
                 handlers )
     in
     { current with desc; sort }
@@ -1627,11 +1637,16 @@ let typed_local_cells expression =
     | Raise (_, Some payload) | Perform (_, Some payload) ->
         collect cells payload
     | Handle (body, handlers) ->
+        let rec collect_action cells = function
+          | Typed_core.Abort handler | Typed_core.Resume handler ->
+              collect cells handler
+          | Typed_core.Conditional (condition, if_true, if_false) ->
+              collect_action
+                (collect_action (collect cells condition) if_true)
+                if_false
+        in
         List.fold_left
-          (fun cells (_, _, action) ->
-            match action with
-            | Typed_core.Abort handler | Typed_core.Resume handler ->
-                collect cells handler)
+          (fun cells (_, _, action) -> collect_action cells action)
           (collect cells body) handlers
   in
   collect [] expression |> List.sort_uniq compare
@@ -1687,11 +1702,16 @@ let typed_outcome_payload_sorts ?program expression =
           (collect visited outcomes body)
           cases
     | Handle (body, handlers) ->
+        let rec collect_action outcomes = function
+          | Typed_core.Abort handler | Typed_core.Resume handler ->
+              collect visited outcomes handler
+          | Typed_core.Conditional (condition, if_true, if_false) ->
+              collect_action
+                (collect_action (collect visited outcomes condition) if_true)
+                if_false
+        in
         List.fold_left
-          (fun outcomes (_, _, action) ->
-            match action with
-            | Typed_core.Abort handler | Resume handler ->
-                collect visited outcomes handler)
+          (fun outcomes (_, _, action) -> collect_action outcomes action)
           (collect visited outcomes body)
           handlers
     | Apply (symbol, expressions) -> (
@@ -2363,22 +2383,36 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                         typed_error_at expression.loc
                           "effect handler expected a payload"
                   in
-                  let generated =
-                    match action with
+                  let captured =
+                    match Hashtbl.find_opt continuations continuation_id with
+                    | Some continuation -> continuation
+                    | None ->
+                        typed_error_at expression.loc
+                          "effect continuation escaped its handler"
+                  in
+                  let rec execute state path = function
                     | Typed_core.Abort handler ->
                         translate handler_env state path handler boundary
                     | Typed_core.Resume value ->
-                        let captured =
-                          match
-                            Hashtbl.find_opt continuations continuation_id
-                          with
-                          | Some continuation -> continuation
-                          | None ->
-                              typed_error_at expression.loc
-                                "effect continuation escaped its handler"
-                        in
                         translate handler_env state path value captured
+                    | Typed_core.Conditional (condition, if_true, if_false) ->
+                        if typed_has_exception condition then
+                          typed_error_at condition.loc
+                            "effectful continuation conditions are unsupported";
+                        let condition =
+                          typed_expr_smt_with_choices program analysis mode
+                            function_def path [] choices generic_calls
+                            handler_env condition
+                        in
+                        R.branch ~condition:condition.term
+                          ~if_true:
+                            (execute state (condition.term :: path) if_true)
+                          ~if_false:
+                            (execute state
+                               (app "not" [ condition.term ] :: path)
+                               if_false)
                   in
+                  let generated = execute state path action in
                   discharge generated))
             relation handlers
         in

@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-multi-shot continuation/heap identity、可重放 proof certificate、增量缓存。
+heap identity/alias summaries、可重放 proof certificate、增量缓存。
 
 ### M2
 

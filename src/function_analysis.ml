@@ -39,11 +39,16 @@ let calls expression =
     | Sequence (first, second) ->
         List.fold_left collect accumulator [ first; second ]
     | Handle (body, handlers) ->
+        let rec collect_action accumulator = function
+          | Typed_core.Abort handler | Typed_core.Resume handler ->
+              collect accumulator handler
+          | Typed_core.Conditional (condition, if_true, if_false) ->
+              collect_action
+                (collect_action (collect accumulator condition) if_true)
+                if_false
+        in
         List.fold_left
-          (fun accumulator (_, _, action) ->
-            match action with
-            | Typed_core.Abort handler | Typed_core.Resume handler ->
-                collect accumulator handler)
+          (fun accumulator (_, _, action) -> collect_action accumulator action)
           (collect accumulator body) handlers
   in
   collect [] expression |> List.sort_uniq String.compare

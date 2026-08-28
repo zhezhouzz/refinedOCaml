@@ -72,7 +72,9 @@
   ../examples/outcome_recursive_missing_measure.ml
   ../examples/reference_state.ml
   ../examples/reference_state_invalid.ml
-  ../examples/reference_state_alias.ml))
+  ../examples/reference_state_alias.ml
+  ../examples/conditional_resume.ml
+  ../examples/multishot_unsupported.ml))
 
 (executable
  (name ppx_sample)

@@ -740,8 +740,8 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                               typed_error ~loc:pattern.pat_loc
                                 "effect payload handler requires a variable"
                         in
-                        let action =
-                          match handler_body.exp_desc with
+                        let rec handler_action expression =
+                          match expression.Typedtree.exp_desc with
                           | Texp_apply
                               ( { exp_desc = Texp_ident (path, _, _); _ },
                                 [
@@ -755,8 +755,15 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                                  | "continue" :: _ -> true
                                  | _ -> false ->
                               Resume (recurse value)
-                          | _ -> Abort (recurse handler_body)
+                          | Texp_ifthenelse (condition, if_true, Some if_false)
+                            ->
+                              Conditional
+                                ( recurse condition,
+                                  handler_action if_true,
+                                  handler_action if_false )
+                          | _ -> Abort (recurse expression)
                         in
+                        let action = handler_action handler_body in
                         Some
                           ( symbol_of_uid ~name:operation.cstr_name
                               operation.cstr_uid,
@@ -1072,14 +1079,16 @@ let typed_normalize expression =
     | Handle (body, handlers) ->
         let body = anf body Fun.id in
         let handlers =
+          let rec anf_action = function
+            | Abort handler -> Abort (anf handler Fun.id)
+            | Resume value -> Resume (anf value Fun.id)
+            | Conditional (condition, if_true, if_false) ->
+                Conditional
+                  (anf condition Fun.id, anf_action if_true, anf_action if_false)
+          in
           List.map
             (fun (operation, payload, action) ->
-              let action =
-                match action with
-                | Abort handler -> Abort (anf handler Fun.id)
-                | Resume value -> Resume (anf value Fun.id)
-              in
-              (operation, payload, action))
+              (operation, payload, anf_action action))
             handlers
         in
         bind_operation expression (Handle (body, handlers)) continuation

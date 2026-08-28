@@ -76,7 +76,11 @@ and expr_desc =
   | Handle of expr * (symbol * symbol option * handler_action) list
 
 and exception_pattern = Exn_any | Exn of symbol * symbol option
-and handler_action = Abort of expr | Resume of expr
+
+and handler_action =
+  | Abort of expr
+  | Resume of expr
+  | Conditional of expr * handler_action * handler_action
 
 type contract = {
   mode : Refined_types.mode;
