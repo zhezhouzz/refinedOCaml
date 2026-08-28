@@ -527,6 +527,57 @@ let fuzz_theory_slice random case =
   if actual.symbols <> expected_symbols then
     fail case "theory slice symbol closure disagreed with graph oracle"
 
+let fuzz_relational_outcomes random case =
+  let module R = Refined_ir.Relational_outcome in
+  let state = [ ("cell", "v0") ] in
+  let count = 1 + Random.State.int random 8 in
+  let return_count = ref 0 in
+  let relation =
+    List.init count (fun index ->
+        match Random.State.int random 3 with
+        | 0 ->
+            incr return_count;
+            R.return ~state ("v" ^ string_of_int index)
+        | 1 -> R.raise_ ~state ("E" ^ string_of_int index)
+        | _ ->
+            R.perform ~state ~operation:"Op" ~payload:("p" ^ string_of_int index))
+    |> List.concat
+  in
+  let continued = ref 0 in
+  let bound =
+    R.bind relation (fun value state ->
+        incr continued;
+        R.return ~state value)
+  in
+  if !continued <> !return_count || List.length bound <> List.length relation
+  then fail case "relational bind violated abnormal-outcome propagation";
+  let caught =
+    R.try_with bound (fun exception_ state -> R.return ~state exception_)
+  in
+  if
+    List.exists
+      (fun path -> match path.R.outcome with Raised _ -> true | _ -> false)
+      caught
+  then fail case "exception handler left a raised path";
+  let handled =
+    R.handle_effect ~operation:"Op" caught (fun ~payload ~state ->
+        R.return ~state payload)
+  in
+  if
+    List.exists
+      (fun path ->
+        match path.R.outcome with
+        | Performed { operation = "Op"; _ } -> true
+        | _ -> false)
+      handled
+  then fail case "effect handler left a matching performed path";
+  match
+    R.bind (R.write ~state ~cell:"cell" ~value:"v1") (fun _ state ->
+        R.read ~state ~cell:"cell")
+  with
+  | [ { outcome = Return "v1"; _ } ] -> ()
+  | _ -> fail case "relational state write/read lost its value"
+
 let () =
   let cases = env_int "REFINED_FUZZ_CASES" 5_000 in
   let seed = env_int "REFINED_FUZZ_SEED" 0x5eed_2026 in
@@ -539,7 +590,8 @@ let () =
       fuzz_horn random case;
       fuzz_recursive_horn random case;
       fuzz_function_scc random case;
-      fuzz_theory_slice random case
+      fuzz_theory_slice random case;
+      fuzz_relational_outcomes random case
     done;
     Printf.printf "fuzz: %d cases passed (seed=%d)\n%!" cases seed
   with Fuzz_failure (case, message) ->

@@ -121,7 +121,13 @@ certificate. Callers existentially choose call results and assume callee postcon
 equalities; recursive calls additionally carry path-sensitive measure constraints. Contracts without witnesses
 retain the old whole-image meaning and cannot summarize recursive calls.
 
-The next implementation slice is relational state/outcome semantics for mutation, exceptions and effects.
+Relational state/outcome semantics are now implemented as a compiler-independent guarded-path algebra. Paths
+carry initial/final ghost state and Return/Raised/Performed outcomes; bind propagates abnormal outcomes, handlers
+discharge matching paths, and Safety/Coverage produce outcome-sensitive obligations. Unit tests and deterministic
+fuzzing cover propagation and state threading.
+
+The next implementation slice is Typedtree lowering for `raise`/`try` plus outcome-contract syntax, followed by
+local references and algebraic effect handlers. Until then those frontend nodes remain fail closed.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

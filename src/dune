@@ -6,6 +6,7 @@
   refined_types
   typed_core
   logic_term
+  relational_outcome
   function_analysis
   theory_slice
   evar_context

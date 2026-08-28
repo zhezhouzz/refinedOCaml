@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-relational state/outcome semantics、可重放 proof certificate、增量缓存。
+exception/state/effect Typedtree lowering、可重放 proof certificate、增量缓存。
 
 ### M2
 

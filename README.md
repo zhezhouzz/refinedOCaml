@@ -305,6 +305,22 @@ constructor coverage，从而得到 disjointness、injectivity 与 exhaustivenes
 默认**没有 induction axiom**，所以模型仍可能包含非标准或循环元素。需要归纳时必须通过
 well-founded measure、checked lemma 或有限展开显式引入。
 
+## Relational state/outcome semantics
+
+Stable Core 现提供与 compiler-libs 无关的 relational algebra。每条 path 显式携带 guard、initial/final
+state，以及三种 outcome：`Return value`、`Raised exception`、`Performed { operation; payload }`。
+
+- `bind` 只继续 normal return paths，raise/perform 自动传播；
+- `read`/`write` 对 ghost cell map 做显式 state threading；
+- branch 保留 path guards；
+- exception/effect handlers 只消除匹配的 abnormal outcomes；
+- relational Safety 对所有可达 paths 检查对应 normal/raised/performed postcondition；
+- relational Coverage 要求目标 outcome 至少匹配一个 guarded path。
+
+该层位于 [relational_outcome.ml](src/relational_outcome.ml)，已经有 deterministic unit/property tests。
+当前 OCaml Typedtree 的 mutation、`raise`/`try` 和 effect handlers 仍 fail closed；它们不会在 frontend
+完成 lowering 前被当作纯表达式接受。
+
 参数化用户 ADT 会在每个 obligation 中按实际闭合类型实例化。例如 `'a box` 在两个不同使用点会
 得到独立的 `T_box_Int` 与 `T_box_Bool` theory；constructor、recognizer、selector 和代数 axioms 的
 名字也包含实例 sort，不会跨实例混用。递归参数化 ADT 会递归替换其 field sorts，多态一阶 helper
@@ -346,13 +362,14 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | typed Logic AST / expected-sort elaboration | 支持 | resolved constructor/selector symbols |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
 | constructive coverage call summary | 支持 | result-indexed inverse witnesses |
+| relational state/outcome semantic algebra | 支持 | guarded transition paths |
 | 二选一 nondeterministic `choose` | 支持 | demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
 | safety 函数 summary、直接/互递归 | 支持 | call-graph SCC + `int` measure |
 | 递归 coverage | 有条件支持 | complete witnesses + SCC measure |
 | 开放 polymorphic ADT obligation、高阶值 | 明确拒绝 | 需要 finite instances/closure |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
-| mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
+| OCaml mutation、exception、algebraic effect lowering | 明确拒绝 | relational core 已就绪，frontend 待接入 |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
@@ -363,9 +380,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 关系化 mutation、exception 和 effect handler；
-2. parameterized abstract sorts 与 nested functor theory；
-3. 可重放 proof certificate 与稳定 `.rmi` 格式。
+1. `raise`/`try` Typedtree lowering 与 outcome contracts；
+2. 局部 reference/assignment lowering 与 state contracts；
+3. algebraic effect handler lowering。
 
 当前模块边界：
 

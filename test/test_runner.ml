@@ -303,11 +303,76 @@ let test_mutually_recursive_horn_fixpoint () =
   | Error (Did_not_converge 4) -> ()
   | Ok _ | Error _ -> failwith "non-converging Horn recursion was accepted"
 
+let test_relational_outcomes () =
+  let module R = Refined_ir.Relational_outcome in
+  let state = [ ("cell", "old") ] in
+  let updated =
+    R.bind (R.write ~state ~cell:"cell" ~value:"new") (fun _ state ->
+        R.read ~state ~cell:"cell")
+  in
+  (match updated with
+  | [ { initial_state; final_state; outcome = Return "new"; _ } ] ->
+      if initial_state <> state || List.assoc "cell" final_state <> "new" then
+        failwith "relational bind did not thread state"
+  | _ -> failwith "relational state update/read produced the wrong paths");
+  let continued = ref false in
+  let abnormal =
+    R.bind
+      (R.branch ~condition:"c" ~if_true:(R.raise_ ~state "E")
+         ~if_false:(R.perform ~state ~operation:"Choose" ~payload:"p"))
+      (fun _ _ ->
+        continued := true;
+        R.return ~state "impossible")
+  in
+  if !continued then failwith "relational bind continued an abnormal outcome";
+  if
+    not
+      (List.exists (fun path -> path.R.outcome = Raised "E") abnormal
+      && List.exists
+           (fun path ->
+             path.R.outcome = Performed { operation = "Choose"; payload = "p" })
+           abnormal)
+  then failwith "branch lost raised/performed outcomes";
+  let handled =
+    R.handle_effect ~operation:"Choose"
+      (R.try_with abnormal (fun exception_ state ->
+           R.return ~state ("caught_" ^ exception_)))
+      (fun ~payload ~state -> R.return ~state ("handled_" ^ payload))
+  in
+  if
+    not
+      (List.for_all
+         (fun path ->
+           match path.R.outcome with
+           | Return ("caught_E" | "handled_p") -> true
+           | Return _ | Raised _ | Performed _ -> false)
+         handled)
+  then failwith "relational handlers did not discharge matching outcomes";
+  let safety =
+    R.safety_obligation ~pre:"pre"
+      ~normal:(fun ~value ~initial:_ ~final:_ -> "normal_" ^ value)
+      ~raised:(fun ~exception_ ~initial:_ ~final:_ -> "raised_" ^ exception_)
+      ~performed:(fun ~operation ~payload ~initial:_ ~final:_ ->
+        operation ^ "_" ^ payload)
+      abnormal
+  in
+  if not (contains safety "raised_E" && contains safety "Choose_p") then
+    failwith "relational safety omitted abnormal postconditions";
+  let coverage =
+    R.coverage_obligation ~target:"target"
+      ~matches:(fun path ->
+        match path.R.outcome with Raised "E" -> "wanted" | _ -> "false")
+      abnormal
+  in
+  if not (contains coverage "wanted") then
+    failwith "relational coverage omitted a reachable outcome"
+
 let () =
   test_compositional_judgment ();
   test_hindley_evars ();
   test_higher_sorted_hindley_application ();
   test_mutually_recursive_horn_fixpoint ();
+  test_relational_outcomes ();
   let compile source output =
     let command =
       Printf.sprintf "ocamlc -bin-annot -c %s -o %s.cmo" (Filename.quote source)

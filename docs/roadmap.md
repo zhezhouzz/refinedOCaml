@@ -12,12 +12,12 @@
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v5 保存 OCaml version、unit/digest、abstract sorts、aliases、functor templates 和 proof metadata | MVP 已完成 | 设计非 `Marshal` 的长期稳定格式 |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
-| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Safety summary 与 constructive coverage inverse summary 都可组合；同一 binding 可声明 upper/lower contract | Summary MVP 已完成 | 扩展到 relational state/outcome semantics |
-| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、safety summary、coverage inverse witness、递归 SCC/measure 已接入同一 Core/VC 路径 | Safety/Generic/Coverage summary 完成 | effectful relational judgment 与 domain-specific witnesses |
+| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Safety/coverage summary 可组合；新增 guarded transition relation，区分 Return/Raised/Performed 并携带 initial/final state | Relational semantic core 完成 | 将 Typedtree exception/state/effect lowering 接入生产 VC |
+| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、summary、递归 SCC/measure 与 relational outcome algebra 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | outcome contracts 与 domain-specific state witnesses |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 无 witness 保留 whole-image existential VC；完整 result-indexed witnesses 验证 constructive inverse，并在调用点 existentially 组合 call result/argument equations；递归使用 measure | Compositional MVP 已完成 | ghost state、nondeterministic relational witnesses 与 richer subtyping |
 | 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
-| OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 int/bool、算术、if、简单 let、tuple、单态/参数化 ADT/record、exhaustive match 与受 measure 检查的 safety recursion；拒绝高阶、mutation、exception、effect 等 | MVP 已完成 | 按优先级扩展 match/records/modules，再考虑 effectful core |
+| OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 纯 Core、ADT、递归已支持；relational state/outcome algebra 已完成，但 mutation、exception、effect Typedtree nodes 仍 fail closed | Pure frontend MVP + relational foundation | 依次接入 raise/try、local refs、effect handlers |
 | Solver 工程 | 生成 SMT-LIB，调用 Z3，输出 model | 已支持 `--emit-smt`、Z3 `sat/unsat/unknown`、model 输出 | MVP 已完成 | 记录 solver version、timeout、enabled axioms；改进 `unknown` 诊断 |
 | 工程可复现性 | 让项目能在干净环境中稳定构建和测试 | 已有本机 OCaml 5.3.0 switch、direct-dependency lock、setup script、GitHub Actions、format gate、autofix.ci、deterministic property fuzzing 和版本升级规约 | 已完成 | CI 通过后保护主分支；新增 frontend 时扩展版本矩阵 |
 
@@ -119,5 +119,9 @@ Compositional coverage judgment 与 witness-carrying under-summary 也已完成�
 whole-image existential 加强为可检查的 inverse，并在调用点通过 existential call result、callee post 和
 argument/witness equations 组合；递归调用继续受 measure 约束。
 
-roadmap 的下一实现步骤是为 mutation、exception 和 algebraic effect 引入 relational outcome/state
-semantics。
+Relational outcome/state semantics 已完成为稳定 Core algebra：guarded paths 携带 initial/final state 与
+Return/Raised/Performed outcomes；bind、branch、state update、exception/effect handler，以及 relational
+Safety/Coverage VC templates 均有单元测试和 property fuzz。
+
+roadmap 的下一实现步骤是先把 `raise`/`try` Typedtree lowering 和 outcome contract surface 接入生产
+backend，再依次处理 local references 与 algebraic effect handlers。
