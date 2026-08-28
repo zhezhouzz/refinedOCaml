@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-local state/effect Typedtree lowering、可重放 proof certificate、增量缓存。
+effect-handler Typedtree lowering、可重放 proof certificate、增量缓存。
 
 ### M2
 

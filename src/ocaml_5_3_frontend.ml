@@ -602,6 +602,23 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       | _ ->
           typed_error ~loc:expression.exp_loc
             "raise currently requires a nullary exception constructor")
+  | Texp_apply
+      ( { exp_desc = Texp_ident (path, _, _); _ },
+        [ (Nolabel, Some { exp_desc = Texp_ident (cell, _, _); _ }) ] )
+    when match List.rev (String.split_on_char '.' (Path.name path)) with
+         | "!" :: _ -> true
+         | _ -> false ->
+      make (Deref (symbol_of_path cell))
+  | Texp_apply
+      ( { exp_desc = Texp_ident (path, _, _); _ },
+        [
+          (Nolabel, Some { exp_desc = Texp_ident (cell, _, _); _ });
+          (Nolabel, Some value);
+        ] )
+    when match List.rev (String.split_on_char '.' (Path.name path)) with
+         | ":=" :: _ -> true
+         | _ -> false ->
+      make (Assign (symbol_of_path cell, recurse value))
   | Texp_apply ({ exp_desc = Texp_ident (path, _, description); _ }, arguments)
     ->
       let arguments =
@@ -625,6 +642,32 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       else make (Apply (symbol_of_path path, arguments))
   | Texp_ifthenelse (condition, if_true, Some if_false) ->
       make (If (recurse condition, recurse if_true, recurse if_false))
+  | Texp_let
+      ( Nonrecursive,
+        [
+          {
+            vb_pat = { pat_desc = Tpat_var (ident, name, _); _ };
+            vb_expr =
+              {
+                exp_desc =
+                  Texp_apply
+                    ( { exp_desc = Texp_ident (path, _, _); _ },
+                      [ (Nolabel, Some initial) ] );
+                _;
+              };
+            _;
+          };
+        ],
+        body )
+    when match List.rev (String.split_on_char '.' (Path.name path)) with
+         | "ref" :: _ -> true
+         | _ -> false ->
+      make
+        (Let_ref
+           ( symbol_of_ident ~display:name.txt ident,
+             typed_sort_of_type initial.exp_type,
+             recurse initial,
+             recurse body ))
   | Texp_let (Nonrecursive, [ binding ], body) -> (
       match binding.vb_pat.pat_desc with
       | Tpat_var (ident, name, _) ->
@@ -636,6 +679,8 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       | _ ->
           typed_error ~loc:binding.vb_loc
             "local let bindings currently require a variable pattern")
+  | Texp_sequence (first, second) ->
+      make (Sequence (recurse first, recurse second))
   | Texp_match (scrutinee, cases, [], Total) ->
       let cases =
         List.map
@@ -736,7 +781,7 @@ let typed_contracts attributes =
     (fun attribute ->
       match contract_of_attribute attribute with
       | None -> None
-      | Some (mode, pre, post, witnesses, raises) ->
+      | Some (mode, pre, post, witnesses, raises, state) ->
           Some
             Typed_core.
               {
@@ -745,6 +790,7 @@ let typed_contracts attributes =
                 post;
                 witnesses;
                 raises;
+                state;
                 loc = span_of_location attribute.attr_loc;
               })
     attributes
@@ -815,6 +861,20 @@ let typed_normalize expression =
     match expression.desc with
     | Var _ | Int _ | Bool _ -> continuation expression
     | Raise _ -> expression
+    | Let_ref (symbol, sort, initial, body) ->
+        let initial = anf initial Fun.id in
+        let body = anf body Fun.id in
+        bind_operation expression
+          (Let_ref (symbol, sort, initial, body))
+          continuation
+    | Deref symbol -> bind_operation expression (Deref symbol) continuation
+    | Assign (symbol, value) ->
+        anf value (fun value ->
+            bind_operation expression (Assign (symbol, value)) continuation)
+    | Sequence (first, second) ->
+        let first = anf first Fun.id in
+        let second = anf second Fun.id in
+        bind_operation expression (Sequence (first, second)) continuation
     | Let (symbol, value, body) ->
         anf value (fun value ->
             let body = anf body continuation in

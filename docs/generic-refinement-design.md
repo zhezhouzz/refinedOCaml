@@ -130,8 +130,11 @@ Nullary `raise`/`try` Typedtree lowering and exceptional safety contracts are no
 backend. Normal and Raised paths use separate postconditions; exact and catch-all handlers discharge matching
 paths. Payload exceptions, exception coverage and exceptionful call summaries remain fail closed.
 
-The next implementation slice is local references/assignment plus state contracts, followed by algebraic effect
-handlers.
+Non-escaping local references and final-state contracts are now connected to production relational VCs. Lexical
+cells thread through sequence, branch, raise and handlers; normal posts can constrain each final cell. Reference
+parameters, aliasing, escape, heap summaries and coverage state witnesses remain fail closed.
+
+The next implementation slice is algebraic effect-handler lowering and performed-outcome contracts.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

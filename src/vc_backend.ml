@@ -263,10 +263,17 @@ let typed_specialize_program (program : Typed_core.program)
         recurse scrutinee;
         List.iter (fun (_, body) -> recurse body) cases
     | Field (_, _, record) -> recurse record
-    | Var _ | Int _ | Bool _ | Raise _ -> ()
+    | Var _ | Int _ | Bool _ | Raise _ | Deref _ -> ()
     | Try (body, cases) ->
         recurse body;
         List.iter (fun (_, handler) -> recurse handler) cases
+    | Let_ref (_, _, initial, body) ->
+        recurse initial;
+        recurse body
+    | Assign (_, value) -> recurse value
+    | Sequence (first, second) ->
+        recurse first;
+        recurse second
   in
   ignore (infer_formula [] formula_env pre_expression);
   ignore
@@ -362,7 +369,7 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
   let rec collect_expression (expression : Typed_core.expr) =
     collect expression.sort;
     match expression.desc with
-    | Var _ | Int _ | Bool _ | Raise _ -> ()
+    | Var _ | Int _ | Bool _ | Raise _ | Deref _ -> ()
     | Construct (constructor, expressions) | Record (constructor, expressions)
       ->
         collect constructor.result;
@@ -387,6 +394,14 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
     | Try (body, cases) ->
         collect_expression body;
         List.iter (fun (_, handler) -> collect_expression handler) cases
+    | Let_ref (_, sort, initial, body) ->
+        collect sort;
+        collect_expression initial;
+        collect_expression body
+    | Assign (_, value) -> collect_expression value
+    | Sequence (first, second) ->
+        collect_expression first;
+        collect_expression second
   in
   List.iter (fun (_, sort) -> collect sort) function_def.arguments;
   collect function_def.result;
@@ -980,7 +995,7 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
     let sort = substitute current.sort in
     let desc =
       match current.desc with
-      | (Var _ | Int _ | Bool _ | Raise _) as desc -> desc
+      | (Var _ | Int _ | Bool _ | Raise _ | Deref _) as desc -> desc
       | Tuple expressions -> Tuple (List.map map_expression expressions)
       | Construct (constructor_, expressions) ->
           Construct
@@ -1017,6 +1032,15 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
               List.map
                 (fun (pattern, handler) -> (pattern, map_expression handler))
                 cases )
+      | Let_ref (symbol, sort, initial, body) ->
+          Let_ref
+            ( symbol,
+              substitute sort,
+              map_expression initial,
+              map_expression body )
+      | Assign (symbol, value) -> Assign (symbol, map_expression value)
+      | Sequence (first, second) ->
+          Sequence (map_expression first, map_expression second)
     in
     { current with desc; sort }
   in
@@ -1224,7 +1248,7 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
         (app
            (typed_tuple_constructor expression.sort)
            (List.map recurse_term elements))
-  | Raise _ | Try _ ->
+  | Raise _ | Try _ | Let_ref _ | Deref _ | Assign _ | Sequence _ ->
       typed_error_at expression.loc
         "exception outcome escaped the relational translator"
 
@@ -1476,7 +1500,7 @@ let typed_expr_smt program analysis mode function_def env expression =
 
 let rec typed_has_exception (expression : Typed_core.expr) =
   match expression.desc with
-  | Raise _ | Try _ -> true
+  | Raise _ | Try _ | Let_ref _ | Deref _ | Assign _ | Sequence _ -> true
   | Var _ | Int _ | Bool _ -> false
   | Tuple expressions
   | Construct (_, expressions)
@@ -1493,13 +1517,43 @@ let rec typed_has_exception (expression : Typed_core.expr) =
       || List.exists (fun (_, body) -> typed_has_exception body) cases
   | Field (_, _, record) -> typed_has_exception record
 
+let typed_local_cells expression =
+  let rec collect cells (expression : Typed_core.expr) =
+    match expression.desc with
+    | Let_ref (symbol, sort, initial, body) ->
+        collect
+          ((symbol.display, symbol.key, sort) :: collect cells initial)
+          body
+    | Let (_, value, body) | Sequence (value, body) ->
+        collect (collect cells value) body
+    | If (condition, if_true, if_false) ->
+        collect (collect (collect cells condition) if_true) if_false
+    | Try (body, cases) ->
+        List.fold_left
+          (fun cells (_, handler) -> collect cells handler)
+          (collect cells body) cases
+    | Match (body, cases) ->
+        List.fold_left
+          (fun cells (_, handler) -> collect cells handler)
+          (collect cells body) cases
+    | Tuple expressions
+    | Construct (_, expressions)
+    | Choose expressions
+    | Apply (_, expressions)
+    | Record (_, expressions) ->
+        List.fold_left collect cells expressions
+    | Assign (_, value) | Field (_, _, value) -> collect cells value
+    | Var _ | Int _ | Bool _ | Raise _ | Deref _ -> cells
+  in
+  collect [] expression |> List.sort_uniq compare
+
 let typed_relational_expr program analysis function_def env expression =
   let module R = Relational_outcome in
   let choices = ref [] in
   let generic_calls = new_generic_call_state () in
-  let rec translate env (expression : Typed_core.expr) =
+  let rec translate env state (expression : Typed_core.expr) =
     match expression.desc with
-    | Raise exception_ -> R.raise_ ~state:[] exception_.display
+    | Raise exception_ -> R.raise_ ~state exception_.display
     | If (condition, if_true, if_false) ->
         if typed_has_exception condition then
           typed_error_at condition.loc
@@ -1508,15 +1562,16 @@ let typed_relational_expr program analysis function_def env expression =
           typed_expr_smt_with_choices program analysis Over function_def [] []
             choices generic_calls env condition
         in
-        R.branch ~condition:condition.term ~if_true:(translate env if_true)
-          ~if_false:(translate env if_false)
+        R.branch ~condition:condition.term
+          ~if_true:(translate env state if_true)
+          ~if_false:(translate env state if_false)
     | Let (symbol, value, body) ->
-        R.bind (translate env value) (fun value _state ->
+        R.bind (translate env state value) (fun value state ->
             translate
               ((symbol.key, { term = value; refinement = None }) :: env)
-              body)
+              state body)
     | Try (body, cases) ->
-        R.try_with (translate env body) (fun exception_ _state ->
+        R.try_with (translate env state body) (fun exception_ state ->
             match
               List.find_opt
                 (fun (pattern, _) ->
@@ -1525,8 +1580,25 @@ let typed_relational_expr program analysis function_def env expression =
                   | Exn symbol -> symbol.display = exception_)
                 cases
             with
-            | Some (_, handler) -> translate env handler
-            | None -> R.raise_ ~state:[] exception_)
+            | Some (_, handler) -> translate env state handler
+            | None -> R.raise_ ~state exception_)
+    | Let_ref (symbol, _sort, initial, body) ->
+        R.bind (translate env state initial) (fun value state ->
+            translate env ((symbol.key, value) :: state) body)
+    | Deref symbol ->
+        if not (List.mem_assoc symbol.key state) then
+          typed_error_at expression.loc
+            "reference `%s` is not a local non-escaping cell" symbol.display;
+        R.read ~state ~cell:symbol.key
+    | Assign (symbol, value) ->
+        if not (List.mem_assoc symbol.key state) then
+          typed_error_at expression.loc
+            "reference `%s` is not a local non-escaping cell" symbol.display;
+        R.bind (translate env state value) (fun value state ->
+            R.write ~state ~cell:symbol.key ~value)
+    | Sequence (first, second) ->
+        R.bind (translate env state first) (fun _ state ->
+            translate env state second)
     | _ ->
         if typed_has_exception expression then
           typed_error_at expression.loc
@@ -1535,9 +1607,9 @@ let typed_relational_expr program analysis function_def env expression =
           typed_expr_smt_with_choices program analysis Over function_def [] []
             choices generic_calls env expression
         in
-        R.return ~state:[] value.term
+        R.return ~state value.term
   in
-  (translate env expression, List.rev !choices, generic_calls)
+  (translate env [] expression, List.rev !choices, generic_calls)
 
 let typed_collect_sorts program function_def =
   let module Set = Set.Make (String) in
@@ -1988,6 +2060,22 @@ let typed_exception_obligation (program : Typed_core.program) analysis
     contract.raises
     |> List.map (fun (name, predicate) -> (name, parse predicate))
   in
+  let local_cells = typed_local_cells function_def.body in
+  let state_expressions =
+    List.map
+      (fun (name, predicate) ->
+        match List.find_opt (fun (cell, _, _) -> cell = name) local_cells with
+        | Some (_, key, sort) -> (name, key, sort, parse predicate)
+        | None ->
+            typed_error_at contract.loc
+              "state postcondition names unknown local cell `%s`" name)
+      contract.state
+  in
+  let state_names = List.map fst contract.state in
+  if
+    List.length state_names
+    <> List.length (List.sort_uniq String.compare state_names)
+  then typed_error_at contract.loc "state clauses must name each cell once";
   let names = List.map fst contract.raises in
   if List.length names <> List.length (List.sort_uniq String.compare names) then
     typed_error_at contract.loc "raises clauses must name each exception once";
@@ -2014,6 +2102,14 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         (fun (_, expression) ->
           formula_theory_symbols program.registry formula_env expression)
         raised_expressions
+    @ List.concat_map
+        (fun (_, _, sort, expression) ->
+          formula_theory_symbols program.registry
+            (("value", ("state_value", sort))
+            :: ("result", ("result", function_def.result))
+            :: formula_env)
+            expression)
+        state_expressions
     |> List.sort_uniq String.compare
   in
   let program, _ = slice_program_theory program ~roots in
@@ -2029,10 +2125,33 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         (name, typed_formula program.registry formula_env expression))
       raised_expressions
   in
+  let state_posts =
+    List.map
+      (fun (name, key, sort, expression) ->
+        ( name,
+          key,
+          typed_formula program.registry
+            (("value", ("state_value", sort))
+            :: ("result", ("result", function_def.result))
+            :: formula_env)
+            expression ))
+      state_expressions
+  in
   let obligation =
     Relational_outcome.safety_obligation ~pre
-      ~normal:(fun ~value ~initial:_ ~final:_ ->
-        Printf.sprintf "(let ((result %s)) %s)" value post)
+      ~normal:(fun ~value ~initial:_ ~final ->
+        let state_obligations =
+          List.map
+            (fun (_name, key, predicate) ->
+              match List.assoc_opt key final with
+              | Some state_value ->
+                  Printf.sprintf "(let ((result %s) (state_value %s)) %s)" value
+                    state_value predicate
+              | None -> "false")
+            state_posts
+        in
+        Printf.sprintf "(let ((result %s)) %s)" value
+          (and_ (post :: state_obligations)))
       ~raised:(fun ~exception_ ~initial:_ ~final:_ ->
         Option.value (List.assoc_opt exception_ raised) ~default:"false")
       ~performed:(fun ~operation:_ ~payload:_ ~initial:_ ~final:_ -> "false")

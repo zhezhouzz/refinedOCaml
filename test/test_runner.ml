@@ -411,6 +411,10 @@ let () =
   compile "../examples/exception_valid.ml" "typed_exception_valid";
   compile "../examples/exception_invalid.ml" "typed_exception_invalid";
   compile "../examples/exception_coverage.ml" "typed_exception_coverage";
+  compile "../examples/state_valid.ml" "typed_state_valid";
+  compile "../examples/state_invalid.ml" "typed_state_invalid";
+  compile "../examples/state_escape.ml" "typed_state_escape";
+  compile "../examples/state_unknown_contract.ml" "typed_state_unknown_contract";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -531,6 +535,18 @@ let () =
   |> List.iter (require `Invalid);
   (match obligations_of_cmt "typed_exception_coverage.cmt" with
   | _ -> failwith "exceptionful coverage was accepted without outcome witnesses"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_state_valid.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "state_value") then
+        failwith "state contract did not reach the relational VC";
+      require `Valid obligation);
+  obligations_of_cmt "typed_state_invalid.cmt" |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_state_escape.cmt" with
+  | _ -> failwith "escaping/aliased local reference was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_state_unknown_contract.cmt" with
+  | _ -> failwith "state contract naming an unknown cell was accepted"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);

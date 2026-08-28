@@ -68,6 +68,10 @@ and expr_desc =
   | Field of constructor * int * expr
   | Raise of symbol
   | Try of expr * (exception_pattern * expr) list
+  | Let_ref of symbol * sort * expr * expr
+  | Deref of symbol
+  | Assign of symbol * expr
+  | Sequence of expr * expr
 
 and exception_pattern = Exn_any | Exn of symbol
 
@@ -77,6 +81,7 @@ type contract = {
   post : string;
   witnesses : (string * string) list;
   raises : (string * string) list;
+  state : (string * string) list;
   loc : Source_span.t;
 }
 

@@ -333,8 +333,28 @@ let[@refined.over
 ```
 
 Normal paths 检查 `post`，Raised paths 按异常名检查 `raises`；未列出的异常对应 `false`。Payload
-exceptions、exceptionful function summary 和 exceptionful coverage 仍 fail closed。Mutation 与 effect
-handlers 也会等到对应 lowering 完成后才开放。
+exceptions、exceptionful function summary 和 exceptionful coverage 仍 fail closed。Non-local mutation
+与 effect handlers 也会等到对应 lowering 完成后才开放。
+
+Frontend 还支持非逃逸的局部 references：`let cell = ref init`、`!cell`、`cell := value`、sequence 和
+条件分支。Safety contract 可为 normal outcomes 声明 final-state predicate：
+
+```ocaml
+let[@refined.over
+      {
+        pre = "true";
+        post = "result = x + 1";
+        state = [ ("cell", "value = result") ];
+      }]
+    bump x =
+  let cell = ref x in
+  cell := !cell + 1;
+  !cell
+```
+
+`value` 表示该 path 的最终 cell 内容。State 会穿过 branch、raise 和 handler；因此 handler 可以观察
+异常发生前的写入。Reference 参数、alias、escape、heap allocation summary、coverage state witnesses
+和跨函数 state summary 仍 fail closed。
 
 参数化用户 ADT 会在每个 obligation 中按实际闭合类型实例化。例如 `'a box` 在两个不同使用点会
 得到独立的 `T_box_Int` 与 `T_box_Bool` theory；constructor、recognizer、selector 和代数 axioms 的
@@ -385,8 +405,10 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 开放 polymorphic ADT obligation、高阶值 | 明确拒绝 | 需要 finite instances/closure |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
+| non-escaping local refs / final-state safety | 支持 | relational ghost-cell threading |
 | payload exception、exception coverage/call summary | 明确拒绝 | 需要 payload/outcome witnesses |
-| OCaml mutation、algebraic effect lowering | 明确拒绝 | relational core 已就绪，frontend 待接入 |
+| reference parameters/alias/escape | 明确拒绝 | 仅支持 lexical local cells |
+| algebraic effect lowering | 明确拒绝 | relational core 已就绪，frontend 待接入 |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
@@ -397,9 +419,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 局部 reference/assignment lowering 与 state contracts；
-2. algebraic effect handler lowering；
-3. payload exception 与 exceptionful call summaries。
+1. algebraic effect handler lowering；
+2. payload exception 与 exceptionful call summaries；
+3. heap/reference summaries 与 coverage state witnesses。
 
 当前模块边界：
 
