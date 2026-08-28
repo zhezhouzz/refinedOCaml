@@ -5,6 +5,7 @@
   source_span
   refined_types
   typed_core
+  function_analysis
   evar_context
   horn_fixpoint
   generic_refinement

@@ -623,6 +623,39 @@ let typed_contracts attributes =
               { mode; pre; post; loc = span_of_location attribute.attr_loc })
     attributes
 
+let typed_measure attributes arguments =
+  let measures =
+    List.filter_map
+      (fun attribute ->
+        if attribute.Parsetree.attr_name.txt <> "refined.measure" then None
+        else
+          match attribute.attr_payload with
+          | PStr [ { pstr_desc = Pstr_eval (expression, _); _ } ] ->
+              Some (attribute, string_constant expression)
+          | _ ->
+              typed_error ~loc:attribute.attr_loc
+                "expected [@refined.measure \"integer_parameter\"]")
+      attributes
+  in
+  match measures with
+  | [] -> None
+  | [ (attribute, name) ] -> (
+      match
+        List.find_opt
+          (fun ((symbol : Typed_core.symbol), _) -> symbol.display = name)
+          arguments
+      with
+      | Some (symbol, Typed_core.S_int) -> Some symbol
+      | Some _ ->
+          typed_error ~loc:attribute.attr_loc
+            "termination measure `%s` must name an int parameter" name
+      | None ->
+          typed_error ~loc:attribute.attr_loc
+            "termination measure `%s` is not a function parameter" name)
+  | (attribute, _) :: _ ->
+      typed_error ~loc:attribute.attr_loc
+        "a function can have only one termination measure"
+
 let typed_normalize expression =
   let open Typed_core in
   let counter = ref 0 in
@@ -783,6 +816,7 @@ let typed_function registry binding =
           result = typed_sort_of_type body.exp_type;
           body = typed_normalize (typed_expression registry body);
           contracts;
+          measure = typed_measure binding.vb_attributes arguments;
         }
   | _ ->
       if contracts = [] then None

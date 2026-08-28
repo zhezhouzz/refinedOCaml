@@ -83,16 +83,24 @@ non-convergence fail closed. The property fuzzer compares random Horn graphs aga
 reachability. This is a symbolic fixpoint for the supported positive term algebra, not a widening-based solver
 for arbitrary SMT-CHCs.
 
-The next implementation slice is function summaries, recursive call-graph SCCs and termination measures.
+The function-summary slice is now implemented for safety checking. Stable Core call graphs are decomposed with
+Tarjan SCCs; recursive edges use independently checked over-contract summaries and emit path-sensitive
+non-negativity and strict-decrease obligations for an `int` parameter measure. Coverage recursion remains
+rejected because a whole-image coverage contract is not a compositional summary for a fixed call.
+
+The next implementation slice is checked lemmas and proof-artifact export. A later coverage slice must define
+its own call judgment and witness-carrying under-summary instead of reusing the safety rule.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
 
 ## Property fuzzing
 
-`test/fuzz_runner.ml` recursively generates ground/template term trees, higher-sorted predicate lambdas, and
-random mutually-recursive Horn graphs. It checks that successful unification reconstructs the ground term,
-solved contexts are complete, recursive evar solutions fail the occurs-check, Hindley application elaboration
+`test/fuzz_runner.ml` recursively generates ground/template term trees, higher-sorted predicate lambdas,
+random mutually-recursive Horn graphs, and random function call graphs. It checks that successful unification
+reconstructs the ground term, solved contexts are complete, recursive evar solutions fail the occurs-check,
+Hindley application elaboration
 returns the expected ghost argument, result substitution/beta-reduction preserve the generated scheme, and Horn
-least-fixpoint solutions agree with graph reachability. The default seed and case count are deterministic; both
+least-fixpoint solutions agree with graph reachability, and function SCCs agree with transitive closure. The
+default seed and case count are deterministic; both
 can be overridden through `REFINED_FUZZ_SEED` and `REFINED_FUZZ_CASES`.

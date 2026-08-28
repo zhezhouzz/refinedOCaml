@@ -8,6 +8,7 @@ type context = {
   body : string;
   pre : string;
   post : string;
+  assumptions : string list;
   side_conditions : string list;
 }
 

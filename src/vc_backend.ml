@@ -403,6 +403,7 @@ let typed_pattern_smt env scrutinee pattern =
 type generic_call_state = {
   runtime_declarations : (string, string list * string) Hashtbl.t;
   mutable side_conditions : string list;
+  mutable summary_assumptions : string list;
   mutable ghost_instantiations : string list;
 }
 
@@ -410,6 +411,7 @@ let new_generic_call_state () =
   {
     runtime_declarations = Hashtbl.create 8;
     side_conditions = [];
+    summary_assumptions = [];
     ghost_instantiations = [];
   }
 
@@ -470,12 +472,16 @@ let generic_constraint_smt ~loc (constraint_ : Generic_refinement.constraint_) =
   with Invalid_argument message ->
     typed_error_at loc "generic call constraint is not first-order: %s" message
 
-let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
-    choices generic_calls env expression =
+let under_path path condition =
+  match path with [] -> condition | _ -> app "=>" [ and_ path; condition ]
+
+let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
+    current_function path call_stack choices generic_calls env expression =
   let registry = program.registry in
   let _sort = expression.Typed_core.sort in
   let recurse =
-    typed_expr_smt_with_choices program call_stack choices generic_calls env
+    typed_expr_smt_with_choices program analysis mode current_function path
+      call_stack choices generic_calls env
   in
   let make ?(refinement = expression.Typed_core.refinement) term =
     { term; refinement }
@@ -536,7 +542,9 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
       generic_calls.side_conditions <-
         List.rev_append
           (List.map
-             (generic_constraint_smt ~loc:expression.loc)
+             (fun constraint_ ->
+               generic_constraint_smt ~loc:expression.loc constraint_
+               |> under_path path)
              elaboration.constraints)
           generic_calls.side_conditions;
       generic_calls.ghost_instantiations <-
@@ -565,8 +573,9 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
                    (typed_logic_name logic_symbol)
                    [ recurse_term left; recurse_term right ])
           | None ->
-              typed_inline_call program call_stack choices generic_calls env
-                expression symbol [ left; right ]))
+              typed_inline_call program analysis mode current_function path
+                call_stack choices generic_calls env expression symbol
+                [ left; right ]))
   | Apply (symbol, [ argument ]) when symbol.display = "not" ->
       make (app "not" [ recurse_term argument ])
   | Apply (symbol, _) -> (
@@ -586,32 +595,48 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
                (typed_logic_name logic_symbol)
                (List.map recurse_term arguments))
       | None ->
-          typed_inline_call program call_stack choices generic_calls env
-            expression symbol arguments)
+          typed_inline_call program analysis mode current_function path
+            call_stack choices generic_calls env expression symbol arguments)
   | If (condition, if_true, if_false) ->
-      let if_true = recurse if_true in
-      let if_false = recurse if_false in
+      let condition = recurse condition in
+      let branch branch_path branch =
+        typed_expr_smt_with_choices program analysis mode current_function
+          (branch_path :: path) call_stack choices generic_calls env branch
+      in
+      let if_true = branch condition.term if_true in
+      let if_false = branch (app "not" [ condition.term ]) if_false in
       let refinement =
         if if_true.refinement = if_false.refinement then if_true.refinement
         else expression.refinement
       in
       make ~refinement
-        (app "ite" [ recurse_term condition; if_true.term; if_false.term ])
+        (app "ite" [ condition.term; if_true.term; if_false.term ])
   | Let (symbol, value, body) ->
       let value = recurse value in
-      typed_expr_smt_with_choices program call_stack choices generic_calls
+      typed_expr_smt_with_choices program analysis mode current_function path
+        call_stack choices generic_calls
         ((symbol.key, value) :: env)
         body
   | Match (scrutinee, cases) ->
       let scrutinee = recurse_term scrutinee in
       let translated =
-        List.map
-          (fun (pattern, body) ->
-            let guard, case_env = typed_pattern_smt env scrutinee pattern in
-            ( guard,
-              typed_expr_smt_with_choices program call_stack choices
-                generic_calls case_env body ))
-          cases
+        let rec translate previous = function
+          | [] -> []
+          | (pattern, body) :: rest ->
+              let guard, case_env = typed_pattern_smt env scrutinee pattern in
+              let effective_guard =
+                match previous with
+                | [] -> guard
+                | _ -> and_ [ guard; app "not" [ or_ previous ] ]
+              in
+              let body =
+                typed_expr_smt_with_choices program analysis mode
+                  current_function (effective_guard :: path) call_stack choices
+                  generic_calls case_env body
+              in
+              (guard, body) :: translate (guard :: previous) rest
+        in
+        translate [] cases
       in
       let refinement =
         match translated with
@@ -638,8 +663,8 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
            (typed_tuple_constructor expression.sort)
            (List.map recurse_term elements))
 
-and typed_inline_call program call_stack choices generic_calls env expression
-    symbol arguments =
+and typed_inline_call program analysis mode current_function path call_stack
+    choices generic_calls env expression symbol arguments =
   let function_def =
     List.find_opt
       (fun (function_def : Typed_core.function_def) ->
@@ -651,31 +676,119 @@ and typed_inline_call program call_stack choices generic_calls env expression
       typed_error_at expression.Typed_core.loc
         "call to `%s` needs a refinement summary" symbol.display
   | Some function_def ->
-      if List.mem symbol.key call_stack then
-        typed_error_at expression.loc
-          "recursive call to `%s` requires a measure/summary" symbol.display;
       if List.length arguments <> List.length function_def.arguments then
         typed_error_at expression.loc
           "call to `%s` has unsupported partial arity" symbol.display;
-      let terms =
+      let values =
         List.map
-          (typed_expr_smt_with_choices program call_stack choices generic_calls
-             env)
+          (typed_expr_smt_with_choices program analysis mode current_function
+             path call_stack choices generic_calls env)
           arguments
       in
-      let call_env =
-        List.map2
-          (fun (argument, _) term -> (argument.Typed_core.key, term))
-          function_def.arguments terms
+      let terms = List.map (fun value -> value.term) values in
+      let recursive =
+        Function_analysis.is_recursive_edge analysis
+          ~caller:current_function.Typed_core.symbol.key ~callee:symbol.key
       in
-      typed_expr_smt_with_choices program (symbol.key :: call_stack) choices
-        generic_calls call_env function_def.body
+      let over_contracts =
+        List.filter
+          (fun (contract : Typed_core.contract) -> contract.mode = Over)
+          function_def.contracts
+      in
+      if mode = Over && over_contracts <> [] then (
+        let summary =
+          match over_contracts with
+          | [ summary ] -> summary
+          | _ ->
+              typed_error_at expression.loc
+                "call to `%s` has ambiguous safety summaries" symbol.display
+        in
+        let result = "call_result_" ^ string_of_int (List.length !choices) in
+        choices := (result, function_def.result) :: !choices;
+        let formula_env =
+          List.map2
+            (fun ((argument : Typed_core.symbol), _) term ->
+              (argument.display, term))
+            function_def.arguments terms
+        in
+        let translate formula =
+          parse_formula ~filename:summary.loc.file
+            ~loc:(location_of_span summary.loc)
+            formula
+          |> typed_formula program.registry formula_env
+        in
+        let pre = translate summary.pre in
+        let post =
+          parse_formula ~filename:summary.loc.file
+            ~loc:(location_of_span summary.loc)
+            summary.post
+          |> typed_formula program.registry (("result", result) :: formula_env)
+        in
+        generic_calls.side_conditions <-
+          under_path path pre :: generic_calls.side_conditions;
+        generic_calls.summary_assumptions <-
+          under_path path post :: generic_calls.summary_assumptions;
+        (if recursive then
+           let callee_measure =
+             match function_def.measure with
+             | Some measure -> measure
+             | None ->
+                 typed_error_at expression.loc
+                   "recursive callee `%s` needs [@refined.measure]"
+                   symbol.display
+           in
+           let caller_measure =
+             match current_function.Typed_core.measure with
+             | Some measure -> measure
+             | None ->
+                 typed_error_at expression.loc
+                   "recursive caller `%s` needs [@refined.measure]"
+                   current_function.symbol.display
+           in
+           let callee_measure_term =
+             List.find_map
+               (fun (((argument : Typed_core.symbol), _), term) ->
+                 if argument.key = callee_measure.key then Some term else None)
+               (List.combine function_def.arguments terms)
+             |> Option.get
+           in
+           let caller_measure_term =
+             match List.assoc_opt caller_measure.key env with
+             | Some value -> value.term
+             | None -> assert false
+           in
+           generic_calls.side_conditions <-
+             under_path path
+               (and_
+                  [
+                    app ">=" [ caller_measure_term; "0" ];
+                    app "<" [ callee_measure_term; caller_measure_term ];
+                  ])
+             :: generic_calls.side_conditions);
+        { term = result; refinement = expression.refinement })
+      else if recursive then
+        typed_error_at expression.loc
+          (if mode = Under then
+             "recursive coverage call to `%s` needs a compositional \
+              under-summary"
+           else "recursive call to `%s` needs one safety summary")
+          symbol.display
+      else
+        let call_env =
+          List.map2
+            (fun (argument, _) term -> (argument.Typed_core.key, term))
+            function_def.arguments values
+        in
+        typed_expr_smt_with_choices program analysis mode function_def path
+          (symbol.key :: call_stack) choices generic_calls call_env
+          function_def.body
 
-let typed_expr_smt program env expression =
+let typed_expr_smt program analysis mode function_def env expression =
   let choices = ref [] in
   let generic_calls = new_generic_call_state () in
   let term =
-    typed_expr_smt_with_choices program [] choices generic_calls env expression
+    typed_expr_smt_with_choices program analysis mode function_def [] [] choices
+      generic_calls env expression
   in
   (term, List.rev !choices, generic_calls)
 
@@ -944,7 +1057,7 @@ let typed_datatype_prelude program function_def =
     program.registry.datatypes;
   Buffer.contents buffer
 
-let typed_obligation (program : Typed_core.program)
+let typed_obligation (program : Typed_core.program) analysis
     (function_def : Typed_core.function_def) (contract : Typed_core.contract) =
   let env =
     List.map
@@ -972,7 +1085,8 @@ let typed_obligation (program : Typed_core.program)
     typed_specialize_program program function_def pre_expression post_expression
   in
   let body, choices, generic_calls =
-    typed_expr_smt program env function_def.body
+    typed_expr_smt program analysis contract.mode function_def env
+      function_def.body
   in
   let pre = typed_formula program.registry formula_env pre_expression in
   let result_name =
@@ -1008,6 +1122,7 @@ let typed_obligation (program : Typed_core.program)
       body = body.term;
       pre;
       post;
+      assumptions = List.rev generic_calls.summary_assumptions;
       side_conditions = List.rev generic_calls.side_conditions;
     };
   Buffer.add_string buffer "(check-sat)\n(get-model)\n";
@@ -1025,10 +1140,11 @@ let typed_obligation (program : Typed_core.program)
 
 let obligations_of_cmt_with_theories ~theories filename =
   let program = Ocaml_5_3_frontend.program_of_cmt ~theories filename in
+  let analysis = Function_analysis.analyze program in
   List.concat_map
     (fun function_def ->
       List.map
-        (typed_obligation program function_def)
+        (typed_obligation program analysis function_def)
         function_def.Typed_core.contracts)
     program.functions
 

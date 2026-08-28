@@ -324,6 +324,14 @@ let () =
   compile "../examples/polymorphic.ml" "typed_polymorphic";
   compile "../examples/tuple.ml" "typed_tuple";
   compile "../examples/unsupported.ml" "typed_unsupported";
+  compile "../examples/recursive_valid.ml" "typed_recursive_valid";
+  compile "../examples/recursive_bad_measure.ml" "typed_recursive_bad_measure";
+  compile "../examples/recursive_missing_measure.ml"
+    "typed_recursive_missing_measure";
+  compile "../examples/recursive_missing_summary.ml"
+    "typed_recursive_missing_summary";
+  compile "../examples/recursive_coverage.ml" "typed_recursive_coverage";
+  compile "../examples/mutual_recursive.ml" "typed_mutual_recursive";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
@@ -335,6 +343,25 @@ let () =
   obligations_of_cmt "typed_choice.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_polymorphic.cmt" |> List.iter (require `Valid);
   obligations_of_cmt "typed_tuple.cmt" |> List.iter (require `Valid);
+  obligations_of_cmt "typed_recursive_valid.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "call_result_") then
+        failwith "recursive call did not use its function summary";
+      if not (contains obligation.smt "(<") then
+        failwith "recursive call did not emit a decreasing-measure obligation";
+      require `Valid obligation);
+  obligations_of_cmt "typed_mutual_recursive.cmt" |> List.iter (require `Valid);
+  obligations_of_cmt "typed_recursive_bad_measure.cmt"
+  |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_recursive_missing_measure.cmt" with
+  | _ -> failwith "recursive function without a measure was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_recursive_missing_summary.cmt" with
+  | _ -> failwith "recursive function without a summary was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_recursive_coverage.cmt" with
+  | _ -> failwith "safety summary was unsoundly reused for recursive coverage"
+  | exception Location.Error _ -> ());
   (match obligations_of_cmt "typed_unsupported.cmt" with
   | _ -> failwith "an unsupported effectful Typedtree was accepted"
   | exception Location.Error _ -> ());

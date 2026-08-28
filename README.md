@@ -188,6 +188,24 @@ lower bounds 合成析取。Horn application 位于 `not`、`or`、关系式内�
 fixpoint；互递归 SCC 支持 base-fact propagation，无依据循环稳定为 `false`，超出迭代上限则拒绝。
 当前没有 widening，也不声称能求解超出受支持 term algebra 的任意 SMT-CHC。
 
+## 函数 summary 与递归
+
+带 `refined.over` 合约的本地一阶函数可作为 summary 使用，不再必须展开函数体。递归函数还要选择
+一个 `int` 参数作为 well-founded measure：
+
+```ocaml
+let[@refined.over { pre = "n >= 0"; post = "result = 0" }]
+   [@refined.measure "n"] rec countdown n =
+  if n = 0 then 0 else countdown (n - 1)
+```
+
+Stable Core 会构造函数调用图并用 Tarjan 算法求 SCC。SCC 内每条调用边都使用 callee 的唯一 safety
+summary，并在实际控制流路径下检查 summary precondition、caller measure 非负以及 callee measure
+严格下降。每个带合约的 SCC 成员仍会独立产生 VC，因此 summary 不是 trusted axiom。
+
+当前 measure 必须直接命名一个 `int` 参数。递归 coverage 被明确拒绝：现有 coverage 合约描述整个
+函数 image，并不是可安全用于固定实参调用的 compositional under-summary。
+
 ## ADT 编码
 
 例如：
@@ -228,11 +246,13 @@ well-founded measure、checked lemma 或有限展开显式引入。
 | over / coverage contract | 支持 | upper validity / lower image coverage |
 | 二选一 nondeterministic `choose` | 支持 | demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
-| 多态用户 ADT、高阶值、递归 | 明确拒绝 | 需要 monomorphisation/closure/measure |
+| safety 函数 summary、直接/互递归 | 支持 | call-graph SCC + `int` measure |
+| 递归 coverage | 明确拒绝 | 需要 compositional under-summary/witness |
+| 多态用户 ADT、高阶值 | 明确拒绝 | 需要 monomorphisation/closure |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
-| Evar/Hindley/Horn graph fuzzing | 支持 | deterministic `@fuzz` + reachability oracle |
+| Evar/Hindley/Horn/function-SCC fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
 
 未支持的 Typedtree node 会报错。
@@ -241,11 +261,10 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 函数 summary、递归 call-graph SCC 与 termination measure；
-2. Checked lemma 与 proof-artifact 导出；
-3. 参数化用户 ADT 的按使用点 monomorphisation；
-4. functor/theory transformer 与 generativity；
-5. 关系化 mutation、exception 和 effect handler。
+1. Checked lemma 与 proof-artifact 导出；
+2. 参数化用户 ADT 的按使用点 monomorphisation；
+3. functor/theory transformer 与 generativity；
+4. 关系化 mutation、exception 和 effect handler。
 
 当前模块边界：
 

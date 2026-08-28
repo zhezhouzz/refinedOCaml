@@ -68,6 +68,7 @@ type function_def = {
   result : sort;
   body : expr;
   contracts : contract list;
+  measure : symbol option;
 }
 
 type registry = {

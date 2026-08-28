@@ -322,6 +322,116 @@ let fuzz_recursive_horn random case =
           | _ -> fail case "Horn fixpoint disagreed with graph reachability")
         names
 
+let fuzz_function_scc random case =
+  let open Refined_ir.Typed_core in
+  let count = 1 + Random.State.int random 7 in
+  let symbols =
+    Array.init count (fun index ->
+        let name = "f" ^ string_of_int index in
+        { key = name; display = name })
+  in
+  let edges = Array.make_matrix count count false in
+  for caller = 0 to count - 1 do
+    for callee = 0 to count - 1 do
+      edges.(caller).(callee) <- Random.State.int random 5 = 0
+    done
+  done;
+  let position = Refined_ir.Source_span.{ offset = 0; line = 1; column = 0 } in
+  let loc =
+    Refined_ir.Source_span.
+      { file = "<function-scc-fuzz>"; start = position; finish = position }
+  in
+  let call callee =
+    {
+      desc = Apply (symbols.(callee), []);
+      sort = S_int;
+      refinement = None;
+      loc;
+    }
+  in
+  let functions =
+    Array.to_list
+      (Array.mapi
+         (fun caller symbol ->
+           let calls =
+             List.init count Fun.id
+             |> List.filter_map (fun callee ->
+                 if edges.(caller).(callee) then Some (call callee) else None)
+           in
+           let body =
+             match calls with
+             | [] -> { desc = Int 0; sort = S_int; refinement = None; loc }
+             | [ call ] -> call
+             | calls ->
+                 {
+                   desc = Tuple calls;
+                   sort = S_tuple (List.map (fun _ -> S_int) calls);
+                   refinement = None;
+                   loc;
+                 }
+           in
+           {
+             symbol;
+             arguments = [];
+             result = body.sort;
+             body;
+             contracts = [];
+             measure = None;
+           })
+         symbols)
+  in
+  let registry =
+    {
+      constructors_by_uid = Hashtbl.create 0;
+      constructors_by_name = Hashtbl.create 0;
+      fields_by_uid = Hashtbl.create 0;
+      fields_by_name = Hashtbl.create 0;
+      logic_by_name = Hashtbl.create 0;
+      generic_schemes_by_name = Hashtbl.create 0;
+      axioms = [];
+      datatypes = [];
+    }
+  in
+  let analysis = Refined_ir.Function_analysis.analyze { registry; functions } in
+  let reachable = Array.map Array.copy edges in
+  for intermediate = 0 to count - 1 do
+    for caller = 0 to count - 1 do
+      for callee = 0 to count - 1 do
+        reachable.(caller).(callee) <-
+          reachable.(caller).(callee)
+          || reachable.(caller).(intermediate)
+             && reachable.(intermediate).(callee)
+      done
+    done
+  done;
+  for caller = 0 to count - 1 do
+    let expected_dependencies =
+      List.init count Fun.id
+      |> List.filter (fun callee -> edges.(caller).(callee))
+      |> List.map (fun callee -> symbols.(callee).key)
+    in
+    if
+      List.assoc symbols.(caller).key analysis.dependency_graph
+      <> expected_dependencies
+    then fail case "function call graph lost or invented an edge";
+    if
+      Refined_ir.Function_analysis.is_recursive_function analysis
+        symbols.(caller).key
+      <> reachable.(caller).(caller)
+    then fail case "function SCC recursion disagreed with transitive closure";
+    for callee = 0 to count - 1 do
+      if edges.(caller).(callee) then
+        let expected =
+          reachable.(caller).(callee) && reachable.(callee).(caller)
+        in
+        if
+          Refined_ir.Function_analysis.is_recursive_edge analysis
+            ~caller:symbols.(caller).key ~callee:symbols.(callee).key
+          <> expected
+        then fail case "recursive call edge disagreed with SCC oracle"
+    done
+  done
+
 let () =
   let cases = env_int "REFINED_FUZZ_CASES" 5_000 in
   let seed = env_int "REFINED_FUZZ_SEED" 0x5eed_2026 in
@@ -332,7 +442,8 @@ let () =
       fuzz_evars random case;
       fuzz_hindley random case;
       fuzz_horn random case;
-      fuzz_recursive_horn random case
+      fuzz_recursive_horn random case;
+      fuzz_function_scc random case
     done;
     Printf.printf "fuzz: %d cases passed (seed=%d)\n%!" cases seed
   with Fuzz_failure (case, message) ->

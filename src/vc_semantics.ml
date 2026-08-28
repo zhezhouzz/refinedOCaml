@@ -10,6 +10,7 @@ type context = {
   body : string;
   pre : string;
   post : string;
+  assumptions : string list;
   side_conditions : string list;
 }
 
@@ -33,7 +34,8 @@ module Safety : S = struct
         ~children:[]
     in
     let checked =
-      Typing_judgment.Safety.check ~assumptions:[ context.pre ]
+      Typing_judgment.Safety.check
+        ~assumptions:(context.pre :: context.assumptions)
         ~expected:context.post judgment
     in
     let contract_obligation = Typing_judgment.Safety.obligation checked in
@@ -61,7 +63,9 @@ module Coverage : S = struct
     let actual =
       Refinement_domain.Smt.exists witnesses
         (Refinement_domain.Smt.conjunction
-           [ context.pre; Refinement_domain.Smt.equality missing context.body ])
+           (context.pre
+           :: Refinement_domain.Smt.equality missing context.body
+           :: context.assumptions))
     in
     let judgment =
       Typing_judgment.Coverage.synthesize ~rule:Function_body ~predicate:actual

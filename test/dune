@@ -23,7 +23,13 @@
   ../examples/generic_chain.ml
   ../examples/bad_horn_theory.mli
   ../examples/theory_private_client.ml
-  ../examples/ill_typed.ml))
+  ../examples/ill_typed.ml
+  ../examples/recursive_valid.ml
+  ../examples/recursive_bad_measure.ml
+  ../examples/recursive_missing_measure.ml
+  ../examples/recursive_missing_summary.ml
+  ../examples/recursive_coverage.ml
+  ../examples/mutual_recursive.ml))
 
 (executable
  (name ppx_sample)

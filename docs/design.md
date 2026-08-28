@@ -26,7 +26,9 @@ Under(P, e, Q) = ∀σ' r. Q(σ',r) ⇒ ∃σ. P(σ) ∧ Eval(e,σ,r,σ')
 over-partial   over-total   under-may   under-must
 ```
 
-当前 MVP 实现 `over-partial` 的无循环片段，以及确定性或有限 `choose` 纯函数的 `under-may`。
+当前 MVP 实现 `over-partial` 的一阶片段；递归 safety 通过 independently checked summary 和
+well-founded `int` measure 处理。确定性或有限 `choose` 纯函数支持 whole-image `under-may`，但递归
+coverage 仍需 compositional under-summary。
 
 ## 3. 合约表面语法
 
@@ -37,6 +39,13 @@ let[@refined.over  { pre = "..."; post = "..." }] f ... = ...
 let[@refined.coverage { pre = "..."; post = "..." }] g ... = ...
 ```
 
+已支持的递归语法：
+
+```ocaml
+let[@refined.over { pre = "n >= 0"; post = "..." }]
+   [@refined.measure "n"] rec fold n = ...
+```
+
 后续兼容语法：
 
 ```ocaml
@@ -45,7 +54,6 @@ val f : (x : int) -> int
   [@@refined.over  "x >= 0 ==> result > x"]
   [@@refined.under "result > 0"]
 
-let[@refined.measure "n"] rec fold ...
 axiom[@refined.axiom] name = "forall ..."
 ```
 
@@ -132,11 +140,11 @@ under 合约需要可构造的 closure witness，不能只靠 over-style univers
 
 保留 PPX 属性的 Typedtree frontend、typed Core、纯一阶算术、tuple、单态 ADT/record、
 first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation、over/coverage VC、
-有限 choice、Z3、模型与 SMT 导出。
+有限 choice、safety function summary、递归 SCC/measure、Z3、模型与 SMT 导出。
 
 ### M1
 
-函数 summary、递归 SCC、measure、checked lemma、用户 ADT monomorphisation、增量缓存。
+checked lemma、proof artifact、用户 ADT monomorphisation、增量缓存。
 
 ### M2
 

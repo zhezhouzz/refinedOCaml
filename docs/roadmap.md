@@ -13,9 +13,9 @@
 | B. Axioms vs lemmas | 当前允许 trusted axioms；未来希望支持 checked lemmas | 当前 axiom 全部进入 TCB，并在结果中列出 trusted axiom 名称 | 部分完成 | 加入 `lemma` 语法、lemma VC、导出已检查 lemma |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态 variant/record 已支持；constructor、recognizer、selector 和基本代数 axioms 已生成 | MVP 已完成 | 支持参数化用户 ADT 的 use-site monomorphisation；加入 axiom slicing |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
-| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn surface、result propagation、Horn dependency graph/Tarjan SCC 和同步 least-fixpoint 已完成；随机 Horn graph fuzz 与可达性 oracle 一致 | Generic/CHC 阶段完成 | 转入函数 summary、递归 call-graph SCC 与 termination measure |
+| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn fixpoint 与 safety 函数 summary、递归 call-graph SCC、路径敏感 termination VC 已完成 | Safety/Generic 阶段完成 | 设计 compositional coverage judgment 与 under-summary |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 当前 coverage 是 `forall result. post(result) => exists input. pre(input) /\ result = f(input)` 的 SMT obligation | 未完成 | 设计 coverage judgment、subtyping/entailment、witness/inverse 支持 |
-| 函数调用 | 支持 first-order 函数调用 | 当前通过 inlining 处理本文件中的 first-order 函数；递归调用被拒绝 | 部分完成 | 加入函数 summary、递归 SCC、termination measure |
+| 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 的 type variable 可按 obligation 实例化；普通多态函数可 first-order inlining | 部分完成 | 用户参数化 ADT 的 monomorphisation；处理 polymorphic recursion 的拒绝/抽象机制 |
 | OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 int/bool、算术、if、简单 let、tuple、单态 ADT/record、exhaustive match；拒绝高阶、递归、mutation、exception、effect 等 | MVP 已完成 | 按优先级扩展 match/records/modules，再考虑 effectful core |
 | Solver 工程 | 生成 SMT-LIB，调用 Z3，输出 model | 已支持 `--emit-smt`、Z3 `sat/unsat/unknown`、model 输出 | MVP 已完成 | 记录 solver version、timeout、enabled axioms；改进 `unknown` 诊断 |
@@ -83,9 +83,13 @@ forall result. post(result) => exists input. pre(input) /\ result = f(input)
 
 仓库现在固定 OCaml 5.3.0，提交 `refined_ocaml.opam.locked`，提供 `dev/setup-switch.sh`，并由 GitHub
 Actions 运行 `@all/@install/@refined/@fmt/@fuzz`，autofix.ci 自动提交 `dune fmt` 修复。fuzz job 固定
-seed 跑 20,000 个 evar/Hindley elaboration cases。`refined_ocaml.ir` 不依赖 compiler-libs；所有版本敏感 API
-集中在 `Ocaml_5_3_frontend`。升级流程记录在 `docs/versioning.md`。
+seed 跑 20,000 个 evar/Hindley/Horn/function-SCC cases，并用图可达性作 oracle。`refined_ocaml.ir`
+不依赖 compiler-libs；所有版本敏感 API 集中在 `Ocaml_5_3_frontend`。升级流程记录在
+`docs/versioning.md`。
 
 Generic Refinement Types 的 Hindley/Horn surface、result propagation 与 mutually-recursive symbolic
-CHC fixpoint 已经落实。roadmap 的下一实现步骤切换为函数 summary、递归 call-graph SCC 与
-termination measure，替换当前“非递归调用直接 inline、递归调用拒绝”的策略。
+CHC fixpoint 已经落实。函数 safety summary、递归 call-graph SCC 与路径敏感的 termination measure
+也已经接入生产 VC 路径；summary 会由各函数自己的 obligation 检查，不进入 trusted axiom 集合。
+
+roadmap 的下一实现步骤是 checked lemma 与 proof-artifact 导出。递归 coverage 暂不借用 safety
+summary：它需要先定义固定实参下可组合的 under-summary 和 witness 规则。
