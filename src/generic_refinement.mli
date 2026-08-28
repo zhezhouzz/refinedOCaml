@@ -41,10 +41,12 @@ type elaboration = {
 type error =
   | Ill_sorted of string
   | Ill_formed_hindley of string
-  | Horn_not_supported of string
+  | Ill_formed_horn of string
   | Type_mismatch of string
   | Arity_mismatch
   | Unsolved_hindley of string
+  | Unsolved_horn of string
+  | Unsupported_horn_constraint of string
   | Cyclic_instantiation of string
 
 val well_formed : scheme -> (unit, error) result

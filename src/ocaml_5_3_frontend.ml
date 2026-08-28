@@ -456,11 +456,15 @@ let generic_scheme_of_attribute attribute =
                 | Ill_sorted message | Type_mismatch message -> message
                 | Ill_formed_hindley generic ->
                     "Hindley generic `" ^ generic ^ "` is not value-dependent"
-                | Horn_not_supported generic ->
-                    "Horn generic `" ^ generic ^ "` is not supported here"
+                | Ill_formed_horn generic ->
+                    "Horn generic `" ^ generic ^ "` is not positive"
                 | Arity_mismatch -> "generic scheme arity mismatch"
                 | Unsolved_hindley generic ->
                     "unsolved Hindley generic `" ^ generic ^ "`"
+                | Unsolved_horn generic ->
+                    "unsolved Horn generic `" ^ generic ^ "`"
+                | Unsupported_horn_constraint generic ->
+                    "unsupported Horn constraint for `" ^ generic ^ "`"
                 | Cyclic_instantiation evar ->
                     "cyclic generic instantiation `" ^ evar ^ "`"
               in

@@ -13,7 +13,7 @@
 | B. Axioms vs lemmas | 当前允许 trusted axioms；未来希望支持 checked lemmas | 当前 axiom 全部进入 TCB，并在结果中列出 trusted axiom 名称 | 部分完成 | 加入 `lemma` 语法、lemma VC、导出已检查 lemma |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态 variant/record 已支持；constructor、recognizer、selector 和基本代数 axioms 已生成 | MVP 已完成 | 支持参数化用户 ADT 的 use-site monomorphisation；加入 axiom slicing |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | `Vc_semantics.Safety` 与 `Vc_semantics.Coverage` 实现两套纯 VC template；同一 binding 可同时声明 over 和 coverage | MVP 已完成 | 从 whole-function VC 过渡到真正可组合的 typing judgment |
-| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | `[@@refined.hindley]` schemes 经 `.cmti/.rmi v2` 导出；resolved calls 使用 `[@refined.type]` 实参执行 evar elaboration，生成 SMT summary/side-condition 和 ghost diagnostics | Hindley surface 完成 | 实现 Horn constraint syntax、positivity checking、application variables 和 solver |
+| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley surface 已完成；`[@@refined.horn]` 支持 top-level positive applications、lower-bound constraint generation/solving、solution substitution 和 ghost diagnostics | Horn 正向片段完成 | 传播 call result refinements；随后扩展 mutually-recursive CHC fixpoint |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | 当前 coverage 是 `forall result. post(result) => exists input. pre(input) /\ result = f(input)` 的 SMT obligation | 未完成 | 设计 coverage judgment、subtyping/entailment、witness/inverse 支持 |
 | 函数调用 | 支持 first-order 函数调用 | 当前通过 inlining 处理本文件中的 first-order 函数；递归调用被拒绝 | 部分完成 | 加入函数 summary、递归 SCC、termination measure |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 的 type variable 可按 obligation 实例化；普通多态函数可 first-order inlining | 部分完成 | 用户参数化 ADT 的 monomorphisation；处理 polymorphic recursion 的拒绝/抽象机制 |
@@ -61,8 +61,8 @@ checking/synthesis/subtyping skeleton。Safety/Coverage 的生产 VC 已通过�
 
 论文实际重点是 generic refinement parameters，而不是直接统一 Safety/Coverage。我们采用其
 bidirectional/subtyping/evar 结构，同时保留 Safety 与 Coverage 的 denotation 差异。higher-sorted
-Hindley schemes 已完成 `.mli/.rmi` surface 与 resolved-call integration；下一 slice 正式进入 Horn
-constraint generation/solving。
+Hindley schemes 已完成 `.mli/.rmi` surface 与 resolved-call integration；非递归正向 Horn
+constraint generation/solving 也已接入同一条生产路径。
 
 ### 4. Coverage 目前只是 VC，不是真正的 coverage type system
 
@@ -86,6 +86,6 @@ Actions 运行 `@all/@install/@refined/@fmt/@fuzz`，autofix.ci 自动提交 `du
 seed 跑 20,000 个 evar/Hindley elaboration cases。`refined_ocaml.ir` 不依赖 compiler-libs；所有版本敏感 API
 集中在 `Ocaml_5_3_frontend`。升级流程记录在 `docs/versioning.md`。
 
-Generic Refinement Types 的 Hindley surface 阶段已经落实。roadmap 的下一实现步骤切换为 Horn
-generics：检查正向位置、在调用点生成 Horn variables/constraints，并求解后回填 ghost
-instantiations。同时继续传播 Hindley result refinements，以减少显式实参 annotations。
+Generic Refinement Types 的 Hindley surface 与正向 Horn lower-bound 阶段已经落实。roadmap 的下一
+实现步骤切换为 result refinement propagation：让 generic call 的 elaborated result 自动成为后续调用
+的实参 refinement，减少显式 annotations；随后再做 mutually-recursive CHC fixpoint。

@@ -438,12 +438,18 @@ let generic_error ~loc =
       typed_error_at loc "%s" message
   | Ill_formed_hindley generic ->
       typed_error_at loc "Hindley generic `%s` is not value-dependent" generic
-  | Horn_not_supported generic ->
-      typed_error_at loc "Horn generic `%s` requires the Horn solver" generic
+  | Ill_formed_horn generic ->
+      typed_error_at loc "Horn generic `%s` is not in a positive position"
+        generic
   | Arity_mismatch ->
       typed_error_at loc "generic scheme application arity mismatch"
   | Unsolved_hindley generic ->
       typed_error_at loc "Hindley generic `%s` was not solved by its arguments"
+        generic
+  | Unsolved_horn generic ->
+      typed_error_at loc "Horn generic `%s` has no solvable lower bound" generic
+  | Unsupported_horn_constraint generic ->
+      typed_error_at loc "Horn constraints for `%s` left the positive fragment"
         generic
   | Cyclic_instantiation evar ->
       typed_error_at loc "cyclic Hindley instantiation `%s`" evar

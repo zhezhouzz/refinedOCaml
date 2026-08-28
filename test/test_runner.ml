@@ -144,17 +144,50 @@ let test_higher_sorted_hindley_application () =
   | Error (Ill_formed_hindley "property") -> ()
   | Ok () | Error _ ->
       failwith "output-only Hindley generic was accepted as value-dependent");
+  let horn_refined predicate =
+    Refined
+      { base = "int"; index_sort = int_sort; index = Integer 1; predicate }
+  in
+  let horn_application = Apply (Generic "property", Integer 1) in
   let horn =
     Forall
       ( { name = "property"; mode = Horn; sort = predicate_sort },
         Mono
-          (Function (indexed (Generic "property"), indexed (Generic "property")))
-      )
+          (Function
+             (horn_refined horn_application, horn_refined horn_application)) )
   in
-  match elaborate_application horn [ indexed positive ] with
-  | Error (Horn_not_supported "property") -> ()
-  | Ok _ | Error _ ->
-      failwith "Horn generic was not kept behind its solver boundary"
+  (match
+     elaborate_application horn
+       [ horn_refined (Greater (Integer 1, Integer 0)) ]
+   with
+  | Error _ -> failwith "positive Horn generic was not solved"
+  | Ok elaboration ->
+      let expected =
+        Lambda
+          ( "horn_property",
+            int_sort,
+            Greater (Variable "horn_property", Integer 0) )
+      in
+      if
+        not
+          (List.exists
+             (fun instantiation ->
+               instantiation.generic = "property"
+               && instantiation.refinement = expected)
+             elaboration.instantiations)
+      then failwith "Horn lower bound did not produce the expected predicate");
+  let negative_horn =
+    Forall
+      ( { name = "property"; mode = Horn; sort = predicate_sort },
+        Mono
+          (Function
+             ( horn_refined (Or [ horn_application; Boolean true ]),
+               horn_refined horn_application )) )
+  in
+  match well_formed negative_horn with
+  | Error (Ill_formed_horn "property") -> ()
+  | Ok () | Error _ ->
+      failwith "Horn generic under disjunction passed positivity checking"
 
 let () =
   test_compositional_judgment ();
@@ -214,6 +247,7 @@ let () =
   run
     "ocamlc -bin-annot -I . -c ../examples/generic_client_missing.ml -o \
      generic_client_missing.cmo";
+  run "ocamlc -bin-annot -I . -c ../examples/horn_client.ml -o horn_client.cmo";
   run
     "ocamlc -bin-annot -I . -c ../examples/theory_private_client.ml -o \
      theory_private_client.cmo";
@@ -253,6 +287,24 @@ let () =
        "generic_client_missing.cmt"
    with
   | _ -> failwith "generic call without an argument refinement was accepted"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt_with_theories ~theories:[ "list_theory.rmi" ]
+    "horn_client.cmt"
+  |> List.iter (fun obligation ->
+      if
+        not
+          (List.exists
+             (fun ghost -> contains ghost "horn_identity.property=(fun")
+             obligation.ghost_instantiations)
+      then failwith "Horn solver did not report its inferred predicate";
+      require `Valid obligation);
+  run
+    "ocamlc -bin-annot -c ../examples/bad_horn_theory.mli -o \
+     bad_horn_theory.cmi";
+  (match
+     write_rmi ~cmti:"bad_horn_theory.cmti" ~output:"bad_horn_theory.rmi"
+   with
+  | () -> failwith "Horn generic under disjunction was exported"
   | exception Location.Error _ -> ());
   obligations_of_cmt_with_theories ~theories:[ "list_theory.rmi" ]
     "theory_private_client.cmt"

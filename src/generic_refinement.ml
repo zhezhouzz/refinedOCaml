@@ -41,10 +41,12 @@ type elaboration = {
 type error =
   | Ill_sorted of string
   | Ill_formed_hindley of string
-  | Horn_not_supported of string
+  | Ill_formed_horn of string
   | Type_mismatch of string
   | Arity_mismatch
   | Unsolved_hindley of string
+  | Unsolved_horn of string
+  | Unsupported_horn_constraint of string
   | Cyclic_instantiation of string
 
 let string_of_base_sort = function
@@ -194,6 +196,44 @@ let rec value_dependent name polarity = function
         input
       || value_dependent name polarity output
 
+let rec horn_term_status name ~top term =
+  match term with
+  | Apply (Generic candidate, argument) when candidate = name ->
+      (top && not (occurs_generic name argument), true)
+  | Generic candidate when candidate = name -> (false, true)
+  | And terms ->
+      List.fold_left
+        (fun (valid, seen) term ->
+          let child_valid, child_seen = horn_term_status name ~top term in
+          (valid && child_valid, seen || child_seen))
+        (true, false) terms
+  | Or terms ->
+      let seen = List.exists (occurs_generic name) terms in
+      (not seen, seen)
+  | Not term ->
+      let seen = occurs_generic name term in
+      (not seen, seen)
+  | Lambda (_, _, body) -> horn_term_status name ~top:false body
+  | Apply (left, right)
+  | Equal (left, right)
+  | Add (left, right)
+  | Greater (left, right) ->
+      let seen = occurs_generic name left || occurs_generic name right in
+      (not seen, seen)
+  | Integer _ | Boolean _ | Variable _ | Generic _ | Evar _ -> (true, false)
+
+let rec horn_type_status name = function
+  | Refined { index; predicate; _ } ->
+      let index_seen = occurs_generic name index in
+      let predicate_valid, predicate_seen =
+        horn_term_status name ~top:true predicate
+      in
+      ((not index_seen) && predicate_valid, index_seen || predicate_seen)
+  | Function (input, output) ->
+      let input_valid, input_seen = horn_type_status name input in
+      let output_valid, output_seen = horn_type_status name output in
+      (input_valid && output_valid, input_seen || output_seen)
+
 let rec infer_term_sort generics variables evars term =
   let infer = infer_term_sort generics variables evars in
   match term with
@@ -271,7 +311,7 @@ let rec check_type_sort generics = function
           check_type_sort generics output)
 
 let well_formed scheme =
-  let rec check generics hindley = function
+  let rec check generics hindley horn = function
     | Mono type_ ->
         Result.bind (check_type_sort generics type_) (fun () ->
             match
@@ -279,8 +319,17 @@ let well_formed scheme =
                 (fun generic -> not (value_dependent generic `Positive type_))
                 hindley
             with
-            | None -> Ok ()
-            | Some generic -> Error (Ill_formed_hindley generic))
+            | Some generic -> Error (Ill_formed_hindley generic)
+            | None -> (
+                match
+                  List.find_opt
+                    (fun generic ->
+                      let valid, seen = horn_type_status generic type_ in
+                      (not valid) || not seen)
+                    horn
+                with
+                | None -> Ok ()
+                | Some generic -> Error (Ill_formed_horn generic)))
     | Forall (generic, rest) ->
         if not (first_order_sort generic.sort) then
           Error
@@ -293,9 +342,12 @@ let well_formed scheme =
             (match generic.mode with
             | Hindley -> generic.name :: hindley
             | Horn -> hindley)
+            (match generic.mode with
+            | Horn -> generic.name :: horn
+            | Hindley -> horn)
             rest
   in
-  check [] [] scheme
+  check [] [] [] scheme
 
 module Evar_term = struct
   type t = term
@@ -355,6 +407,86 @@ module Evars = Evar_context.Make (Evar_term)
 let substitute_evars context term = Evars.substitute context term |> normalize
 let substitute_evars_type context = map_type_terms (substitute_evars context)
 
+let rec replace_term target replacement term =
+  if term = target then replacement
+  else
+    match term with
+    | Lambda (parameter, sort, body) ->
+        Lambda (parameter, sort, replace_term target replacement body)
+    | Apply (function_, argument) ->
+        Apply
+          ( replace_term target replacement function_,
+            replace_term target replacement argument )
+    | Not term -> Not (replace_term target replacement term)
+    | And terms -> And (List.map (replace_term target replacement) terms)
+    | Or terms -> Or (List.map (replace_term target replacement) terms)
+    | Equal (left, right) ->
+        Equal
+          ( replace_term target replacement left,
+            replace_term target replacement right )
+    | Add (left, right) ->
+        Add
+          ( replace_term target replacement left,
+            replace_term target replacement right )
+    | Greater (left, right) ->
+        Greater
+          ( replace_term target replacement left,
+            replace_term target replacement right )
+    | Integer _ | Boolean _ | Variable _ | Generic _ | Evar _ -> term
+
+let substitute_generic_constraint name replacement constraint_ =
+  {
+    assumption = substitute_generic name replacement constraint_.assumption;
+    requirement = substitute_generic name replacement constraint_.requirement;
+  }
+
+let horn_lower_bounds name constraints =
+  let rec heads assumption requirement =
+    match requirement with
+    | Apply (Generic candidate, argument) when candidate = name ->
+        Ok [ (argument, assumption) ]
+    | And requirements ->
+        List.fold_left
+          (fun result requirement ->
+            Result.bind result (fun bounds ->
+                Result.map
+                  (fun more -> more @ bounds)
+                  (heads assumption requirement)))
+          (Ok []) requirements
+    | requirement when occurs_generic name requirement ->
+        Error (Unsupported_horn_constraint name)
+    | _ -> Ok []
+  in
+  List.fold_left
+    (fun result constraint_ ->
+      Result.bind result (fun bounds ->
+          if occurs_generic name constraint_.assumption then
+            Error (Unsupported_horn_constraint name)
+          else
+            Result.map
+              (fun more -> more @ bounds)
+              (heads constraint_.assumption constraint_.requirement)))
+    (Ok []) constraints
+
+let solve_horn name sort constraints =
+  match sort with
+  | Arrow (input_sort, Base Bool) ->
+      Result.bind (horn_lower_bounds name constraints) (function
+        | [] -> Error (Unsolved_horn name)
+        | bounds ->
+            let parameter = "horn_" ^ name in
+            let bodies =
+              List.map
+                (fun (argument, assumption) ->
+                  replace_term argument (Variable parameter) assumption)
+                bounds
+            in
+            let body = match bodies with [ body ] -> body | _ -> Or bodies in
+            Ok (Lambda (parameter, input_sort, normalize body)))
+  | _ ->
+      Error
+        (Ill_sorted ("Horn generic " ^ name ^ " must have sort base -> bool"))
+
 let rec check_argument context actual formal constraints =
   match (actual, formal) with
   | ( Refined
@@ -403,10 +535,10 @@ let elaborate_application scheme arguments =
       Result.bind arguments_well_sorted (fun () ->
           let context = Evars.create () in
           let counter = ref 0 in
-          let rec instantiate generics evar_sorts = function
-            | Mono type_ -> Ok (generics, evar_sorts, type_)
-            | Forall ({ mode = Horn; name; _ }, _) ->
-                Error (Horn_not_supported name)
+          let rec instantiate generics evar_sorts horns = function
+            | Mono type_ -> Ok (generics, evar_sorts, horns, type_)
+            | Forall ({ mode = Horn; name; sort }, rest) ->
+                instantiate generics evar_sorts ((name, sort) :: horns) rest
             | Forall ({ mode = Hindley; name; sort }, rest) ->
                 let evar = Printf.sprintf "?%s_%d" name !counter in
                 incr counter;
@@ -426,10 +558,10 @@ let elaborate_application scheme arguments =
                 in
                 instantiate ((name, evar) :: generics)
                   ((evar, sort) :: evar_sorts)
-                  rest
+                  horns rest
           in
-          Result.bind (instantiate [] [] scheme)
-            (fun (generics, evar_sorts, type_) ->
+          Result.bind (instantiate [] [] [] scheme)
+            (fun (generics, evar_sorts, horns, type_) ->
               let rec apply type_ arguments constraints =
                 match (arguments, type_) with
                 | [], result -> Ok (result, constraints)
@@ -471,10 +603,45 @@ let elaborate_application scheme arguments =
                   in
                   match collect (List.rev generics) with
                   | Error error -> Error error
-                  | Ok instantiations ->
-                      Ok
-                        {
-                          instantiations;
-                          result = substitute_evars_type context result;
-                          constraints = List.rev constraints;
-                        }))))
+                  | Ok hindley_instantiations ->
+                      let constraints = List.rev constraints in
+                      let result = substitute_evars_type context result in
+                      let rec solve_horns constraints result instantiations =
+                        function
+                        | [] -> Ok (constraints, result, List.rev instantiations)
+                        | (name, sort) :: horns ->
+                            Result.bind (solve_horn name sort constraints)
+                              (fun refinement ->
+                                let constraints =
+                                  List.map
+                                    (substitute_generic_constraint name
+                                       refinement)
+                                    constraints
+                                in
+                                let result =
+                                  substitute_generic_type name refinement result
+                                in
+                                solve_horns constraints result
+                                  ({ generic = name; refinement }
+                                  :: instantiations)
+                                  horns)
+                      in
+                      Result.bind
+                        (solve_horns constraints result [] (List.rev horns))
+                        (fun (constraints, result, horn_instantiations) ->
+                          Ok
+                            {
+                              instantiations =
+                                hindley_instantiations @ horn_instantiations;
+                              result = map_type_terms normalize result;
+                              constraints =
+                                List.map
+                                  (fun constraint_ ->
+                                    {
+                                      assumption =
+                                        normalize constraint_.assumption;
+                                      requirement =
+                                        normalize constraint_.requirement;
+                                    })
+                                  constraints;
+                            })))))

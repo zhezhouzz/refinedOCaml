@@ -150,9 +150,11 @@ let fuzz_hindley random case =
         match error with
         | Ill_sorted message | Type_mismatch message -> message
         | Ill_formed_hindley generic -> "ill-formed " ^ generic
-        | Horn_not_supported generic -> "unexpected horn " ^ generic
+        | Ill_formed_horn generic -> "ill-formed horn " ^ generic
         | Arity_mismatch -> "arity"
         | Unsolved_hindley generic -> "unsolved " ^ generic
+        | Unsolved_horn generic -> "unsolved horn " ^ generic
+        | Unsupported_horn_constraint generic -> "unsupported horn " ^ generic
         | Cyclic_instantiation evar -> "cyclic " ^ evar)
   | Ok elaboration ->
       if
@@ -164,6 +166,55 @@ let fuzz_hindley random case =
       if List.length elaboration.constraints <> 1 then
         fail case "application did not emit exactly one argument constraint"
 
+let fuzz_horn random case =
+  let open Refined_ir.Generic_refinement in
+  let int_sort = Base Int in
+  let predicate_sort = Arrow (int_sort, Base Bool) in
+  let index = Random.State.int random 200 - 100 in
+  let threshold =
+    let candidate = Random.State.int random 200 - 100 in
+    if candidate = index then candidate + 1 else candidate
+  in
+  let refined predicate =
+    Refined
+      { base = "int"; index_sort = int_sort; index = Integer index; predicate }
+  in
+  let application = Apply (Generic "property", Integer index) in
+  let scheme =
+    Forall
+      ( { name = "property"; mode = Horn; sort = predicate_sort },
+        Mono (Function (refined application, refined application)) )
+  in
+  let assumption = Greater (Integer index, Integer threshold) in
+  (match elaborate_application scheme [ refined assumption ] with
+  | Error _ -> fail case "generated positive Horn constraint was not solved"
+  | Ok elaboration ->
+      let expected =
+        Lambda
+          ( "horn_property",
+            int_sort,
+            Greater (Variable "horn_property", Integer threshold) )
+      in
+      if
+        not
+          (List.exists
+             (fun instantiation ->
+               instantiation.generic = "property"
+               && instantiation.refinement = expected)
+             elaboration.instantiations)
+      then fail case "Horn solver inferred the wrong lower-bound predicate");
+  let invalid =
+    Forall
+      ( { name = "property"; mode = Horn; sort = predicate_sort },
+        Mono
+          (Function
+             (refined (Or [ application; Boolean true ]), refined application))
+      )
+  in
+  match well_formed invalid with
+  | Error (Ill_formed_horn "property") -> ()
+  | Ok () | Error _ -> fail case "Horn positivity check accepted disjunction"
+
 let () =
   let cases = env_int "REFINED_FUZZ_CASES" 5_000 in
   let seed = env_int "REFINED_FUZZ_SEED" 0x5eed_2026 in
@@ -172,7 +223,8 @@ let () =
   try
     for case = 0 to cases - 1 do
       fuzz_evars random case;
-      fuzz_hindley random case
+      fuzz_hindley random case;
+      fuzz_horn random case
     done;
     Printf.printf "fuzz: %d cases passed (seed=%d)\n%!" cases seed
   with Fuzz_failure (case, message) ->

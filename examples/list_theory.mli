@@ -18,6 +18,14 @@ val require_zero : int -> int
     result = ("Predicate", "int -> bool", "property", "true");
   }]
 
+val horn_identity : int -> int
+[@@refined.horn
+  {
+    generics = [ ("property", "int -> bool") ];
+    parameters = [ ("int", "int", "1", "property 1") ];
+    result = ("int", "int", "1", "property 1");
+  }]
+
 [@@@refined.axiom
 {
   name = "hd_mem";

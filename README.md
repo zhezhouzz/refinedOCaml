@@ -177,6 +177,11 @@ Checker 根据 parameter index 自动求出 `property`，对 result 做替换和
 parameter 的 refinement precondition。`.rmi` 保存 scheme，CLI 显示求得的 ghost instantiation。缺少
 `[@refined.type]`、未解 evar、类型不匹配或非 first-order constraint 都会拒绝验证。
 
+`[@@refined.horn]` 使用相同 scheme surface，但 generic application 只能出现在 predicate 的顶层合取
+中。调用点从 `assumption ⇒ property(index)` 收集 lower bounds，将 index 抽象为 lambda 参数，并把多条
+lower bounds 合成析取。Horn application 位于 `not`、`or`、关系式内部或 datatype index 时会在 `.rmi`
+生成阶段被拒绝。当前实现是非递归正向 Horn 片段，不包含互递归 CHC fixpoint。
+
 ## ADT 编码
 
 例如：
@@ -229,8 +234,8 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 加入 Horn generic constraint syntax、positivity checking 和 solver；
-2. 将 Hindley result refinements 继续传播给后续表达式，减少调用点 annotation；
+1. 将 Hindley/Horn result refinements 传播给后续表达式，减少调用点 annotation；
+2. 将 Horn lower-bound solver 扩展为带递归依赖的完整 CHC fixpoint；
 3. 函数 summary、递归 SCC、termination measure 与 checked lemma；
 4. 参数化用户 ADT 的按使用点 monomorphisation；
 5. functor/theory transformer 与 generativity。

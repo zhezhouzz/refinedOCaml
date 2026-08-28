@@ -65,9 +65,15 @@ Higher-sorted Hindley schemes are now exposed through `[@@refined.hindley]` in `
 both attributes, and the VC backend runs elaboration for the resolved OCaml `Path`, emits an uninterpreted runtime
 summary and checks elaborated side conditions. Ghost instantiations are retained in diagnostics.
 
-The next implementation slice should add Horn constraint syntax, top-level positivity checking, Horn-variable
-generation at application sites and a solver. Hindley result refinements should also be propagated to later Core
-expressions so common call chains need fewer explicit `[@refined.type]` annotations.
+The non-recursive positive Horn slice is implemented. `[@@refined.horn]` schemes enforce that generic
+applications occur only in top-level conjunctions and never in indices, negations, disjunctions or relations. At
+application sites the solver collects lower bounds `A => P(t)`, abstracts `t` into a lambda parameter, and joins
+multiple lower bounds with disjunction. The solution is substituted into result types, constraints and ghost
+diagnostics. Constraints outside this fragment fail closed.
+
+The next implementation slice should propagate elaborated Hindley/Horn result refinements to later Core
+expressions so common call chains need fewer explicit `[@refined.type]` annotations. The lower-bound solver can
+then be extended to mutually recursive Horn variables and a genuine CHC fixpoint computation.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
