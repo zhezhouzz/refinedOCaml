@@ -355,13 +355,16 @@ let typed_formula ?(scope = []) registry env expression =
   in
   translate env expression
 
+type smt_value = { term : string; refinement : Generic_refinement.type_ option }
+
 let typed_pattern_smt env scrutinee pattern =
   let rec translate env scrutinee = function
     | Typed_core.Pat_any -> ("true", env)
-    | Pat_var symbol -> ("true", (symbol.key, scrutinee) :: env)
+    | Pat_var symbol ->
+        ("true", (symbol.key, { term = scrutinee; refinement = None }) :: env)
     | Pat_alias (inner, symbol) ->
         let guard, env = translate env scrutinee inner in
-        (guard, (symbol.key, scrutinee) :: env)
+        (guard, (symbol.key, { term = scrutinee; refinement = None }) :: env)
     | Pat_int value -> (app "=" [ scrutinee; string_of_int value ], env)
     | Pat_bool value -> (app "=" [ scrutinee; string_of_bool value ], env)
     | Pat_tuple (sort, patterns) ->
@@ -471,23 +474,31 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
   let recurse =
     typed_expr_smt_with_choices program call_stack choices generic_calls env
   in
+  let make ?(refinement = expression.Typed_core.refinement) term =
+    { term; refinement }
+  in
+  let recurse_term expression = (recurse expression).term in
   match expression.Typed_core.desc with
   | Var symbol -> (
       match List.assoc_opt symbol.key env with
-      | Some term -> term
+      | Some value -> (
+          match expression.refinement with
+          | Some refinement -> { value with refinement = Some refinement }
+          | None -> value)
       | None ->
           typed_error_at expression.loc "unsupported global value `%s`"
             symbol.display)
-  | Int value -> string_of_int value
-  | Bool value -> string_of_bool value
+  | Int value -> make (string_of_int value)
+  | Bool value -> make (string_of_bool value)
   | Construct (constructor, arguments) | Record (constructor, arguments) ->
-      let arguments = List.map recurse arguments in
-      if arguments = [] then typed_constructor_name constructor
-      else app (typed_constructor_name constructor) arguments
+      let arguments = List.map recurse_term arguments in
+      make
+        (if arguments = [] then typed_constructor_name constructor
+         else app (typed_constructor_name constructor) arguments)
   | Choose [ left; right ] ->
       let name = "choice_" ^ string_of_int (List.length !choices) in
       choices := (name, Typed_core.S_bool) :: !choices;
-      app "ite" [ name; recurse left; recurse right ]
+      make (app "ite" [ name; recurse_term left; recurse_term right ])
   | Choose _ ->
       typed_error_at expression.loc
         "the MVP choose primitive currently requires exactly two alternatives"
@@ -496,16 +507,17 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
       let scheme =
         Hashtbl.find program.registry.generic_schemes_by_name symbol.key
       in
+      let argument_values = List.map recurse arguments in
       let actual_types =
         List.map
-          (fun (argument : Typed_core.expr) ->
-            match argument.refinement with
+          (fun ((argument : Typed_core.expr), value) ->
+            match value.refinement with
             | Some refinement -> refinement
             | None ->
                 typed_error_at argument.loc
                   "argument to generic `%s` needs [@refined.type]"
                   symbol.display)
-          arguments
+          (List.combine arguments argument_values)
       in
       let elaboration =
         match Generic_refinement.elaborate_application scheme actual_types with
@@ -532,10 +544,12 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
                  (Generic_refinement.string_of_term instantiation.refinement))
              elaboration.instantiations)
           generic_calls.ghost_instantiations;
-      app runtime_name (List.map recurse arguments)
+      make ~refinement:(Some elaboration.result)
+        (app runtime_name (List.map (fun value -> value.term) argument_values))
   | Apply (symbol, [ left; right ]) -> (
       match binary_operator symbol.display with
-      | Some operator -> app operator [ recurse left; recurse right ]
+      | Some operator ->
+          make (app operator [ recurse_term left; recurse_term right ])
       | None -> (
           match typed_lookup_logic registry [] symbol.key with
           | Some logic_symbol ->
@@ -543,14 +557,15 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
                 typed_error_at expression.loc
                   "logical predicate `%s` has an unsupported application arity"
                   symbol.display;
-              app
-                (typed_logic_name logic_symbol)
-                [ recurse left; recurse right ]
+              make
+                (app
+                   (typed_logic_name logic_symbol)
+                   [ recurse_term left; recurse_term right ])
           | None ->
               typed_inline_call program call_stack choices generic_calls env
                 expression symbol [ left; right ]))
   | Apply (symbol, [ argument ]) when symbol.display = "not" ->
-      app "not" [ recurse argument ]
+      make (app "not" [ recurse_term argument ])
   | Apply (symbol, _) -> (
       let arguments =
         match expression.desc with
@@ -563,19 +578,29 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
             typed_error_at expression.loc
               "logical predicate `%s` has an unsupported application arity"
               symbol.display;
-          app (typed_logic_name logic_symbol) (List.map recurse arguments)
+          make
+            (app
+               (typed_logic_name logic_symbol)
+               (List.map recurse_term arguments))
       | None ->
           typed_inline_call program call_stack choices generic_calls env
             expression symbol arguments)
   | If (condition, if_true, if_false) ->
-      app "ite" [ recurse condition; recurse if_true; recurse if_false ]
+      let if_true = recurse if_true in
+      let if_false = recurse if_false in
+      let refinement =
+        if if_true.refinement = if_false.refinement then if_true.refinement
+        else expression.refinement
+      in
+      make ~refinement
+        (app "ite" [ recurse_term condition; if_true.term; if_false.term ])
   | Let (symbol, value, body) ->
       let value = recurse value in
       typed_expr_smt_with_choices program call_stack choices generic_calls
         ((symbol.key, value) :: env)
         body
   | Match (scrutinee, cases) ->
-      let scrutinee = recurse scrutinee in
+      let scrutinee = recurse_term scrutinee in
       let translated =
         List.map
           (fun (pattern, body) ->
@@ -585,16 +610,30 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) call_stack
                 generic_calls case_env body ))
           cases
       in
+      let refinement =
+        match translated with
+        | [] -> expression.refinement
+        | (_, first) :: rest ->
+            if
+              List.for_all
+                (fun (_, value) -> value.refinement = first.refinement)
+                rest
+            then first.refinement
+            else expression.refinement
+      in
       let rec tree = function
         | [] -> typed_error_at expression.loc "empty match"
-        | [ (_, body) ] -> body
-        | (guard, body) :: rest -> app "ite" [ guard; body; tree rest ]
+        | [ (_, body) ] -> body.term
+        | (guard, body) :: rest -> app "ite" [ guard; body.term; tree rest ]
       in
-      tree translated
+      make ~refinement (tree translated)
   | Field (constructor, index, record) ->
-      app (typed_selector constructor index) [ recurse record ]
+      make (app (typed_selector constructor index) [ recurse_term record ])
   | Tuple elements ->
-      app (typed_tuple_constructor expression.sort) (List.map recurse elements)
+      make
+        (app
+           (typed_tuple_constructor expression.sort)
+           (List.map recurse_term elements))
 
 and typed_inline_call program call_stack choices generic_calls env expression
     symbol arguments =
@@ -906,12 +945,14 @@ let typed_obligation (program : Typed_core.program)
     (function_def : Typed_core.function_def) (contract : Typed_core.contract) =
   let env =
     List.map
-      (fun (symbol, _) -> (symbol.Typed_core.key, smt_identifier symbol.key))
+      (fun (symbol, _) ->
+        ( symbol.Typed_core.key,
+          { term = smt_identifier symbol.key; refinement = None } ))
       function_def.Typed_core.arguments
   in
   let formula_env =
     List.map2
-      (fun (symbol, _) (_, term) -> (symbol.Typed_core.display, term))
+      (fun (symbol, _) (_, value) -> (symbol.Typed_core.display, value.term))
       function_def.arguments env
   in
   let pre_expression =
@@ -961,7 +1002,7 @@ let typed_obligation (program : Typed_core.program)
       choices =
         List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices;
       result_sort = typed_smt_sort function_def.result;
-      body;
+      body = body.term;
       pre;
       post;
       side_conditions = List.rev generic_calls.side_conditions;

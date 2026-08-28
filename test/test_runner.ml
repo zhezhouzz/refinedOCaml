@@ -249,6 +249,9 @@ let () =
      generic_client_missing.cmo";
   run "ocamlc -bin-annot -I . -c ../examples/horn_client.ml -o horn_client.cmo";
   run
+    "ocamlc -bin-annot -I . -c ../examples/generic_chain.ml -o \
+     generic_chain.cmo";
+  run
     "ocamlc -bin-annot -I . -c ../examples/theory_private_client.ml -o \
      theory_private_client.cmo";
   write_rmi ~cmti:"list_theory.cmti" ~output:"list_theory.rmi";
@@ -297,6 +300,13 @@ let () =
              (fun ghost -> contains ghost "horn_identity.property=(fun")
              obligation.ghost_instantiations)
       then failwith "Horn solver did not report its inferred predicate";
+      require `Valid obligation);
+  obligations_of_cmt_with_theories ~theories:[ "list_theory.rmi" ]
+    "generic_chain.cmt"
+  |> List.iter (fun obligation ->
+      if List.length obligation.ghost_instantiations <> 2 then
+        failwith
+          "generic result refinement was not propagated to the second call";
       require `Valid obligation);
   run
     "ocamlc -bin-annot -c ../examples/bad_horn_theory.mli -o \

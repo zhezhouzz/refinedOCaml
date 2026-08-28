@@ -177,6 +177,10 @@ Checker 根据 parameter index 自动求出 `property`，对 result 做替换和
 parameter 的 refinement precondition。`.rmi` 保存 scheme，CLI 显示求得的 ghost instantiation。缺少
 `[@refined.type]`、未解 evar、类型不匹配或非 first-order constraint 都会拒绝验证。
 
+Elaborated result refinement 会沿 ANF `let`、变量引用、局部 first-order inlining，以及 refinement
+一致的 `if`/`match` 分支继续传播。因此 generic 调用链只需在第一个无法推导的来源值上写
+`[@refined.type]`，后续调用会自动使用前一次调用的 result refinement。
+
 `[@@refined.horn]` 使用相同 scheme surface，但 generic application 只能出现在 predicate 的顶层合取
 中。调用点从 `assumption ⇒ property(index)` 收集 lower bounds，将 index 抽象为 lambda 参数，并把多条
 lower bounds 合成析取。Horn application 位于 `not`、`or`、关系式内部或 datatype index 时会在 `.rmi`
@@ -227,6 +231,7 @@ well-founded measure、checked lemma 或有限展开显式引入。
 | mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley property fuzzing | 支持 | deterministic `@fuzz` + CI replay seed |
+| Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
 
 未支持的 Typedtree node 会报错。
 
@@ -234,11 +239,11 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 将 Hindley/Horn result refinements 传播给后续表达式，减少调用点 annotation；
-2. 将 Horn lower-bound solver 扩展为带递归依赖的完整 CHC fixpoint；
-3. 函数 summary、递归 SCC、termination measure 与 checked lemma；
-4. 参数化用户 ADT 的按使用点 monomorphisation；
-5. functor/theory transformer 与 generativity。
+1. 将 Horn lower-bound solver 扩展为带递归依赖的完整 CHC fixpoint；
+2. 函数 summary、递归 SCC、termination measure 与 checked lemma；
+3. 参数化用户 ADT 的按使用点 monomorphisation；
+4. functor/theory transformer 与 generativity；
+5. 关系化 mutation、exception 和 effect handler。
 
 当前模块边界：
 

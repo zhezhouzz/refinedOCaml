@@ -71,9 +71,12 @@ application sites the solver collects lower bounds `A => P(t)`, abstracts `t` in
 multiple lower bounds with disjunction. The solution is substituted into result types, constraints and ghost
 diagnostics. Constraints outside this fragment fail closed.
 
-The next implementation slice should propagate elaborated Hindley/Horn result refinements to later Core
-expressions so common call chains need fewer explicit `[@refined.type]` annotations. The lower-bound solver can
-then be extended to mutually recursive Horn variables and a genuine CHC fixpoint computation.
+Elaborated Hindley/Horn result refinements now propagate through the SMT translation environment. ANF lets bind
+the inferred type to the temporary symbol; variable lookup, local first-order inlining, and branches with equal
+result refinements preserve it. Consequently only the first external value in a common generic call chain needs
+an explicit `[@refined.type]`.
+
+The next implementation slice is mutually recursive Horn variables and a genuine CHC fixpoint computation.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

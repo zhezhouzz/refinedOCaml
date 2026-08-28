@@ -20,6 +20,7 @@
   ../examples/generic_client_invalid.ml
   ../examples/generic_client_missing.ml
   ../examples/horn_client.ml
+  ../examples/generic_chain.ml
   ../examples/bad_horn_theory.mli
   ../examples/theory_private_client.ml
   ../examples/ill_typed.ml))
