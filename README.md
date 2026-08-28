@@ -385,7 +385,7 @@ handler 中多次/条件式 continuation 使用和非 literal handler record仍 
 本地 effectful safety calls 可使用 outcome summary。Caller 为 callee normal result、exception payload、
 effect payload 建立 fresh symbolic values，并产生 Return/Raised/Performed paths；Performed path 携带 caller
 continuation，因此 caller 的 `try`/deep handler 可以跨函数边界处理 outcome。Callee precondition 作为独立
-side obligation。跨函数 state summary 与递归 effectful summary 当前仍拒绝。
+side obligation。跨函数 state summary 当前仍拒绝。
 
 Coverage contract 可为 abnormal outcomes 提供独立 constructive inverse clauses：
 
@@ -400,6 +400,10 @@ outcomes = [
 formal 参数的 inverse。Whole-function VC 分别证明每类目标 outcome 可达；under call summary
 existentially 选择 symbolic result/payload，并加入 actual-argument/witness equations。Performed summary
 同时捕获 caller continuation。无 abnormal clauses 的旧 coverage 仍只检查 normal whole-image。
+
+Effectful recursive summaries 使用与纯函数相同的 call-graph SCC 和 `[@refined.measure]`。Relational CPS
+额外携带 source path conditions：Safety 只在实际递归分支证明 callee precondition、measure 非负和严格
+下降；Coverage 把下降条件放入 constructive reachability guard。缺失 measure 会 fail closed。
 
 参数化用户 ADT 会在每个 obligation 中按实际闭合类型实例化。例如 `'a box` 在两个不同使用点会
 得到独立的 `T_box_Int` 与 `T_box_Bool` theory；constructor、recognizer、selector 和代数 axioms 的
@@ -467,9 +471,9 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. recursive effectful summaries 与 measure；
-2. heap/reference summaries 与 coverage state witnesses；
-3. multi-shot/conditional continuation contracts。
+1. heap/reference summaries 与 coverage state witnesses；
+2. multi-shot/conditional continuation contracts；
+3. 可重放 proof certificate 与稳定 artifact 格式。
 
 当前模块边界：
 

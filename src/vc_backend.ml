@@ -1706,11 +1706,11 @@ let typed_relational_expr program analysis mode function_def env expression =
   let generic_calls = new_generic_call_state () in
   let continuations = Hashtbl.create 8 in
   let continuation_counter = ref 0 in
-  let rec translate env state (expression : Typed_core.expr) continuation =
+  let rec translate env state path (expression : Typed_core.expr) continuation =
     match expression.desc with
     | Raise (exception_, None) -> R.raise_ ~state exception_.display
     | Raise (exception_, Some payload) ->
-        translate env state payload (fun payload state ->
+        translate env state path payload (fun payload state ->
             R.raise_ ~state ~payload exception_.display)
     | Perform (operation, payload) -> (
         let perform payload state =
@@ -1723,7 +1723,7 @@ let typed_relational_expr program analysis mode function_def env expression =
         match payload with
         | None -> perform None state
         | Some payload ->
-            translate env state payload (fun payload state ->
+            translate env state path payload (fun payload state ->
                 perform (Some payload) state))
     | Apply (symbol, arguments) -> (
         match
@@ -1734,17 +1734,15 @@ let typed_relational_expr program analysis mode function_def env expression =
         with
         | None ->
             let value =
-              typed_expr_smt_with_choices program analysis mode function_def []
-                [] choices generic_calls env expression
+              typed_expr_smt_with_choices program analysis mode function_def
+                path [] choices generic_calls env expression
             in
             continuation value.term state
         | Some callee ->
-            if
+            let recursive =
               Function_analysis.is_recursive_edge analysis
                 ~caller:function_def.symbol.key ~callee:callee.symbol.key
-            then
-              typed_error_at expression.loc
-                "recursive effectful outcome summaries are not yet supported";
+            in
             if List.length arguments <> List.length callee.arguments then
               typed_error_at expression.loc
                 "effectful call `%s` has unsupported partial arity"
@@ -1755,6 +1753,44 @@ let typed_relational_expr program analysis mode function_def env expression =
             let callee =
               instantiate_function_at_call ~loc:expression.loc callee arguments
                 expression.sort
+            in
+            let termination_condition terms =
+              if not recursive then "true"
+              else
+                let callee_measure =
+                  match callee.measure with
+                  | Some measure -> measure
+                  | None ->
+                      typed_error_at expression.loc
+                        "recursive outcome callee `%s` needs [@refined.measure]"
+                        symbol.display
+                in
+                let caller_measure =
+                  match function_def.Typed_core.measure with
+                  | Some measure -> measure
+                  | None ->
+                      typed_error_at expression.loc
+                        "recursive outcome caller `%s` needs [@refined.measure]"
+                        function_def.symbol.display
+                in
+                let callee_term =
+                  List.find_map
+                    (fun (((formal : Typed_core.symbol), _), term) ->
+                      if formal.key = callee_measure.key then Some term
+                      else None)
+                    (List.combine callee.arguments terms)
+                  |> Option.get
+                in
+                let caller_term =
+                  match List.assoc_opt caller_measure.key env with
+                  | Some value -> value.term
+                  | None -> assert false
+                in
+                and_
+                  [
+                    app ">=" [ caller_term; "0" ];
+                    app "<" [ callee_term; caller_term ];
+                  ]
             in
             if mode = Under then (
               let contracts =
@@ -1779,10 +1815,11 @@ let typed_relational_expr program analysis mode function_def env expression =
                 List.map
                   (fun argument ->
                     typed_expr_smt_with_choices program analysis Under
-                      function_def [] [] choices generic_calls env argument)
+                      function_def path [] choices generic_calls env argument)
                   arguments
               in
               let terms = List.map (fun value -> value.term) values in
+              let termination = termination_condition terms in
               let formals =
                 List.map
                   (fun ((formal : Typed_core.symbol), sort) ->
@@ -1834,7 +1871,8 @@ let typed_relational_expr program analysis mode function_def env expression =
                     {
                       guard =
                         and_
-                          (typed_formula program.registry target_env post
+                          (termination
+                          :: typed_formula program.registry target_env post
                           :: equations target_env summary.witnesses);
                       initial_state = state;
                       final_state = state;
@@ -1883,7 +1921,8 @@ let typed_relational_expr program analysis mode function_def env expression =
                   |> List.iter (use_theory_symbol generic_calls);
                   let guard =
                     and_
-                      (typed_formula program.registry target_env post
+                      (termination
+                      :: typed_formula program.registry target_env post
                       :: equations target_env outcome.witnesses)
                   in
                   let path =
@@ -1944,10 +1983,11 @@ let typed_relational_expr program analysis mode function_def env expression =
                 List.map
                   (fun argument ->
                     typed_expr_smt_with_choices program analysis mode
-                      function_def [] [] choices generic_calls env argument)
+                      function_def path [] choices generic_calls env argument)
                   arguments
               in
               let terms = List.map (fun value -> value.term) values in
+              let termination = termination_condition terms in
               let formula_env =
                 List.map2
                   (fun ((formal : Typed_core.symbol), sort) term ->
@@ -1966,8 +2006,12 @@ let typed_relational_expr program analysis mode function_def env expression =
               let pre_formula = parse summary.pre in
               mark formula_env pre_formula;
               generic_calls.side_conditions <-
-                typed_formula program.registry formula_env pre_formula
+                under_path path
+                  (typed_formula program.registry formula_env pre_formula)
                 :: generic_calls.side_conditions;
+              if recursive then
+                generic_calls.side_conditions <-
+                  under_path path termination :: generic_calls.side_conditions;
               let fresh prefix sort =
                 let name = prefix ^ string_of_int (List.length !choices) in
                 choices := (name, sort) :: !choices;
@@ -2082,7 +2126,7 @@ let typed_relational_expr program analysis mode function_def env expression =
                   let generated =
                     match action with
                     | Typed_core.Abort handler ->
-                        translate handler_env state handler boundary
+                        translate handler_env state path handler boundary
                     | Typed_core.Resume value ->
                         let captured =
                           match
@@ -2093,32 +2137,36 @@ let typed_relational_expr program analysis mode function_def env expression =
                               typed_error_at expression.loc
                                 "effect continuation escaped its handler"
                         in
-                        translate handler_env state value captured
+                        translate handler_env state path value captured
                   in
                   discharge generated))
             relation handlers
         in
-        R.bind (discharge (translate env state body boundary)) continuation
+        R.bind (discharge (translate env state path body boundary)) continuation
     | If (condition, if_true, if_false) ->
         if typed_has_exception condition then
           typed_error_at condition.loc
             "exceptionful conditions are not yet supported";
         let condition =
-          typed_expr_smt_with_choices program analysis mode function_def [] []
+          typed_expr_smt_with_choices program analysis mode function_def path []
             choices generic_calls env condition
         in
         R.branch ~condition:condition.term
-          ~if_true:(translate env state if_true continuation)
-          ~if_false:(translate env state if_false continuation)
+          ~if_true:
+            (translate env state (condition.term :: path) if_true continuation)
+          ~if_false:
+            (translate env state
+               (app "not" [ condition.term ] :: path)
+               if_false continuation)
     | Let (symbol, value, body) ->
-        translate env state value (fun value state ->
+        translate env state path value (fun value state ->
             translate
               ((symbol.key, { term = value; refinement = None }) :: env)
-              state body continuation)
+              state path body continuation)
     | Try (body, cases) ->
         let boundary value state = R.return ~state value in
         let handled =
-          R.try_with (translate env state body boundary)
+          R.try_with (translate env state path body boundary)
             (fun ~exception_ ~payload ~state ->
               match
                 List.find_opt
@@ -2140,13 +2188,13 @@ let typed_relational_expr program analysis mode function_def env expression =
                         typed_error_at expression.loc
                           "exception handler expected a payload"
                   in
-                  translate handler_env state handler boundary
+                  translate handler_env state path handler boundary
               | None -> R.raise_ ~state exception_)
         in
         R.bind handled continuation
     | Let_ref (symbol, _sort, initial, body) ->
-        translate env state initial (fun value state ->
-            translate env ((symbol.key, value) :: state) body continuation)
+        translate env state path initial (fun value state ->
+            translate env ((symbol.key, value) :: state) path body continuation)
     | Deref symbol ->
         if not (List.mem_assoc symbol.key state) then
           typed_error_at expression.loc
@@ -2156,11 +2204,11 @@ let typed_relational_expr program analysis mode function_def env expression =
         if not (List.mem_assoc symbol.key state) then
           typed_error_at expression.loc
             "reference `%s` is not a local non-escaping cell" symbol.display;
-        translate env state value (fun value state ->
+        translate env state path value (fun value state ->
             R.bind (R.write ~state ~cell:symbol.key ~value) continuation)
     | Sequence (first, second) ->
-        translate env state first (fun _ state ->
-            translate env state second continuation)
+        translate env state path first (fun _ state ->
+            translate env state path second continuation)
     | _ ->
         if typed_has_exception expression then
           typed_error_at expression.loc
@@ -2172,7 +2220,7 @@ let typed_relational_expr program analysis mode function_def env expression =
         continuation value.term state
   in
   let boundary value state = R.return ~state value in
-  let relation = translate env [] expression boundary in
+  let relation = translate env [] [] expression boundary in
   (relation, List.rev !choices, generic_calls)
 
 let typed_collect_sorts program function_def =

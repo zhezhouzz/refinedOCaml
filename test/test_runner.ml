@@ -437,6 +437,10 @@ let () =
   compile "../examples/outcome_calls.ml" "typed_outcome_calls";
   compile "../examples/outcome_recursive_unsupported.ml"
     "typed_outcome_recursive_unsupported";
+  compile "../examples/outcome_recursive_coverage.ml"
+    "typed_outcome_recursive_coverage";
+  compile "../examples/outcome_recursive_missing_measure.ml"
+    "typed_outcome_recursive_missing_measure";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
   compile "../examples/outcome_coverage_invalid.ml"
     "typed_outcome_coverage_invalid";
@@ -602,8 +606,18 @@ let () =
         && not (contains obligation.smt "call_result_")
       then failwith "effectful call did not use its outcome summary";
       require `Valid obligation);
-  (match obligations_of_cmt "typed_outcome_recursive_unsupported.cmt" with
-  | _ -> failwith "recursive effectful outcome summary was accepted"
+  obligations_of_cmt "typed_outcome_recursive_unsupported.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "(<") then
+        failwith "recursive outcome safety omitted its measure";
+      require `Valid obligation);
+  obligations_of_cmt "typed_outcome_recursive_coverage.cmt"
+  |> List.iter (fun obligation ->
+      if not (contains obligation.smt "(<") then
+        failwith "recursive outcome coverage omitted its measure";
+      require `Valid obligation);
+  (match obligations_of_cmt "typed_outcome_recursive_missing_measure.cmt" with
+  | _ -> failwith "recursive outcome without a measure was accepted"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_outcome_coverage.cmt"
   |> List.iter (fun obligation ->

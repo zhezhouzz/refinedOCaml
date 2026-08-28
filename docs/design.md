@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-measured recursive outcome summaries、可重放 proof certificate、增量缓存。
+state/heap coverage summaries、可重放 proof certificate、增量缓存。
 
 ### M2
 

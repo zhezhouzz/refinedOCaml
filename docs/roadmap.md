@@ -12,9 +12,9 @@
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v5 保存 OCaml version、unit/digest、abstract sorts、aliases、functor templates 和 proof metadata | MVP 已完成 | 设计非 `Marshal` 的长期稳定格式 |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
-| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Normal 与 payload Raised/Performed 都支持 constructive inverse clauses；whole-function 和 under-call outcome composition 共用 relational paths/CPS | Outcome safety+coverage MVP 完成 | measured recursive outcome summaries、state witnesses |
+| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Normal/payload outcomes、under-call composition 与 measured recursive SCC 共用 path-sensitive relational CPS | Measured relational outcome MVP 完成 | state/heap coverage witnesses 与 summaries |
 | C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、summary、递归 SCC/measure 与 relational outcome algebra 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | outcome contracts 与 domain-specific state witnesses |
-| C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | Return 用 result witnesses；Raised/Performed 用 per-outcome payload witnesses；调用点 existentially 组合 symbolic outcomes、inverse equations 和 continuation | Relational compositional MVP 已完成 | recursive outcome measure、ghost state 与 nondeterministic witness relations |
+| C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | Return/Raised/Performed inverse witnesses 可组合；递归 outcome paths 用 SCC measure guard 验证 | Measured relational coverage MVP 已完成 | ghost state/heap witnesses 与 nondeterministic relations |
 | 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
 | OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 single-payload raise/effect、payload binders、one-shot resume，以及 safety/coverage outcome summaries | Relational outcome frontend MVP | recursive summaries、state witnesses、multi-shot handlers |
@@ -139,10 +139,14 @@ Resumptive effect continuation semantics 已完成。CPS translator 为 Perform 
 
 Single-payload exception/effect 与 effectful safety call summaries 已完成。Payload 有独立 sort 和 symbolic
 term；caller summary 同时生成 normal/Raised/Performed paths，callee precondition 单独检查，Performed
-path 捕获 caller continuation。Cross-function state 和 recursive outcome summaries 保持 fail closed。
+path 捕获 caller continuation。Cross-function state 保持 fail closed。
 
 Exception/effect coverage outcome witnesses 已完成。`outcomes=(kind,name,post,witnesses)` 分别生成
 payload target reachability VC；under callers 可组合 callee normal/Raised/Performed constructive paths，
 Performed paths 携带 caller continuation。
 
-roadmap 的下一实现步骤是 measured recursive outcome summaries。
+Measured recursive outcome summaries 已完成。Relational CPS thread source path conditions；Safety 的 callee
+pre/measure 成为 guarded side obligations，Coverage 的 measure 成为 constructive reachability guard；缺失
+measure 会拒绝。
+
+roadmap 的下一实现步骤是 state/heap coverage witnesses 与跨函数 state summaries。

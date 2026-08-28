@@ -67,7 +67,9 @@
   ../examples/outcome_recursive_unsupported.ml
   ../examples/outcome_coverage.ml
   ../examples/outcome_coverage_invalid.ml
-  ../examples/outcome_coverage_incomplete.ml))
+  ../examples/outcome_coverage_incomplete.ml
+  ../examples/outcome_recursive_coverage.ml
+  ../examples/outcome_recursive_missing_measure.ml))
 
 (executable
  (name ppx_sample)

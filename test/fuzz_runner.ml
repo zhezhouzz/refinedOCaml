@@ -532,6 +532,7 @@ let fuzz_relational_outcomes random case =
   let state = [ ("cell", "v0") ] in
   let count = 1 + Random.State.int random 8 in
   let return_count = ref 0 in
+  let performed_count = ref 0 in
   let relation =
     List.init count (fun index ->
         match Random.State.int random 3 with
@@ -540,8 +541,10 @@ let fuzz_relational_outcomes random case =
             R.return ~state ("v" ^ string_of_int index)
         | 1 -> R.raise_ ~state ("E" ^ string_of_int index)
         | _ ->
+            incr performed_count;
             R.perform ~state ~operation:"Op"
               ~payload:("p" ^ string_of_int index)
+              ~continuation:("k" ^ string_of_int index)
               ())
     |> List.concat
   in
@@ -562,11 +565,14 @@ let fuzz_relational_outcomes random case =
       (fun path -> match path.R.outcome with Raised _ -> true | _ -> false)
       caught
   then fail case "exception handler left a raised path";
+  let handled_continuations = ref 0 in
   let handled =
-    R.handle_effect ~operation:"Op" caught
-      (fun ~payload ~continuation:_ ~state ->
+    R.handle_effect ~operation:"Op" caught (fun ~payload ~continuation ~state ->
+        if Option.is_some continuation then incr handled_continuations;
         R.return ~state (Option.get payload))
   in
+  if !handled_continuations <> !performed_count then
+    fail case "effect handler lost continuation identities";
   if
     List.exists
       (fun path ->

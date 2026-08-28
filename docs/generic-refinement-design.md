@@ -129,7 +129,7 @@ fuzzing cover propagation and state threading.
 Single-payload exceptions/effects, payload binders and effectful safety call summaries are now connected to the
 production backend. Summary application creates symbolic normal results and Raised/Performed payload paths;
 callee preconditions remain side obligations and caller handlers can discharge callee outcomes. Cross-function
-state and recursive outcome summaries remain fail closed.
+state remains fail closed.
 
 Non-escaping local references and final-state contracts are now connected to production relational VCs. Lexical
 cells thread through sequence, branch, raise and handlers; normal posts can constrain each final cell. Reference
@@ -144,7 +144,11 @@ Witness-carrying exception/effect coverage is now implemented. Normal Return tar
 Raised/Performed targets use per-outcome payload predicates and inverse mappings. Under calls compose symbolic
 normal results and payload outcomes, with caller continuations attached to Performed paths.
 
-The next implementation slice is measured recursive outcome summaries.
+Measured recursive outcome summaries are now implemented. Source path conditions guard callee preconditions and
+strict-decrease checks for Safety; Coverage includes measure constraints in constructive reachability paths.
+Missing measures fail closed.
+
+The next implementation slice is state/heap coverage witnesses and cross-function state summaries.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
