@@ -78,6 +78,8 @@
   ../examples/nondeterministic_state_invalid.ml
   ../examples/abnormal_state.ml
   ../examples/abnormal_state_invalid.ml
+  ../examples/relational_witness.ml
+  ../examples/relational_witness_invalid.ml
   ../examples/conditional_resume.ml
   ../examples/multishot_unsupported.ml))
 

@@ -122,6 +122,25 @@ let contract_of_attribute attribute =
                           "coverage witnesses must contain (parameter, \
                            expression) string pairs")
           in
+          let witness_relation = find "witness_relation" in
+          let ghosts =
+            match find_expression "ghosts" with
+            | None -> []
+            | Some expression ->
+                expression_list expression
+                |> List.map (fun expression ->
+                    match expression.pexp_desc with
+                    | Pexp_tuple [ name; sort ] ->
+                        let name = string_constant name in
+                        let sort = string_constant sort in
+                        if not (List.mem sort [ "int"; "bool" ]) then
+                          error ~loc:expression.pexp_loc
+                            "ghost sort must be int or bool";
+                        (name, sort)
+                    | _ ->
+                        error ~loc:expression.pexp_loc
+                          "ghosts must contain (name, sort) string pairs")
+          in
           let raises =
             match find_expression "raises" with
             | None -> []
@@ -200,11 +219,18 @@ let contract_of_attribute attribute =
                         ( string_constant kind,
                           string_constant name,
                           string_constant post,
-                          string_pairs witnesses )
+                          string_pairs witnesses,
+                          None )
+                    | Pexp_tuple [ kind; name; post; witnesses; relation ] ->
+                        ( string_constant kind,
+                          string_constant name,
+                          string_constant post,
+                          string_pairs witnesses,
+                          Some (string_constant relation) )
                     | _ ->
                         error ~loc:expression.pexp_loc
                           "outcomes must contain (kind, name, post, witnesses) \
-                           tuples")
+                           or (kind, name, post, witnesses, relation) tuples")
           in
           let outcome_state =
             match find_expression "outcome_state" with
@@ -226,6 +252,36 @@ let contract_of_attribute attribute =
           if mode = Over && witnesses <> [] then
             error ~loc:attribute.attr_loc
               "safety contracts cannot declare coverage witnesses";
+          if mode = Over && witness_relation <> None then
+            error ~loc:attribute.attr_loc
+              "safety contracts cannot declare witness_relation";
+          if mode = Over && ghosts <> [] then
+            error ~loc:attribute.attr_loc
+              "safety contracts cannot declare ghosts";
+          if witnesses <> [] && witness_relation <> None then
+            error ~loc:attribute.attr_loc
+              "coverage must choose functional witnesses or witness_relation";
+          if ghosts <> [] && witnesses <> [] then
+            error ~loc:attribute.attr_loc
+              "ghosts require relational rather than functional witnesses";
+          List.iter
+            (fun (_, _, _, witnesses, relation) ->
+              if witnesses <> [] && relation <> None then
+                error ~loc:attribute.attr_loc
+                  "coverage outcome must choose witnesses or relation";
+              if ghosts <> [] && witnesses <> [] then
+                error ~loc:attribute.attr_loc
+                  "ghosts require relational outcome witnesses")
+            outcomes;
+          if
+            ghosts <> [] && witness_relation = None
+            && not
+                 (List.exists
+                    (fun (_, _, _, _, relation) -> relation <> None)
+                    outcomes)
+          then
+            error ~loc:attribute.attr_loc
+              "coverage ghosts require a witness relation";
           if mode = Under && raises <> [] then
             error ~loc:attribute.attr_loc
               "coverage contracts cannot yet declare raised outcomes";
@@ -243,6 +299,8 @@ let contract_of_attribute attribute =
               required "pre",
               required "post",
               witnesses,
+              witness_relation,
+              ghosts,
               raises,
               state,
               requires_state,

@@ -112,6 +112,25 @@ post 与 `actual_argument = witness(call_result)`；多层调用因而可以组�
 内 measure 非负且严格下降。没有 witnesses 的旧 contract 仍按 whole-image existential VC 验证，但只
 能 inline，不能关闭递归调用。
 
+当 inverse 不是函数时，可以改用 relational witness：
+
+```ocaml
+let[@refined.coverage
+      {
+        pre = "true";
+        post = "result >= 0";
+        witness_relation = "x = result || x = 0 - result";
+      }]
+    absolute x =
+  if x >= 0 then x else 0 - x
+```
+
+Relation 可引用普通参数、`result`/outcome `payload`、final-state target，以及 reference 参数的
+`old_<name>`。`ghosts = [("inverse", "int")]` 或 `bool` 会引入 existential ghost；同一 ghost 在 relation
+和 functional state witness 中可复用。Checker 分别证明 relation 对每个目标具有 witness（totality），
+以及每个满足 relation 的 input/ghost 都执行到该目标（pointwise soundness），因此可安全用于 under call
+summary。
+
 验证器把 safety 反例和 coverage 的缺失结果交给 Z3：`unsat` 表示 contract 成立；`sat` 时输出
 model。
 
@@ -429,8 +448,9 @@ outcomes = [
 ]
 ```
 
-`post`/`witnesses` 描述 normal Return；每个 `outcomes` clause 描述目标 Raised/Performed payload 和全部
-formal 参数的 inverse。Whole-function VC 分别证明每类目标 outcome 可达；under call summary
+`post`/`witnesses` 或 `witness_relation` 描述 normal Return；每个 `outcomes` clause 描述目标
+Raised/Performed payload 和 inverse。Outcome tuple 可增加第五个 relation 字符串。Whole-function VC
+分别证明每类目标 outcome 可达；under call summary
 existentially 选择 symbolic result/payload，并加入 actual-argument/witness equations。Performed summary
 同时捕获 caller continuation。无 abnormal clauses 的旧 coverage 仍只检查 normal whole-image。
 
@@ -478,7 +498,8 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | dependency-driven theory slicing | 支持 | symbol/dependency least closure |
 | typed Logic AST / expected-sort elaboration | 支持 | resolved constructor/selector symbols |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
-| constructive coverage call summary | 支持 | result-indexed inverse witnesses |
+| constructive coverage call summary | 支持 | functional/relational inverse witnesses |
+| typed existential coverage ghosts | 支持 | `int`/`bool` ghost synthesis |
 | relational state/outcome semantic algebra | 支持 | guarded transition paths |
 | stateful/outcome nondeterministic `choose` | 支持 | path union；demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
@@ -507,7 +528,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. relational witnesses 与 ghost-state synthesis；
+1. typed ADT ghosts 与 heap footprint/frame clauses；
 2. 可重放 proof certificate 与稳定 artifact 格式；
 3. 显式 continuation cloning（若未来 OCaml API 支持）。
 

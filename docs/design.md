@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-relational witnesses、ghost-state synthesis、可重放 proof certificate、增量缓存。
+typed ADT ghosts、heap footprint/frame clauses、可重放 proof certificate、增量缓存。
 
 ### M2
 

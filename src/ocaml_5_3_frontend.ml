@@ -974,6 +974,8 @@ let typed_contracts attributes =
             pre,
             post,
             witnesses,
+            witness_relation,
+            ghosts,
             raises,
             state,
             requires_state,
@@ -988,6 +990,16 @@ let typed_contracts attributes =
                 pre;
                 post;
                 witnesses;
+                witness_relation;
+                ghosts =
+                  List.map
+                    (fun (name, sort) ->
+                      ( name,
+                        match sort with
+                        | "int" -> Typed_core.S_int
+                        | "bool" -> S_bool
+                        | _ -> assert false ))
+                    ghosts;
                 raises;
                 state;
                 requires_state;
@@ -995,8 +1007,9 @@ let typed_contracts attributes =
                 performs;
                 outcomes =
                   List.map
-                    (fun (kind, name, post, witnesses) ->
-                      Typed_core.{ kind; name; post; witnesses })
+                    (fun (kind, name, post, witnesses, witness_relation) ->
+                      Typed_core.
+                        { kind; name; post; witnesses; witness_relation })
                     outcomes;
                 outcome_state;
                 loc = span_of_location attribute.attr_loc;

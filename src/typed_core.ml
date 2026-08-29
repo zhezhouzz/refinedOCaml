@@ -87,6 +87,8 @@ type contract = {
   pre : string;
   post : string;
   witnesses : (string * string) list;
+  witness_relation : string option;
+  ghosts : (string * sort) list;
   raises : (string * string) list;
   state : (string * string) list;
   requires_state : (string * string) list;
@@ -102,6 +104,7 @@ and coverage_outcome = {
   name : string;
   post : string;
   witnesses : (string * string) list;
+  witness_relation : string option;
 }
 
 type function_def = {

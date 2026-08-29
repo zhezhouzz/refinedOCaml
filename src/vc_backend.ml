@@ -1355,7 +1355,8 @@ and typed_inline_call program analysis mode current_function path call_stack
       let constructive_under_contracts =
         List.filter
           (fun (contract : Typed_core.contract) ->
-            contract.mode = Under && contract.witnesses <> [])
+            contract.mode = Under
+            && (contract.witnesses <> [] || contract.witness_relation <> None))
           function_def.contracts
       in
       if mode = Over && over_contracts <> [] then (
@@ -1456,14 +1457,33 @@ and typed_inline_call program analysis mode current_function path call_stack
             function_def.arguments
         in
         if
-          List.sort String.compare (List.map fst summary.witnesses)
-          <> List.sort String.compare formal_names
+          summary.witnesses <> []
+          && List.sort String.compare (List.map fst summary.witnesses)
+             <> List.sort String.compare formal_names
         then
           typed_error_at expression.loc
             "coverage summary for `%s` has incomplete witnesses" symbol.display;
         let result = "call_result_" ^ string_of_int (List.length !choices) in
         choices := (result, function_def.result) :: !choices;
         let result_env = [ ("result", (result, function_def.result)) ] in
+        let ghost_env =
+          List.map
+            (fun (name, sort) ->
+              let term =
+                "call_ghost_" ^ smt_identifier name ^ "_"
+                ^ string_of_int (List.length !choices)
+              in
+              choices := (term, sort) :: !choices;
+              (name, (term, sort)))
+            summary.ghosts
+        in
+        let witness_env = ghost_env @ result_env in
+        let formula_env =
+          List.map2
+            (fun ((formal : Typed_core.symbol), sort) term ->
+              (formal.display, (term, sort)))
+            function_def.arguments terms
+        in
         let parse text =
           parse_formula ~filename:summary.loc.file
             ~loc:(location_of_span summary.loc)
@@ -1474,21 +1494,35 @@ and typed_inline_call program analysis mode current_function path call_stack
         |> List.iter (use_theory_symbol generic_calls);
         let constraints =
           typed_formula program.registry result_env post_formula
-          :: List.map2
+          ::
+          (if summary.witnesses = [] then []
+           else
+             List.map2
                (fun ((formal : Typed_core.symbol), sort) actual ->
                  let witness =
                    parse (List.assoc formal.display summary.witnesses)
                  in
                  formula_theory_symbols ~expected:sort program.registry
-                   result_env witness
+                   witness_env witness
                  |> List.iter (use_theory_symbol generic_calls);
                  app "="
                    [
                      actual;
-                     typed_formula ~expected:sort program.registry result_env
+                     typed_formula ~expected:sort program.registry witness_env
                        witness;
                    ])
-               function_def.arguments terms
+               function_def.arguments terms)
+        in
+        let constraints =
+          match summary.witness_relation with
+          | None -> constraints
+          | Some relation ->
+              let relation = parse relation in
+              let relation_env = witness_env @ formula_env in
+              formula_theory_symbols program.registry relation_env relation
+              |> List.iter (use_theory_symbol generic_calls);
+              typed_formula program.registry relation_env relation
+              :: constraints
         in
         generic_calls.summary_assumptions <-
           List.rev_append
@@ -1913,6 +1947,12 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               in
               let terms = List.map (fun value -> value.term) values in
               let termination = termination_condition terms in
+              let call_formula_env =
+                List.map2
+                  (fun ((formal : Typed_core.symbol), sort) term ->
+                    (formal.display, (term, sort)))
+                  callee.arguments terms
+              in
               let value_formals =
                 List.combine callee.arguments terms
                 |> List.filter_map
@@ -1937,20 +1977,29 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 choices := (name, sort) :: !choices;
                 name
               in
+              let fresh_ghosts prefix =
+                List.map
+                  (fun (name, sort) ->
+                    ( name,
+                      (fresh (prefix ^ smt_identifier name ^ "_") sort, sort) ))
+                  summary.ghosts
+              in
               let equations target_env witnesses =
-                List.map2
-                  (fun (name, sort) actual ->
-                    let witness = parse (List.assoc name witnesses) in
-                    formula_theory_symbols ~expected:sort program.registry
-                      target_env witness
-                    |> List.iter (use_theory_symbol generic_calls);
-                    app "="
-                      [
-                        actual;
-                        typed_formula ~expected:sort program.registry target_env
-                          witness;
-                      ])
-                  formals value_terms
+                if witnesses = [] then []
+                else
+                  List.map2
+                    (fun (name, sort) actual ->
+                      let witness = parse (List.assoc name witnesses) in
+                      formula_theory_symbols ~expected:sort program.registry
+                        target_env witness
+                      |> List.iter (use_theory_symbol generic_calls);
+                      app "="
+                        [
+                          actual;
+                          typed_formula ~expected:sort program.registry
+                            target_env witness;
+                        ])
+                    formals value_terms
               in
               let reference_formals = typed_reference_arguments callee in
               let actual_cell name =
@@ -1974,14 +2023,44 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 in
                 (List.nth terms index, sort)
               in
+              let old_reference_env =
+                List.map
+                  (fun (name, _, sort) ->
+                    let actual, _ = actual_cell name in
+                    ("old_" ^ name, (heap_select state actual sort, sort)))
+                  reference_formals
+              in
+              let relation_guard relation relation_env =
+                match relation with
+                | None -> []
+                | Some relation ->
+                    let relation = parse relation in
+                    formula_theory_symbols program.registry relation_env
+                      relation
+                    |> List.iter (use_theory_symbol generic_calls);
+                    [ typed_formula program.registry relation_env relation ]
+              in
               let paths = ref [] in
               if
                 summary.witnesses <> []
-                || (formals = [] && summary.state_witnesses <> [])
+                || summary.witness_relation <> None
+                || formals = []
+                   && summary.state_witnesses <> []
+                   && summary.ghosts = []
               then (
-                if not (complete summary.witnesses) then
+                if summary.witnesses <> [] && not (complete summary.witnesses)
+                then
                   typed_error_at expression.loc
                     "normal coverage summary for `%s` has incomplete witnesses"
+                    symbol.display;
+                if
+                  reference_formals <> []
+                  && summary.state_witnesses = []
+                  && summary.witness_relation = None
+                then
+                  typed_error_at expression.loc
+                    "normal coverage summary for `%s` needs state_witnesses or \
+                     witness_relation"
                     symbol.display;
                 let result = fresh "call_result_" callee.result in
                 let state_targets =
@@ -1996,15 +2075,20 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       (name, actual, sort, fresh "call_state_" sort, predicate))
                     summary.state
                 in
-                let target_env =
+                let public_target_env =
                   ("result", (result, callee.result))
                   :: List.map
                        (fun (name, _, sort, target, _) ->
                          (name, (target, sort)))
                        state_targets
                 in
+                let ghost_env = fresh_ghosts "call_ghost_" in
+                let witness_env = ghost_env @ public_target_env in
+                let relation_env =
+                  witness_env @ call_formula_env @ old_reference_env
+                in
                 let post = parse summary.post in
-                formula_theory_symbols program.registry target_env post
+                formula_theory_symbols program.registry public_target_env post
                 |> List.iter (use_theory_symbol generic_calls);
                 let state_witness_guards =
                   if reference_formals = [] then []
@@ -2015,22 +2099,25 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       <> List.sort String.compare
                            (List.map fst summary.state_witnesses)
                     then
-                      typed_error_at expression.loc
-                        "under state summary has incomplete state_witnesses";
-                    List.map
-                      (fun (name, _, sort) ->
-                        let actual, _ = actual_cell name in
-                        let old = heap_select state actual sort in
-                        let witness =
-                          parse (List.assoc name summary.state_witnesses)
-                        in
-                        app "="
-                          [
-                            old;
-                            typed_formula ~expected:sort program.registry
-                              target_env witness;
-                          ])
-                      reference_formals)
+                      if summary.state_witnesses <> [] then
+                        typed_error_at expression.loc
+                          "under state summary has incomplete state_witnesses";
+                    if summary.state_witnesses = [] then []
+                    else
+                      List.map
+                        (fun (name, _, sort) ->
+                          let actual, _ = actual_cell name in
+                          let old = heap_select state actual sort in
+                          let witness =
+                            parse (List.assoc name summary.state_witnesses)
+                          in
+                          app "="
+                            [
+                              old;
+                              typed_formula ~expected:sort program.registry
+                                witness_env witness;
+                            ])
+                        reference_formals)
                 in
                 let state_post_guards, final_state =
                   List.fold_left
@@ -2041,7 +2128,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       let state_env =
                         ("value", (target, sort))
                         :: ("old", (old, sort))
-                        :: target_env
+                        :: public_target_env
                       in
                       ( typed_formula program.registry state_env predicate
                         :: guards,
@@ -2060,10 +2147,13 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       guard =
                         and_
                           (termination
-                           :: typed_formula program.registry target_env post
-                           :: equations target_env summary.witnesses
+                           :: typed_formula program.registry public_target_env
+                                post
+                           :: equations witness_env summary.witnesses
                           @ state_witness_guards @ state_post_guards
-                          @ alias_guards);
+                          @ alias_guards
+                          @ relation_guard summary.witness_relation relation_env
+                          );
                       initial_state = state;
                       final_state;
                       outcome = Return result;
@@ -2086,9 +2176,25 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               Hashtbl.add continuations continuation_id continuation;
               List.iter
                 (fun (outcome : Typed_core.coverage_outcome) ->
-                  if not (complete outcome.witnesses) then
+                  if outcome.witnesses <> [] && not (complete outcome.witnesses)
+                  then
                     typed_error_at expression.loc
                       "coverage outcome `%s` has incomplete witnesses"
+                      outcome.name;
+                  if outcome.witnesses = [] && outcome.witness_relation = None
+                  then
+                    typed_error_at expression.loc
+                      "coverage outcome `%s` needs witnesses or \
+                       witness_relation"
+                      outcome.name;
+                  if
+                    reference_formals <> []
+                    && summary.state_witnesses = []
+                    && outcome.witness_relation = None
+                  then
+                    typed_error_at expression.loc
+                      "coverage outcome `%s` needs state_witnesses or \
+                       witness_relation"
                       outcome.name;
                   let kind, sort =
                     match outcome.kind with
@@ -2120,14 +2226,19 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                               fresh "call_outcome_state_" sort,
                               predicate ))
                   in
-                  let target_env =
+                  let public_target_env =
                     List.map
                       (fun (name, _, sort, target, _) -> (name, (target, sort)))
                       state_targets
                     @ payload_env
                   in
+                  let ghost_env = fresh_ghosts "call_outcome_ghost_" in
+                  let witness_env = ghost_env @ public_target_env in
+                  let relation_env =
+                    witness_env @ call_formula_env @ old_reference_env
+                  in
                   let post = parse outcome.post in
-                  formula_theory_symbols program.registry target_env post
+                  formula_theory_symbols program.registry public_target_env post
                   |> List.iter (use_theory_symbol generic_calls);
                   let state_witness_guards =
                     if reference_formals = [] then []
@@ -2140,22 +2251,26 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                         <> List.sort String.compare
                              (List.map fst summary.state_witnesses)
                       then
-                        typed_error_at expression.loc
-                          "under outcome summary has incomplete state_witnesses";
-                      List.map
-                        (fun (name, _, sort) ->
-                          let actual, _ = actual_cell name in
-                          let old = heap_select state actual sort in
-                          let witness =
-                            parse (List.assoc name summary.state_witnesses)
-                          in
-                          app "="
-                            [
-                              old;
-                              typed_formula ~expected:sort program.registry
-                                target_env witness;
-                            ])
-                        reference_formals)
+                        if summary.state_witnesses <> [] then
+                          typed_error_at expression.loc
+                            "under outcome summary has incomplete \
+                             state_witnesses";
+                      if summary.state_witnesses = [] then []
+                      else
+                        List.map
+                          (fun (name, _, sort) ->
+                            let actual, _ = actual_cell name in
+                            let old = heap_select state actual sort in
+                            let witness =
+                              parse (List.assoc name summary.state_witnesses)
+                            in
+                            app "="
+                              [
+                                old;
+                                typed_formula ~expected:sort program.registry
+                                  witness_env witness;
+                              ])
+                          reference_formals)
                   in
                   let state_post_guards, final_state =
                     List.fold_left
@@ -2166,7 +2281,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                         let state_env =
                           ("value", (target, sort))
                           :: ("old", (old, sort))
-                          :: target_env
+                          :: public_target_env
                         in
                         formula_theory_symbols program.registry state_env
                           predicate
@@ -2186,10 +2301,10 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   let guard =
                     and_
                       (termination
-                       :: typed_formula program.registry target_env post
-                       :: equations target_env outcome.witnesses
+                       :: typed_formula program.registry public_target_env post
+                       :: equations witness_env outcome.witnesses
                       @ state_witness_guards @ state_post_guards @ alias_guards
-                      )
+                      @ relation_guard outcome.witness_relation relation_env)
                   in
                   let path =
                     match kind with
@@ -3545,22 +3660,58 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   let validate_witnesses witnesses =
     let expected = List.map (fun (name, _, _) -> name) formals in
     let actual = List.map fst witnesses in
-    if
-      List.sort String.compare expected <> List.sort String.compare actual
-      || List.length actual
-         <> List.length (List.sort_uniq String.compare actual)
-    then
-      typed_error_at contract.loc
-        "outcome witnesses must define every parameter exactly once";
-    List.map
-      (fun (name, key, sort) -> (key, sort, parse (List.assoc name witnesses)))
-      formals
+    if witnesses = [] then []
+    else (
+      if
+        List.sort String.compare expected <> List.sort String.compare actual
+        || List.length actual
+           <> List.length (List.sort_uniq String.compare actual)
+      then
+        typed_error_at contract.loc
+          "outcome witnesses must define every parameter exactly once";
+      List.map
+        (fun (name, key, sort) ->
+          (key, sort, parse (List.assoc name witnesses)))
+        formals)
   in
   let normal_witnesses =
     if contract.witnesses = [] then None
     else Some (validate_witnesses contract.witnesses)
   in
+  let normal_witness_relation = Option.map parse contract.witness_relation in
   let reference_cells = typed_reference_arguments function_def in
+  let ghost_names = List.map fst contract.ghosts in
+  let reserved_ghost_names =
+    [ "result"; "payload"; "value"; "old" ]
+    @ List.map (fun (name, _, _) -> name) formals
+    @ List.map (fun (name, _, _) -> name) reference_cells
+    @ List.map (fun (name, _, _) -> "old_" ^ name) reference_cells
+    @ List.map fst contract.state
+  in
+  if
+    List.length ghost_names
+    <> List.length (List.sort_uniq String.compare ghost_names)
+    || List.exists (fun name -> List.mem name reserved_ghost_names) ghost_names
+  then
+    typed_error_at contract.loc
+      "ghost names must be unique and cannot shadow contract variables";
+  let coverage_ghosts =
+    List.mapi
+      (fun index (name, sort) ->
+        ( name,
+          "coverage_ghost_" ^ string_of_int index ^ "_" ^ smt_identifier name,
+          sort ))
+      contract.ghosts
+  in
+  let ghost_env =
+    List.map (fun (name, term, sort) -> (name, (term, sort))) coverage_ghosts
+  in
+  let old_reference_env =
+    List.map
+      (fun (name, key, sort) ->
+        ("old_" ^ name, (app "select" [ initial_heap_name sort; key ], sort)))
+      reference_cells
+  in
   let state_cells = typed_local_cells function_def.body @ reference_cells in
   let state_targets =
     List.mapi
@@ -3582,7 +3733,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     let actual = List.map fst contract.state_witnesses in
     if expected = [] && actual <> [] then
       typed_error_at contract.loc "state_witnesses name no reference parameters";
-    if expected <> [] then
+    if expected <> [] && actual <> [] then
       if
         List.sort String.compare expected <> List.sort String.compare actual
         || List.length actual
@@ -3590,10 +3741,12 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
       then
         typed_error_at contract.loc
           "state_witnesses must define every reference parameter exactly once";
-    List.map
-      (fun (name, key, sort) ->
-        (key, sort, parse (List.assoc name contract.state_witnesses)))
-      reference_cells
+    if actual = [] then []
+    else
+      List.map
+        (fun (name, key, sort) ->
+          (key, sort, parse (List.assoc name contract.state_witnesses)))
+        reference_cells
   in
   let payload_sorts = typed_outcome_payload_sorts ~program function_def.body in
   let payload_sort kind name =
@@ -3664,6 +3817,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
           sort,
           parse outcome.post,
           validate_witnesses outcome.witnesses,
+          Option.map parse outcome.witness_relation,
           outcome_state ))
       contract.outcomes
   in
@@ -3679,20 +3833,27 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     generic_calls.used_theory_symbols
     @ formula_theory_symbols program.registry formula_env pre_expression
     @ formula_theory_symbols program.registry
-        (match normal_witnesses with
-        | Some _ -> result_target_env
-        | None -> result_target_env @ formula_env)
+        (match (normal_witness_relation, normal_witnesses) with
+        | Some _, _ | None, Some _ -> result_target_env
+        | None, None -> result_target_env @ formula_env)
         post_expression
     @ Option.fold ~none:[]
         ~some:(fun witnesses ->
           List.concat_map
             (fun (_, sort, expression) ->
               formula_theory_symbols ~expected:sort program.registry
-                result_target_env expression)
+                (ghost_env @ result_target_env)
+                expression)
             witnesses)
         normal_witnesses
+    @ Option.fold ~none:[]
+        ~some:(fun relation ->
+          formula_theory_symbols program.registry
+            (ghost_env @ result_target_env @ formula_env @ old_reference_env)
+            relation)
+        normal_witness_relation
     @ List.concat_map
-        (fun (_, _, sort, post, witnesses, outcome_state) ->
+        (fun (_, _, sort, post, witnesses, relation, outcome_state) ->
           let payload_env =
             match sort with
             | Some sort -> [ ("payload", ("missing_payload", sort)) ]
@@ -3704,11 +3865,12 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
               outcome_state
             @ payload_env
           in
+          let witness_env = ghost_env @ target_env in
           formula_theory_symbols program.registry target_env post
           @ List.concat_map
               (fun (_, formal_sort, expression) ->
                 formula_theory_symbols ~expected:formal_sort program.registry
-                  target_env expression)
+                  witness_env expression)
               witnesses
           @ List.concat_map
               (fun (_name, _key, state_sort, target, predicate) ->
@@ -3716,10 +3878,16 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
                   (("value", (target, state_sort)) :: target_env)
                   predicate)
               outcome_state
+          @ Option.fold ~none:[]
+              ~some:(fun relation ->
+                formula_theory_symbols program.registry
+                  (witness_env @ formula_env @ old_reference_env)
+                  relation)
+              relation
           @ List.concat_map
               (fun (_, witness_sort, expression) ->
                 formula_theory_symbols ~expected:witness_sort program.registry
-                  target_env expression)
+                  witness_env expression)
               state_witnesses)
         outcomes
     @ List.concat_map
@@ -3731,7 +3899,8 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     @ List.concat_map
         (fun (_, sort, expression) ->
           formula_theory_symbols ~expected:sort program.registry
-            result_target_env expression)
+            (ghost_env @ result_target_env)
+            expression)
         state_witnesses
     @ List.concat_map
         (fun (name, predicate) ->
@@ -3792,10 +3961,34 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   in
   let choices_declarations =
     List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices
-    @ reference_declarations @ heap_declarations
   in
   let exists_choices formula =
     Refinement_domain.Smt.exists choices_declarations formula
+  in
+  let ghost_declarations =
+    List.map
+      (fun (_name, term, sort) -> (term, typed_smt_sort sort))
+      coverage_ghosts
+  in
+  let exists_ghosts formula =
+    Refinement_domain.Smt.exists ghost_declarations formula
+  in
+  let ordinary_input_declarations =
+    List.map (fun (_, key, sort) -> (key, typed_smt_sort sort)) formals
+  in
+  let reference_input_declarations =
+    reference_declarations @ heap_declarations
+  in
+  let input_declarations =
+    ordinary_input_declarations @ reference_input_declarations
+  in
+  let exists_inputs formula =
+    Refinement_domain.Smt.exists input_declarations formula
+  in
+  let forall_inputs_and_ghosts formula =
+    Refinement_domain.Smt.forall
+      (ghost_declarations @ input_declarations)
+      formula
   in
   let let_arguments target_env witnesses formula =
     let bindings =
@@ -3825,7 +4018,8 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   in
   let with_relational_assumptions target_env formula =
     and_
-      ((formula :: List.rev generic_calls.semantic_assumptions)
+      (((formula :: List.rev generic_calls.summary_assumptions)
+       @ List.rev generic_calls.semantic_assumptions)
       @ initial_state_guards target_env)
   in
   let normal_paths =
@@ -3847,24 +4041,11 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         | Raised _ | Performed _ -> None)
     |> or_
   in
-  let normal_reachable =
-    and_ [ pre; normal_paths ]
-    |> with_relational_assumptions result_target_env
-    |> exists_choices
-  in
-  let normal_reachable =
-    match normal_witnesses with
-    | Some witnesses ->
-        let_arguments result_target_env witnesses normal_reachable
-    | None ->
-        Refinement_domain.Smt.exists
-          (List.map (fun (_, key, sort) -> (key, typed_smt_sort sort)) formals)
-          normal_reachable
-  in
+  let normal_witness_env = ghost_env @ result_target_env in
   let normal_post_env =
-    match normal_witnesses with
-    | Some _ -> result_target_env
-    | None -> result_target_env @ formula_env
+    match (normal_witness_relation, normal_witnesses) with
+    | Some _, _ | None, Some _ -> result_target_env
+    | None, None -> result_target_env @ formula_env
   in
   let obligations =
     let state_posts =
@@ -3875,20 +4056,56 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             predicate)
         state_targets
     in
-    [
-      app "=>"
-        [
+    let target =
+      and_
+        (typed_formula program.registry normal_post_env post_expression
+        :: state_posts)
+    in
+    match normal_witness_relation with
+    | Some relation ->
+        let relation =
+          typed_formula program.registry
+            (normal_witness_env @ formula_env @ old_reference_env)
+            relation
+        in
+        let witness_assumptions =
+          and_ (relation :: initial_state_guards normal_witness_env)
+        in
+        let totality =
+          app "=>" [ target; exists_ghosts (exists_inputs witness_assumptions) ]
+        in
+        let execution =
           and_
-            (typed_formula program.registry normal_post_env post_expression
-            :: state_posts);
-          normal_reachable;
-        ];
-    ]
+            ((pre :: normal_paths :: List.rev generic_calls.summary_assumptions)
+            @ List.rev generic_calls.semantic_assumptions)
+          |> exists_choices
+        in
+        let soundness =
+          app "=>" [ and_ [ target; witness_assumptions ]; execution ]
+          |> forall_inputs_and_ghosts
+        in
+        [ totality; soundness ]
+    | None ->
+        let reachable =
+          and_ [ pre; normal_paths ]
+          |> with_relational_assumptions normal_witness_env
+          |> exists_choices
+        in
+        let reachable =
+          match normal_witnesses with
+          | Some witnesses ->
+              Refinement_domain.Smt.exists reference_input_declarations
+                (let_arguments normal_witness_env witnesses reachable)
+          | None -> exists_inputs reachable
+        in
+        [ app "=>" [ target; exists_ghosts reachable ] ]
   in
   let payload_declarations = ref [] in
   let outcome_obligations =
     List.mapi
-      (fun index (kind, name, sort, post, witnesses, outcome_state) ->
+      (fun index
+           (kind, name, sort, post, witnesses, witness_relation, outcome_state)
+         ->
         let target = "missing_payload_" ^ string_of_int index in
         let payload_env =
           match sort with
@@ -3903,6 +4120,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             outcome_state
           @ payload_env
         in
+        let witness_env = ghost_env @ target_env in
         let matching =
           relation
           |> List.filter_map (fun (path : R.path) ->
@@ -3941,12 +4159,6 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
               | _ -> None)
           |> or_
         in
-        let reachable =
-          and_ [ pre; matching ]
-          |> with_relational_assumptions target_env
-          |> exists_choices
-          |> let_arguments target_env witnesses
-        in
         let state_posts =
           List.map
             (fun (_name, _key, state_sort, state_target, predicate) ->
@@ -3955,11 +4167,51 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
                 predicate)
             outcome_state
         in
-        app "=>"
-          [
-            and_ (typed_formula program.registry target_env post :: state_posts);
-            reachable;
-          ])
+        let target_condition =
+          and_ (typed_formula program.registry target_env post :: state_posts)
+        in
+        match witness_relation with
+        | Some relation ->
+            let relation =
+              typed_formula program.registry
+                (witness_env @ formula_env @ old_reference_env)
+                relation
+            in
+            let witness_assumptions =
+              and_ (relation :: initial_state_guards witness_env)
+            in
+            let totality =
+              app "=>"
+                [
+                  target_condition;
+                  exists_ghosts (exists_inputs witness_assumptions);
+                ]
+            in
+            let execution =
+              and_
+                ((pre :: matching :: List.rev generic_calls.summary_assumptions)
+                @ List.rev generic_calls.semantic_assumptions)
+              |> exists_choices
+            in
+            let soundness =
+              app "=>"
+                [ and_ [ target_condition; witness_assumptions ]; execution ]
+              |> forall_inputs_and_ghosts
+            in
+            and_ [ totality; soundness ]
+        | None ->
+            let reachable =
+              and_ [ pre; matching ]
+              |> with_relational_assumptions witness_env
+              |> exists_choices
+            in
+            let reachable =
+              if witnesses = [] then exists_inputs reachable
+              else
+                Refinement_domain.Smt.exists reference_input_declarations
+                  (let_arguments witness_env witnesses reachable)
+            in
+            app "=>" [ target_condition; exists_ghosts reachable ])
       outcomes
   in
   let obligation = and_ (obligations @ outcome_obligations) in
@@ -4006,7 +4258,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         (Printf.sprintf "(declare-const %s %s)\n" target (typed_smt_sort sort)))
     state_targets;
   List.iter
-    (fun (_, _, _, _, _, outcome_state) ->
+    (fun (_, _, _, _, _, _, outcome_state) ->
       List.iter
         (fun (_name, _key, sort, target, _) ->
           Buffer.add_string buffer
@@ -4140,7 +4392,11 @@ let obligations_of_cmt_with_theories ~theories filename =
     (fun function_def ->
       List.map
         (fun contract ->
-          if typed_requires_relational program function_def.Typed_core.body then
+          if
+            typed_requires_relational program function_def.Typed_core.body
+            || contract.Typed_core.mode = Under
+               && (contract.witness_relation <> None || contract.ghosts <> [])
+          then
             if contract.Typed_core.mode = Under then
               typed_outcome_coverage_obligation program analysis function_def
                 contract

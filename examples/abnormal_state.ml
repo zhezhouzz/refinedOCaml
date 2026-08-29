@@ -18,11 +18,10 @@ let[@refined.over
      {
        pre = "true";
        post = "false";
-       state_witnesses = [ ("cell", "0") ];
        outcomes =
          [
-           ("raise", "Bad", "payload < 0", [ ("x", "payload") ]);
-           ("perform", "Send", "payload >= 0", [ ("x", "payload") ]);
+           ("raise", "Bad", "payload < 0", [], "x = payload && old_cell = 0");
+           ("perform", "Send", "payload >= 0", [], "x = payload && old_cell = 0");
          ];
        outcome_state =
          [
@@ -44,7 +43,7 @@ let[@refined.over
        pre = "true";
        post = "result = 1";
        state = [ ("cell", "value = 1") ];
-       state_witnesses = [ ("cell", "0") ];
+       witness_relation = "old_cell = 0";
      }] catches_abnormal_state (cell : int ref) : int =
   try abnormal_write cell (-1) with Bad _payload -> !cell
 
@@ -55,7 +54,7 @@ let[@refined.over
        pre = "true";
        post = "result = 2";
        state = [ ("cell", "value = 2") ];
-       state_witnesses = [ ("cell", "0") ];
+       witness_relation = "old_cell = 0";
      }] handles_abnormal_state (cell : int ref) : int =
   Effect.Deep.match_with
     (fun () -> abnormal_write cell 0)

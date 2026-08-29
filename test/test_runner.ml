@@ -451,6 +451,9 @@ let () =
     "typed_nondeterministic_state_invalid";
   compile "../examples/abnormal_state.ml" "typed_abnormal_state";
   compile "../examples/abnormal_state_invalid.ml" "typed_abnormal_state_invalid";
+  compile "../examples/relational_witness.ml" "typed_relational_witness";
+  compile "../examples/relational_witness_invalid.ml"
+    "typed_relational_witness_invalid";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
@@ -690,6 +693,30 @@ let () =
       then failwith "abnormal state summary did not update caller heap";
       require `Valid obligation);
   obligations_of_cmt "typed_abnormal_state_invalid.cmt"
+  |> List.iter (require `Invalid);
+  obligations_of_cmt "typed_relational_witness.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "absolute_wrapper"
+        || obligation.name = "ghost_wrapper"
+        || obligation.name = "relational_bump_wrapper")
+        && not (contains obligation.smt "call_result_")
+      then failwith "relational witness summary was not composed";
+      if
+        obligation.name = "ghost_successor"
+        && not (contains obligation.smt "coverage_ghost_")
+      then failwith "coverage ghost was not existentially synthesized";
+      if
+        obligation.name = "ghost_wrapper"
+        && not (contains obligation.smt "call_ghost_")
+      then failwith "relational ghost was not composed at the call site";
+      if
+        (obligation.name = "relational_bump"
+        || obligation.name = "relational_bump_wrapper")
+        && not (contains obligation.smt "select initial_heap")
+      then failwith "relational witness lost its initial heap binding";
+      require `Valid obligation);
+  obligations_of_cmt "typed_relational_witness_invalid.cmt"
   |> List.iter (require `Invalid);
   obligations_of_cmt "typed_conditional_resume.cmt"
   |> List.iter (fun obligation ->

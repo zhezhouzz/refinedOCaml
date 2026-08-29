@@ -162,7 +162,13 @@ Stateful nondeterminism is now relational. The frontend preserves `choose` alter
 of ANF-evaluating them sequentially. The backend takes their path union, giving demonic Safety and angelic
 Coverage while retaining independent heap and abnormal outcomes.
 
-The next implementation slice is relational witnesses and ghost-state synthesis.
+Relational coverage witnesses and ghost-state synthesis are now implemented. `witness_relation` can connect
+ordinary inputs, result/payload targets, final-state targets, `old_<ref>` heap contents, and existential `int` or
+`bool` ghosts. Whole-function checking splits the proof into target-totality and pointwise soundness; callers may
+therefore choose a ghost and safely apply the relation to their concrete arguments. Normal and abnormal under
+summaries share this mechanism, while functional witnesses remain backward compatible.
+
+The next implementation slice is typed ADT ghosts and heap footprint/frame clauses.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
