@@ -205,6 +205,13 @@ let contract_of_attribute attribute =
                           "%s must contain (cell, expression) string pairs"
                           field)
           in
+          let result_references = state_pairs "result_references" in
+          let result_fresh_references =
+            match find_expression "result_fresh_references" with
+            | None -> []
+            | Some expression ->
+                List.map string_constant (expression_list expression)
+          in
           let requires_state = state_pairs "requires_state" in
           let state_witnesses = state_pairs "state_witnesses" in
           let performs =
@@ -339,6 +346,8 @@ let contract_of_attribute attribute =
               required "post",
               result_state,
               result_fresh,
+              result_references,
+              result_fresh_references,
               witnesses,
               witness_relation,
               ghosts,

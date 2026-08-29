@@ -74,15 +74,6 @@ let reference_content_sort = function
       Some content
   | _ -> None
 
-let rec sort_contains_reference sort =
-  match reference_content_sort sort with
-  | Some _ -> true
-  | None -> (
-      match sort with
-      | Typed_core.S_tuple sorts | S_app (_, sorts) ->
-          List.exists sort_contains_reference sorts
-      | S_int | S_bool | S_unit | S_var _ -> false)
-
 let typed_constructor_name (constructor : Typed_core.constructor) =
   "C_"
   ^ smt_identifier constructor.Typed_core.symbol.key
@@ -1753,12 +1744,43 @@ let typed_reference_arguments (function_def : Typed_core.function_def) =
         (reference_content_sort sort))
     function_def.arguments
 
-let typed_expression_reference_sorts expression =
+let typed_expression_reference_sorts ?registry expression =
+  let rec reachable_content_sorts registry visited sort =
+    match reference_content_sort sort with
+    | Some content -> [ content ]
+    | None -> (
+        match sort with
+        | Typed_core.S_tuple sorts ->
+            List.concat_map (reachable_content_sorts registry visited) sorts
+        | S_app _ ->
+            let sort_name = typed_smt_sort sort in
+            if List.mem sort_name visited then []
+            else
+              registry.Typed_core.datatypes
+              |> List.find_opt (fun (datatype : Typed_core.datatype) ->
+                  typed_smt_sort datatype.owner = sort_name)
+              |> Option.fold ~none:[]
+                   ~some:(fun (datatype : Typed_core.datatype) ->
+                     datatype.constructors
+                     |> List.concat_map
+                          (fun (constructor : Typed_core.constructor) ->
+                            List.concat_map
+                              (reachable_content_sorts registry
+                                 (sort_name :: visited))
+                              constructor.arguments))
+        | S_int | S_bool | S_unit | S_var _ -> [])
+  in
   let rec collect sorts (expression : Typed_core.expr) =
     let sorts =
       match reference_content_sort expression.sort with
       | Some sort -> sort :: sorts
-      | None -> sorts
+      | None -> (
+          match registry with
+          | None -> sorts
+          | Some registry ->
+              List.rev_append
+                (reachable_content_sorts registry [] expression.sort)
+                sorts)
     in
     match expression.desc with
     | Let_ref (_, sort, initial, body) ->
@@ -1802,9 +1824,57 @@ let typed_expression_reference_sorts expression =
   |> List.sort_uniq (fun left right ->
       String.compare (typed_smt_sort left) (typed_smt_sort right))
 
-let typed_function_reference_sorts function_def =
+let typed_function_reference_sorts ?registry function_def =
   List.map (fun (_, _, sort) -> sort) (typed_reference_arguments function_def)
-  @ typed_expression_reference_sorts function_def.Typed_core.body
+  @ typed_expression_reference_sorts ?registry function_def.Typed_core.body
+  |> List.sort_uniq (fun left right ->
+      String.compare (typed_smt_sort left) (typed_smt_sort right))
+
+let typed_expression_sorts expression =
+  let rec collect sorts (expression : Typed_core.expr) =
+    let sorts = expression.sort :: sorts in
+    match expression.desc with
+    | Ref (sort, initial) -> collect (sort :: sorts) initial
+    | Let_ref (_, sort, initial, body) ->
+        collect (collect (sort :: sorts) initial) body
+    | Let (_, value, body) | Sequence (value, body) ->
+        collect (collect sorts value) body
+    | If (condition, if_true, if_false) ->
+        collect (collect (collect sorts condition) if_true) if_false
+    | Try (body, cases) ->
+        List.fold_left
+          (fun sorts (_, branch) -> collect sorts branch)
+          (collect sorts body) cases
+    | Match (body, cases) ->
+        List.fold_left
+          (fun sorts (_, branch) -> collect sorts branch)
+          (collect sorts body) cases
+    | Tuple expressions | Choose expressions | Apply (_, expressions) ->
+        List.fold_left collect sorts expressions
+    | Construct (constructor, expressions) | Record (constructor, expressions)
+      ->
+        List.fold_left collect
+          ((constructor.result :: constructor.arguments) @ sorts)
+          expressions
+    | Assign (_, value) -> collect sorts value
+    | Field (constructor, _, value) ->
+        collect ((constructor.result :: constructor.arguments) @ sorts) value
+    | Raise (_, Some payload) | Perform (_, Some payload) ->
+        collect sorts payload
+    | Handle (body, handlers) ->
+        let rec action sorts = function
+          | Typed_core.Abort expression | Resume expression ->
+              collect sorts expression
+          | Conditional (condition, if_true, if_false) ->
+              action (action (collect sorts condition) if_true) if_false
+        in
+        List.fold_left
+          (fun sorts (_, _, handler) -> action sorts handler)
+          (collect sorts body) handlers
+    | Var _ | Int _ | Bool _ | Deref _ | Raise (_, None) | Perform (_, None) ->
+        sorts
+  in
+  collect [] expression
   |> List.sort_uniq (fun left right ->
       String.compare (typed_smt_sort left) (typed_smt_sort right))
 
@@ -1827,6 +1897,17 @@ let heap_store state identity sort value =
       :: List.remove_assoc key state
   | None -> invalid_arg ("missing relational heap " ^ key)
 
+let heap_store_guarded state guard identity sort value =
+  let key = heap_key sort in
+  match List.assoc_opt key state with
+  | Some heap ->
+      let stored = app "store" [ heap; identity; value ] in
+      let heap =
+        if guard = "true" then stored else app "ite" [ guard; stored; heap ]
+      in
+      (key, heap) :: List.remove_assoc key state
+  | None -> invalid_arg ("missing relational heap " ^ key)
+
 let alias_consistency updates =
   let rec pairs = function
     | [] -> []
@@ -1845,6 +1926,49 @@ let alias_consistency updates =
         @ pairs rest
   in
   pairs updates
+
+let guarded_alias_consistency updates =
+  let rec pairs = function
+    | [] -> []
+    | (identity, sort, value, guard) :: rest ->
+        List.filter_map
+          (fun (other_identity, other_sort, other_value, other_guard) ->
+            if typed_smt_sort sort <> typed_smt_sort other_sort then None
+            else
+              Some
+                (app "=>"
+                   [
+                     and_
+                       [
+                         guard;
+                         other_guard;
+                         app "=" [ identity; other_identity ];
+                       ];
+                     app "=" [ value; other_value ];
+                   ]))
+          rest
+        @ pairs rest
+  in
+  pairs updates
+
+let guarded_identity_distinctness identities =
+  let rec pairs = function
+    | [] -> []
+    | (identity, sort, guard) :: rest ->
+        List.filter_map
+          (fun (other_identity, other_sort, other_guard) ->
+            if typed_smt_sort sort <> typed_smt_sort other_sort then None
+            else
+              Some
+                (app "=>"
+                   [
+                     and_ [ guard; other_guard ];
+                     app "distinct" [ identity; other_identity ];
+                   ]))
+          rest
+        @ pairs rest
+  in
+  pairs identities
 
 let frame_obligations ~initial ~final ~references ~modified =
   references
@@ -1885,8 +2009,142 @@ let reference_modified_identities references names =
   |> List.filter_map (fun (name, identity, _sort) ->
       if List.mem name names then Some identity else None)
 
-let typed_initial_reference_state function_def =
-  let sorts = typed_function_reference_sorts function_def in
+type returned_reference_path = {
+  path : string;
+  identity : string;
+  content_sort : Typed_core.sort;
+  guard : string;
+}
+
+let returned_reference_value_name path = "result_value_" ^ smt_identifier path
+
+let sort_reaches_reference registry sort =
+  let rec visit visited sort =
+    match reference_content_sort sort with
+    | Some _ -> true
+    | None -> (
+        match sort with
+        | Typed_core.S_tuple sorts -> List.exists (visit visited) sorts
+        | S_app _ ->
+            let name = typed_smt_sort sort in
+            if List.mem name visited then false
+            else
+              registry.Typed_core.datatypes @ registry.datatype_templates
+              |> List.find_opt (fun (datatype : Typed_core.datatype) ->
+                  typed_smt_sort datatype.owner = name
+                  ||
+                  match (datatype.owner, sort) with
+                  | S_app (owner, _), S_app (candidate, _) ->
+                      owner.key = candidate.key
+                  | _ -> false)
+              |> Option.fold ~none:false
+                   ~some:(fun (datatype : Typed_core.datatype) ->
+                     List.exists
+                       (fun (constructor : Typed_core.constructor) ->
+                         List.exists
+                           (visit (name :: visited))
+                           constructor.arguments)
+                       datatype.constructors)
+        | S_int | S_bool | S_unit | S_var _ -> false)
+  in
+  visit [] sort
+
+let returned_reference_paths registry ~result_sort ~result =
+  let datatype_for sort =
+    registry.Typed_core.datatypes
+    |> List.find_opt (fun (datatype : Typed_core.datatype) ->
+        typed_smt_sort datatype.owner = typed_smt_sort sort)
+  in
+  let path_name segments = String.concat "." (List.rev segments) in
+  let rec collect visited segments guards term sort =
+    match reference_content_sort sort with
+    | Some content_sort ->
+        Ok
+          [
+            {
+              path = path_name segments;
+              identity = term;
+              content_sort;
+              guard = and_ guards;
+            };
+          ]
+    | None -> (
+        match sort with
+        | Typed_core.S_tuple elements ->
+            elements
+            |> List.mapi (fun index element ->
+                collect visited
+                  (string_of_int index :: segments)
+                  guards
+                  (app (typed_tuple_selector sort index) [ term ])
+                  element)
+            |> List.fold_left
+                 (fun result paths ->
+                   match (result, paths) with
+                   | Ok result, Ok paths -> Ok (result @ paths)
+                   | Error error, _ | _, Error error -> Error error)
+                 (Ok [])
+        | S_app _ -> (
+            match datatype_for sort with
+            | None -> Ok []
+            | Some datatype ->
+                let sort_name = typed_smt_sort sort in
+                if List.mem sort_name visited then
+                  if sort_reaches_reference registry sort then
+                    Error (path_name segments)
+                  else Ok []
+                else
+                  datatype.constructors
+                  |> List.concat_map
+                       (fun (constructor : Typed_core.constructor) ->
+                         List.mapi
+                           (fun index field_sort ->
+                             let selected =
+                               app (typed_selector constructor index) [ term ]
+                             in
+                             let recognized =
+                               app (typed_recognizer constructor) [ term ]
+                             in
+                             collect (sort_name :: visited)
+                               (string_of_int index
+                              :: constructor.symbol.display :: segments)
+                               (recognized :: guards) selected field_sort)
+                           constructor.arguments)
+                  |> List.fold_left
+                       (fun result paths ->
+                         match (result, paths) with
+                         | Ok result, Ok paths -> Ok (result @ paths)
+                         | Error error, _ | _, Error error -> Error error)
+                       (Ok []))
+        | S_int | S_bool | S_unit | S_var _ -> Ok [])
+  in
+  collect [] [] [] result result_sort
+
+let use_returned_reference_theory generic_calls registry sort =
+  let rec visit visited sort =
+    match reference_content_sort sort with
+    | Some _ -> ()
+    | None -> (
+        match sort with
+        | Typed_core.S_tuple sorts -> List.iter (visit visited) sorts
+        | S_app _ ->
+            let name = typed_smt_sort sort in
+            if not (List.mem name visited) then
+              registry.Typed_core.datatypes
+              |> List.find_opt (fun (datatype : Typed_core.datatype) ->
+                  typed_smt_sort datatype.owner = name)
+              |> Option.iter (fun (datatype : Typed_core.datatype) ->
+                  List.iter
+                    (fun (constructor : Typed_core.constructor) ->
+                      use_theory_symbol generic_calls constructor.symbol.key;
+                      List.iter (visit (name :: visited)) constructor.arguments)
+                    datatype.constructors)
+        | S_int | S_bool | S_unit | S_var _ -> ())
+  in
+  visit [] sort
+
+let typed_initial_reference_state ?registry function_def =
+  let sorts = typed_function_reference_sorts ?registry function_def in
   List.map (fun sort -> (heap_key sort, initial_heap_name sort)) sorts
 
 let typed_outcome_payload_sorts ?program expression =
@@ -1998,7 +2256,13 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
             (fun (callee : Typed_core.function_def) ->
               callee.symbol.key = symbol.key
               && (typed_has_exception callee.body
-                 || reference_content_sort callee.result <> None))
+                 || reference_content_sort callee.result <> None
+                 || sort_reaches_reference program.Typed_core.registry
+                      callee.result
+                 || List.exists
+                      (fun (contract : Typed_core.contract) ->
+                        contract.result_references <> [])
+                      callee.contracts))
             program.Typed_core.functions
         with
         | None ->
@@ -2258,6 +2522,83 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                         heap_store state result content_sort content,
                         [ (result, content_sort, content) ] )
                 in
+                let owned_paths =
+                  if reference_content_sort callee.result <> None then []
+                  else
+                    match
+                      returned_reference_paths program.registry
+                        ~result_sort:callee.result ~result
+                    with
+                    | Ok paths -> paths
+                    | Error path ->
+                        typed_error_at expression.loc
+                          "recursive reachable-reference path `%s` needs an \
+                           ownership invariant"
+                          path
+                in
+                if owned_paths <> [] then
+                  use_returned_reference_theory generic_calls program.registry
+                    callee.result;
+                if
+                  List.sort String.compare
+                    (List.map (fun path -> path.path) owned_paths)
+                  <> List.sort String.compare
+                       (List.map fst summary.result_references)
+                then
+                  typed_error_at expression.loc
+                    "reference-containing coverage summary has incomplete \
+                     result_references";
+                let ( owned_targets,
+                      owned_freshness,
+                      owned_final_state,
+                      owned_updates ) =
+                  List.fold_left
+                    (fun (targets, guards, final_state, updates) path ->
+                      let content =
+                        fresh "call_reachable_state_" path.content_sort
+                      in
+                      let freshness =
+                        if
+                          not
+                            (List.mem path.path summary.result_fresh_references)
+                        then []
+                        else
+                          let existing =
+                            !allocated_references
+                            |> List.filter_map (fun (identity, sort) ->
+                                if
+                                  typed_smt_sort sort
+                                  = typed_smt_sort path.content_sort
+                                then Some identity
+                                else None)
+                          in
+                          match existing with
+                          | [] -> []
+                          | existing ->
+                              [
+                                app "=>"
+                                  [
+                                    path.guard;
+                                    app "distinct" (path.identity :: existing);
+                                  ];
+                              ]
+                      in
+                      allocated_references :=
+                        (path.identity, path.content_sort)
+                        :: !allocated_references;
+                      ( ( path,
+                          content,
+                          parse (List.assoc path.path summary.result_references)
+                        )
+                        :: targets,
+                        freshness @ guards,
+                        heap_store_guarded final_state path.guard path.identity
+                          path.content_sort content,
+                        (path.identity, path.content_sort, content, path.guard)
+                        :: updates ))
+                    ([], [], result_final_state, [])
+                    owned_paths
+                in
                 let state_targets =
                   List.map
                     (fun (name, predicate) ->
@@ -2276,6 +2617,11 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                        ~some:(fun (sort, content, _predicate) ->
                          [ ("result_value", (content, sort)) ])
                        result_target
+                  @ List.map
+                      (fun (path, content, _predicate) ->
+                        ( returned_reference_value_name path.path,
+                          (content, path.content_sort) ))
+                      owned_targets
                   @ List.map
                       (fun (name, _, sort, target, _) -> (name, (target, sort)))
                       state_targets
@@ -2300,6 +2646,23 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       |> List.iter (use_theory_symbol generic_calls);
                       typed_formula program.registry state_env predicate
                       :: result_state_guards
+                in
+                let owned_state_guards =
+                  List.map
+                    (fun (path, content, predicate) ->
+                      let state_env =
+                        ("value", (content, path.content_sort))
+                        :: public_target_env
+                      in
+                      formula_theory_symbols program.registry state_env
+                        predicate
+                      |> List.iter (use_theory_symbol generic_calls);
+                      app "=>"
+                        [
+                          path.guard;
+                          typed_formula program.registry state_env predicate;
+                        ])
+                    owned_targets
                 in
                 let state_witness_guards =
                   if reference_formals = [] then []
@@ -2345,10 +2708,19 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                         :: guards,
                         heap_store final_state actual sort target,
                         (actual, sort, target) :: updates ))
-                    (result_state_guards, result_final_state, result_updates)
+                    ( owned_state_guards @ owned_freshness @ result_state_guards,
+                      owned_final_state,
+                      result_updates )
                     state_targets
                 in
-                let alias_guards = alias_consistency state_updates in
+                let alias_guards =
+                  guarded_alias_consistency
+                    (List.map
+                       (fun (identity, sort, value) ->
+                         (identity, sort, value, "true"))
+                       state_updates
+                    @ owned_updates)
+                in
                 paths :=
                   Relational_outcome.
                     {
@@ -2705,6 +3077,90 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       heap_store state result content_sort content,
                       [ (result, content_sort, content) ] )
               in
+              let owned_paths =
+                if reference_content_sort callee.result <> None then []
+                else
+                  match
+                    returned_reference_paths program.registry
+                      ~result_sort:callee.result ~result
+                  with
+                  | Ok paths -> paths
+                  | Error path ->
+                      typed_error_at expression.loc
+                        "recursive reachable-reference path `%s` needs an \
+                         ownership invariant"
+                        path
+              in
+              if owned_paths <> [] then
+                use_returned_reference_theory generic_calls program.registry
+                  callee.result;
+              let expected_paths =
+                List.map (fun path -> path.path) owned_paths
+              in
+              if
+                List.sort String.compare expected_paths
+                <> List.sort String.compare
+                     (List.map fst summary.result_references)
+              then
+                typed_error_at expression.loc
+                  "reference-containing result summary has incomplete \
+                   result_references";
+              let owned_guards, owned_final_state, owned_updates =
+                List.fold_left
+                  (fun (guards, final_state, updates) path ->
+                    let predicate =
+                      parse (List.assoc path.path summary.result_references)
+                    in
+                    let content =
+                      fresh "call_reachable_state_" path.content_sort
+                    in
+                    let state_env =
+                      ("value", (content, path.content_sort)) :: result_env
+                    in
+                    mark state_env predicate;
+                    let predicate =
+                      app "=>"
+                        [
+                          path.guard;
+                          typed_formula program.registry state_env predicate;
+                        ]
+                    in
+                    let freshness =
+                      if
+                        not (List.mem path.path summary.result_fresh_references)
+                      then []
+                      else
+                        let existing =
+                          !allocated_references
+                          |> List.filter_map (fun (identity, sort) ->
+                              if
+                                typed_smt_sort sort
+                                = typed_smt_sort path.content_sort
+                              then Some identity
+                              else None)
+                        in
+                        match existing with
+                        | [] -> []
+                        | existing ->
+                            [
+                              app "=>"
+                                [
+                                  path.guard;
+                                  app "distinct" (path.identity :: existing);
+                                ];
+                            ]
+                    in
+                    allocated_references :=
+                      (path.identity, path.content_sort)
+                      :: !allocated_references;
+                    ( (predicate :: freshness) @ guards,
+                      heap_store_guarded final_state path.guard path.identity
+                        path.content_sort content,
+                      (path.identity, path.content_sort, content, path.guard)
+                      :: updates ))
+                  (result_state_guards, result_final_state, [])
+                  owned_paths
+              in
               let normal_state_clauses =
                 summary.state
                 @ List.filter_map
@@ -2731,11 +3187,17 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       :: guards,
                       heap_store final_state actual sort value,
                       (actual, sort, value) :: updates ))
-                  (result_state_guards, result_final_state, result_updates)
+                  (owned_guards, owned_final_state, result_updates)
                   normal_state_clauses
               in
               let state_guards =
-                alias_consistency state_updates @ state_guards
+                guarded_alias_consistency
+                  (List.map
+                     (fun (identity, sort, value) ->
+                       (identity, sort, value, "true"))
+                     state_updates
+                  @ owned_updates)
+                @ state_guards
               in
               let normal =
                 Relational_outcome.
@@ -2956,6 +3418,26 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
             translate
               ((symbol.key, { term = value; refinement = None }) :: env)
               state path body continuation)
+    | Match (scrutinee, cases) ->
+        translate env state path scrutinee (fun value state ->
+            let rec branches previous = function
+              | [] -> []
+              | (pattern, body) :: rest ->
+                  use_pattern_theory generic_calls pattern;
+                  let guard, case_env = typed_pattern_smt env value pattern in
+                  let effective_guard =
+                    match previous with
+                    | [] -> guard
+                    | previous -> and_ [ guard; app "not" [ or_ previous ] ]
+                  in
+                  R.branch ~condition:effective_guard
+                    ~if_true:
+                      (translate case_env state (effective_guard :: path) body
+                         continuation)
+                    ~if_false:[]
+                  @ branches (guard :: previous) rest
+            in
+            branches [] cases)
     | Try (body, cases) ->
         let boundary value state = R.return ~state value in
         let handled =
@@ -3100,6 +3582,11 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
 
 let typed_collect_sorts program function_def =
   let module Set = Set.Make (String) in
+  let rec closed = function
+    | Typed_core.S_var _ -> false
+    | S_tuple sorts | S_app (_, sorts) -> List.for_all closed sorts
+    | S_int | S_bool | S_unit -> true
+  in
   let rec add set sort =
     let set = Set.add (typed_smt_sort sort) set in
     match sort with
@@ -3115,6 +3602,12 @@ let typed_collect_sorts program function_def =
   let set = add set function_def.result in
   let set =
     List.fold_left
+      (fun set sort -> if closed sort then add set sort else set)
+      set
+      (typed_expression_sorts function_def.body)
+  in
+  let set =
+    List.fold_left
       (fun set (contract : Typed_core.contract) ->
         List.fold_left (fun set (_, sort) -> add set sort) set contract.ghosts)
       set function_def.contracts
@@ -3123,7 +3616,8 @@ let typed_collect_sorts program function_def =
     List.fold_left
       (fun set sort -> add (add set sort) (reference_sort sort))
       set
-      (typed_function_reference_sorts function_def)
+      (typed_function_reference_sorts ~registry:program.Typed_core.registry
+         function_def)
   in
   let set =
     Hashtbl.fold
@@ -3156,6 +3650,11 @@ let typed_collect_sorts program function_def =
 
 let typed_collect_sort_values program function_def =
   let values = Hashtbl.create 32 in
+  let rec closed = function
+    | Typed_core.S_var _ -> false
+    | S_tuple sorts | S_app (_, sorts) -> List.for_all closed sorts
+    | S_int | S_bool | S_unit -> true
+  in
   let rec add sort =
     Hashtbl.replace values (typed_smt_sort sort) sort;
     match sort with
@@ -3165,6 +3664,9 @@ let typed_collect_sort_values program function_def =
   List.iter (fun (_, sort) -> add sort) function_def.Typed_core.arguments;
   add function_def.result;
   List.iter
+    (fun sort -> if closed sort then add sort)
+    (typed_expression_sorts function_def.body);
+  List.iter
     (fun (contract : Typed_core.contract) ->
       List.iter (fun (_, sort) -> add sort) contract.ghosts)
     function_def.contracts;
@@ -3172,7 +3674,8 @@ let typed_collect_sort_values program function_def =
     (fun sort ->
       add sort;
       add (reference_sort sort))
-    (typed_function_reference_sorts function_def);
+    (typed_function_reference_sorts ~registry:program.Typed_core.registry
+       function_def);
   List.iter
     (fun (datatype : Typed_core.datatype) ->
       add datatype.owner;
@@ -3565,11 +4068,6 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   let pre_expression = parse contract.pre in
   let post_expression = parse contract.post in
   let result_reference_sort = reference_content_sort function_def.result in
-  if result_reference_sort = None && sort_contains_reference function_def.result
-  then
-    typed_error_at contract.loc
-      "references nested in returned tuples/ADTs require an ownership-aware \
-       escape contract";
   let result_state_expression = Option.map parse contract.result_state in
   (match
      (result_reference_sort, result_state_expression, contract.result_fresh)
@@ -3744,11 +4242,62 @@ let typed_exception_obligation (program : Typed_core.program) analysis
     typed_specialize_program program function_def pre_expression post_expression
     |> fun program -> typed_monomorphize_datatypes program function_def
   in
+  let owned_result_paths result =
+    if result_reference_sort <> None then []
+    else
+      match
+        returned_reference_paths program.registry
+          ~result_sort:function_def.result ~result
+      with
+      | Ok paths -> paths
+      | Error path ->
+          typed_error_at contract.loc
+            "recursive reachable-reference path `%s` needs an ownership \
+             invariant"
+            path
+  in
+  let owned_paths = owned_result_paths "result" in
+  let expected_owned_paths = List.map (fun path -> path.path) owned_paths in
+  let actual_owned_paths = List.map fst contract.result_references in
+  if result_reference_sort <> None then (
+    if contract.result_references <> [] then
+      typed_error_at contract.loc
+        "direct reference results use result_state, not result_references";
+    if contract.result_fresh_references <> [] then
+      typed_error_at contract.loc
+        "direct reference results use result_fresh, not result_fresh_references")
+  else if
+    List.sort String.compare expected_owned_paths
+    <> List.sort String.compare actual_owned_paths
+    || List.length actual_owned_paths
+       <> List.length (List.sort_uniq String.compare actual_owned_paths)
+  then
+    typed_error_at contract.loc
+      "result_references must cover every finite returned reference path";
+  if
+    List.exists
+      (fun path -> not (List.mem path expected_owned_paths))
+      contract.result_fresh_references
+  then
+    typed_error_at contract.loc
+      "result_fresh_references names an unknown returned reference path";
+  let owned_result_expressions =
+    List.map
+      (fun path ->
+        ( path,
+          parse (List.assoc path.path contract.result_references),
+          List.mem path.path contract.result_fresh_references ))
+      owned_paths
+  in
   let relation, choices, generic_calls =
     typed_relational_expr program analysis Over function_def
-      ~initial_state:(typed_initial_reference_state function_def)
+      ~initial_state:
+        (typed_initial_reference_state ~registry:program.registry function_def)
       env function_def.body
   in
+  if owned_paths <> [] then
+    use_returned_reference_theory generic_calls program.registry
+      function_def.result;
   if generic_calls.summary_assumptions <> [] then
     typed_error_at contract.loc
       "effectful outcome summaries cannot use value-only assumptions";
@@ -3767,6 +4316,14 @@ let typed_exception_obligation (program : Typed_core.program) analysis
             :: formula_env)
             expression)
         result_state_expression
+    @ List.concat_map
+        (fun (path, expression, _fresh) ->
+          formula_theory_symbols program.registry
+            (("value", ("reachable_result_value", path.content_sort))
+            :: ("result", ("result", function_def.result))
+            :: formula_env)
+            expression)
+        owned_result_expressions
     @ List.concat_map
         (fun (_, payload_sort, expression) ->
           let env =
@@ -3851,6 +4408,19 @@ let typed_exception_obligation (program : Typed_core.program) analysis
             :: formula_env)
             expression ))
       result_state_expression
+  in
+  let owned_result_posts =
+    List.map
+      (fun (path, expression, fresh) ->
+        ( path.path,
+          path.content_sort,
+          typed_formula program.registry
+            (("value", ("reachable_result_value", path.content_sort))
+            :: ("result", ("result", function_def.result))
+            :: formula_env)
+            expression,
+          fresh ))
+      owned_result_expressions
   in
   let raised =
     List.map
@@ -3972,13 +4542,55 @@ let typed_exception_obligation (program : Typed_core.program) analysis
               in
               state :: freshness
         in
-        Printf.sprintf "(let ((result %s)) %s)" value
-          (and_
-             (((post :: state_obligations) @ result_obligations)
-             @ frame_obligations ~initial ~final ~references:reference_cells
-                 ~modified:
-                   (reference_modified_identities reference_cells
-                      normal_modified_names))))
+        let owned_result_obligations =
+          let paths = owned_result_paths value in
+          List.concat_map
+            (fun (path_name, content_sort, predicate, fresh) ->
+              let path = List.find (fun path -> path.path = path_name) paths in
+              let content = heap_select final path.identity content_sort in
+              let state =
+                Printf.sprintf
+                  "(let ((result %s) (reachable_result_value %s)) %s)" value
+                  content predicate
+              in
+              let obligations = [ app "=>" [ path.guard; state ] ] in
+              if not fresh then obligations
+              else
+                let identities =
+                  List.map (fun (_, identity, _) -> identity) reference_cells
+                in
+                match identities with
+                | [] -> obligations
+                | identities ->
+                    app "=>"
+                      [
+                        path.guard; app "distinct" (path.identity :: identities);
+                      ]
+                    :: obligations)
+            owned_result_posts
+        in
+        let owned_result_distinctness =
+          let paths = owned_result_paths value in
+          owned_result_posts
+          |> List.filter_map (fun (path_name, _sort, _predicate, fresh) ->
+              if not fresh then None
+              else
+                let path =
+                  List.find (fun path -> path.path = path_name) paths
+                in
+                Some (path.identity, path.content_sort, path.guard))
+          |> guarded_identity_distinctness
+        in
+        let obligations =
+          (post :: state_obligations)
+          @ result_obligations @ owned_result_obligations
+          @ owned_result_distinctness
+          @ frame_obligations ~initial ~final ~references:reference_cells
+              ~modified:
+                (reference_modified_identities reference_cells
+                   normal_modified_names)
+        in
+        Printf.sprintf "(let ((result %s)) %s)" value (and_ obligations))
       ~raised:(fun ~exception_ ~payload ~initial ~final ->
         let post =
           match
@@ -4031,7 +4643,7 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   List.iter
     (fun (key, _heap) ->
       let sort =
-        typed_function_reference_sorts function_def
+        typed_function_reference_sorts ~registry:program.registry function_def
         |> List.find_opt (fun sort -> heap_key sort = key)
         |> Option.get
       in
@@ -4040,7 +4652,7 @@ let typed_exception_obligation (program : Typed_core.program) analysis
            (initial_heap_name sort)
            (typed_smt_sort (reference_sort sort))
            (typed_smt_sort sort)))
-    (typed_initial_reference_state function_def);
+    (typed_initial_reference_state ~registry:program.registry function_def);
   List.iter
     (fun (name, sort) ->
       Buffer.add_string buffer
@@ -4093,11 +4705,6 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   let pre_expression = parse contract.pre in
   let post_expression = parse contract.post in
   let result_reference_sort = reference_content_sort function_def.result in
-  if result_reference_sort = None && sort_contains_reference function_def.result
-  then
-    typed_error_at contract.loc
-      "references nested in returned tuples/ADTs require an ownership-aware \
-       escape contract";
   let result_state_expression = Option.map parse contract.result_state in
   (match
      (result_reference_sort, result_state_expression, contract.result_fresh)
@@ -4116,11 +4723,62 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     typed_specialize_program program function_def pre_expression post_expression
     |> fun program -> typed_monomorphize_datatypes program function_def
   in
+  let owned_result_paths result =
+    if result_reference_sort <> None then []
+    else
+      match
+        returned_reference_paths program.registry
+          ~result_sort:function_def.result ~result
+      with
+      | Ok paths -> paths
+      | Error path ->
+          typed_error_at contract.loc
+            "recursive reachable-reference path `%s` needs an ownership \
+             invariant"
+            path
+  in
+  let owned_paths = owned_result_paths "missing_result" in
+  let expected_owned_paths = List.map (fun path -> path.path) owned_paths in
+  let actual_owned_paths = List.map fst contract.result_references in
+  if result_reference_sort <> None then (
+    if contract.result_references <> [] then
+      typed_error_at contract.loc
+        "direct reference results use result_state, not result_references";
+    if contract.result_fresh_references <> [] then
+      typed_error_at contract.loc
+        "direct reference results use result_fresh, not result_fresh_references")
+  else if
+    List.sort String.compare expected_owned_paths
+    <> List.sort String.compare actual_owned_paths
+    || List.length actual_owned_paths
+       <> List.length (List.sort_uniq String.compare actual_owned_paths)
+  then
+    typed_error_at contract.loc
+      "result_references must cover every finite returned reference path";
+  if
+    List.exists
+      (fun path -> not (List.mem path expected_owned_paths))
+      contract.result_fresh_references
+  then
+    typed_error_at contract.loc
+      "result_fresh_references names an unknown returned reference path";
+  let owned_result_expressions =
+    List.map
+      (fun path ->
+        ( path,
+          parse (List.assoc path.path contract.result_references),
+          List.mem path.path contract.result_fresh_references ))
+      owned_paths
+  in
   let relation, choices, generic_calls =
     typed_relational_expr program analysis Under function_def
-      ~initial_state:(typed_initial_reference_state function_def)
+      ~initial_state:
+        (typed_initial_reference_state ~registry:program.registry function_def)
       env function_def.body
   in
+  if owned_paths <> [] then
+    use_returned_reference_theory generic_calls program.registry
+      function_def.result;
   if generic_calls.side_conditions <> [] then
     typed_error_at contract.loc
       "outcome coverage calls require constructive callee summaries";
@@ -4365,11 +5023,24 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         (Option.get result_reference_sort, "missing_result_state", expression))
       result_state_expression
   in
+  let owned_result_targets =
+    List.mapi
+      (fun index (path, expression, fresh) ->
+        ( path,
+          "missing_result_reference_" ^ string_of_int index,
+          expression,
+          fresh ))
+      owned_result_expressions
+  in
   let result_target_env =
     ("result", ("missing_result", function_def.result))
     :: Option.fold ~none:[]
          ~some:(fun (sort, target, _) -> [ ("result_value", (target, sort)) ])
          result_state_target
+    @ List.map
+        (fun (path, target, _expression, _fresh) ->
+          (returned_reference_value_name path.path, (target, path.content_sort)))
+        owned_result_targets
     @ state_target_env
   in
   let roots =
@@ -4386,6 +5057,12 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             (("value", (target, sort)) :: result_target_env)
             expression)
         result_state_target
+    @ List.concat_map
+        (fun (path, target, expression, _fresh) ->
+          formula_theory_symbols program.registry
+            (("value", (target, path.content_sort)) :: result_target_env)
+            expression)
+        owned_result_targets
     @ Option.fold ~none:[]
         ~some:(fun witnesses ->
           List.concat_map
@@ -4489,10 +5166,10 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
       :: required_state_posts)
   in
   let heap_declarations =
-    typed_initial_reference_state function_def
+    typed_initial_reference_state ~registry:program.registry function_def
     |> List.map (fun (key, _) ->
         let sort =
-          typed_function_reference_sorts function_def
+          typed_function_reference_sorts ~registry:program.registry function_def
           |> List.find_opt (fun sort -> heap_key sort = key)
           |> Option.get
         in
@@ -4589,6 +5266,60 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
                   ])
                 result_state_target
             in
+            let owned_result_equalities =
+              let actual_paths = owned_result_paths value in
+              let equalities =
+                List.concat_map
+                  (fun (target_path, target, _expression, fresh) ->
+                    let owned_path =
+                      List.find
+                        (fun path -> path.path = target_path.path)
+                        actual_paths
+                    in
+                    let content =
+                      heap_select path.final_state owned_path.identity
+                        owned_path.content_sort
+                    in
+                    let equality =
+                      app "=>" [ owned_path.guard; app "=" [ content; target ] ]
+                    in
+                    if not fresh then [ equality ]
+                    else
+                      let identities =
+                        List.map
+                          (fun (_, identity, _) -> identity)
+                          reference_cells
+                      in
+                      match identities with
+                      | [] -> [ equality ]
+                      | identities ->
+                          [
+                            app "=>"
+                              [
+                                owned_path.guard;
+                                app "distinct"
+                                  (owned_path.identity :: identities);
+                              ];
+                            equality;
+                          ])
+                  owned_result_targets
+              in
+              let distinctness =
+                owned_result_targets
+                |> List.filter_map
+                     (fun (target_path, _target, _expression, fresh) ->
+                       if not fresh then None
+                       else
+                         let path =
+                           List.find
+                             (fun path -> path.path = target_path.path)
+                             actual_paths
+                         in
+                         Some (path.identity, path.content_sort, path.guard))
+                |> guarded_identity_distinctness
+              in
+              equalities @ distinctness
+            in
             let freshness =
               if not contract.result_fresh then []
               else
@@ -4604,7 +5335,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
                  (path.guard
                   :: app "=" [ value; "missing_result" ]
                   :: state_equalities
-                 @ result_equalities @ freshness
+                 @ result_equalities @ owned_result_equalities @ freshness
                  @ frame_obligations ~initial:path.initial_state
                      ~final:path.final_state ~references:reference_cells
                      ~modified:
@@ -4638,11 +5369,22 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
           ])
         result_state_target
     in
+    let owned_result_posts =
+      List.map
+        (fun (path, target, expression, _fresh) ->
+          let predicate =
+            typed_formula program.registry
+              (("value", (target, path.content_sort)) :: result_target_env)
+              expression
+          in
+          app "=>" [ path.guard; predicate ])
+        owned_result_targets
+    in
     let target =
       and_
         (typed_formula program.registry normal_post_env post_expression
          :: state_posts
-        @ result_posts)
+        @ result_posts @ owned_result_posts)
     in
     match normal_witness_relation with
     | Some relation ->
@@ -4824,6 +5566,12 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
       Buffer.add_string buffer
         (Printf.sprintf "(declare-const %s %s)\n" target (typed_smt_sort sort)))
     result_state_target;
+  List.iter
+    (fun (path, target, _expression, _fresh) ->
+      Buffer.add_string buffer
+        (Printf.sprintf "(declare-const %s %s)\n" target
+           (typed_smt_sort path.content_sort)))
+    owned_result_targets;
   let identity_capacity_sorts =
     List.map (fun (_name, _identity, sort) -> sort) reference_cells
     @ List.filter_map (fun (_name, sort) -> reference_content_sort sort) choices
@@ -4998,9 +5746,11 @@ let obligations_of_cmt_with_theories ~theories filename =
             typed_requires_relational program function_def.Typed_core.body
             || contract.Typed_core.mode = Under
                && (contract.witness_relation <> None || contract.ghosts <> [])
-            || sort_contains_reference function_def.result
+            || sort_reaches_reference program.registry function_def.result
             || contract.result_state <> None
             || contract.result_fresh
+            || contract.result_references <> []
+            || contract.result_fresh_references <> []
           then
             if contract.Typed_core.mode = Under then
               typed_outcome_coverage_obligation program analysis function_def

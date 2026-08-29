@@ -87,6 +87,10 @@
   ../examples/reference_escape_missing_state.ml
   ../examples/reference_escape_nested.ml
   ../examples/physical_equality_invalid.ml
+  ../examples/reachable_heap.ml
+  ../examples/reachable_heap_invalid.ml
+  ../examples/reachable_heap_incomplete.ml
+  ../examples/reachable_heap_recursive.ml
   ../examples/conditional_resume.ml
   ../examples/multishot_unsupported.ml))
 

@@ -12,12 +12,12 @@
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v5 保存 OCaml version、unit/digest、abstract sorts、aliases、functor templates 和 proof metadata | MVP 已完成 | 设计非 `Marshal` 的长期稳定格式 |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
-| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | First-class ref identity、direct escape content、alias-aware frame、dynamic allocation 与 relational ghosts 已组合 | Escaping relational heap/outcome MVP 完成 | reference-containing ADT/tuple ownership 与 reachable heaps |
+| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | First-class identity、finite reachable-heap ownership、alias-aware frame、dynamic allocation 与 relational ghosts 已组合 | Owned relational heap/outcome MVP 完成 | recursive ownership invariant 与 borrow/transfer permissions |
 | C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、递归 measure、relational outcomes/witnesses、typed ADT ghosts 与 frame rules 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | observable identity 与 separation-style ownership domain |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | Functional/relational inverses、closed typed ghosts、normal/abnormal footprint targets；relation 检查 totality/soundness | Framed relational coverage MVP 已完成 | escaping references 与 ownership-aware witnesses |
 | 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
-| OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 first-class `ref` allocation、`==/!=`、direct ref return、stateful `choose` 与 abnormal heap effects | First-class identity + linear continuation MVP | nested escaping refs/ownership；显式 clone API 出现后再做 multi-shot |
+| OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 first-class `ref`、`==/!=`、direct/finite nested ref return、relational `match` 与 abnormal heap effects | Finite ownership + linear continuation MVP | recursive ownership/borrowing；显式 clone API 出现后再做 multi-shot |
 | Solver 工程 | 生成 SMT-LIB，调用 Z3，输出 model | 已支持 `--emit-smt`、Z3 `sat/unsat/unknown`、model 输出 | MVP 已完成 | 记录 solver version、timeout、enabled axioms；改进 `unknown` 诊断 |
 | 工程可复现性 | 让项目能在干净环境中稳定构建和测试 | 已有本机 OCaml 5.3.0 switch、direct-dependency lock、setup script、GitHub Actions、format gate、autofix.ci、deterministic property fuzzing 和版本升级规约 | 已完成 | CI 通过后保护主分支；新增 frontend 时扩展版本矩阵 |
 
@@ -179,6 +179,12 @@ reference 则单独保存 allocation-time initial value。
 First-class reference identity、pointer equality 与 direct escaping discipline 已完成。`ref init` 可作为普通
 Core expression；`==/!=` 只接受相同 content sort 的 refs。Ref-returning contracts 必须以 `result_state`
 描述 final content，并可用 `result_fresh` 声明新 identity；Safety/Coverage summaries 都会把 returned content
-写入 caller heap，fresh results 会加入后续 allocation 的 distinct 集合。Tuple/ADT 内嵌 ref 暂时 fail closed。
+写入 caller heap，fresh results 会加入后续 allocation 的 distinct 集合。
 
-roadmap 的下一实现步骤是 reference-containing tuple/ADT ownership 与 reachable-heap contracts。
+Reference-containing tuple/ADT ownership 与 reachable-heap contracts 已完成于 finite non-recursive shape。
+`result_references` 使用 tuple index/`Constructor.index` path 精确覆盖所有 returned ref fields；variant path
+由 recognizer guard，summary 以 guarded store 转移 content。`result_fresh_references` 同时检查 entry
+separation 和 returned paths 间的 pairwise separation。Relational `Match` 也已支持在 pattern branch 中继续
+deref/effectful computation。递归 reachable shape 会拒绝而非静默截断。
+
+roadmap 的下一实现步骤是 recursive ownership invariants 与 borrow/transfer permissions。

@@ -89,6 +89,8 @@ type contract = {
   post : string;
   result_state : string option;
   result_fresh : bool;
+  result_references : (string * string) list;
+  result_fresh_references : string list;
   witnesses : (string * string) list;
   witness_relation : string option;
   ghosts : (string * sort) list;

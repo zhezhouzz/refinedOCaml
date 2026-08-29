@@ -181,9 +181,14 @@ same content sort, and `Ref` is an expression rather than only a specialized `le
 must declare `result_state`; identity constraints remain in `post`/`witness_relation`, while the result-state
 predicate transfers final content into the caller heap. `result_fresh` additionally separates the result from
 currently visible identities and later allocations. Safety and Coverage summaries both compose this transfer.
-References nested in returned tuples/ADTs remain fail closed.
+References nested in finite non-recursive tuples/ADTs now use `result_references` ownership paths. Tuple indices
+and guarded `Constructor.index` selectors can alternate; every statically reachable reference field must be
+covered. Summary application transfers each content with a guarded store, and `result_fresh_references` checks
+both entry separation and pairwise separation. Coverage exposes sanitized per-path content targets to witness
+relations. Relational pattern matching can consume the returned structure and continue with dereference/effects.
+Recursive reachable shapes remain fail closed rather than being finitely truncated.
 
-The next implementation slice is ownership and reachable-heap contracts for reference-containing tuples/ADTs.
+The next implementation slice is recursive ownership invariants and borrow/transfer permissions.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

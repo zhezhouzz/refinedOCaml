@@ -465,6 +465,12 @@ let () =
     "typed_reference_escape_nested";
   compile "../examples/physical_equality_invalid.ml"
     "typed_physical_equality_invalid";
+  compile "../examples/reachable_heap.ml" "typed_reachable_heap";
+  compile "../examples/reachable_heap_invalid.ml" "typed_reachable_heap_invalid";
+  compile "../examples/reachable_heap_incomplete.ml"
+    "typed_reachable_heap_incomplete";
+  compile "../examples/reachable_heap_recursive.ml"
+    "typed_reachable_heap_recursive";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
@@ -671,7 +677,9 @@ let () =
   |> List.iter (fun obligation ->
       if
         (obligation.name = "aliased" || obligation.name = "aliased_coverage")
-        && not (contains obligation.smt "(=> (=")
+        && not
+             (contains obligation.smt "(=> (="
+             || contains obligation.smt "(=> (and")
       then failwith "aliased reference summary lost consistency guard";
       require `Valid obligation);
   obligations_of_cmt "typed_reference_fresh.cmt"
@@ -770,6 +778,23 @@ let () =
   | exception Location.Error _ -> ());
   (match obligations_of_cmt "typed_physical_equality_invalid.cmt" with
   | _ -> failwith "physical equality on non-references was accepted"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_reachable_heap.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "read_pair"
+        || obligation.name = "read_nested_box"
+        || obligation.name = "read_some")
+        && not (contains obligation.smt "call_reachable_state_")
+      then failwith "reachable heap was not transferred at the call site";
+      require `Valid obligation);
+  obligations_of_cmt "typed_reachable_heap_invalid.cmt"
+  |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_reachable_heap_incomplete.cmt" with
+  | _ -> failwith "incomplete reachable-heap ownership was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_reachable_heap_recursive.cmt" with
+  | _ -> failwith "recursive reachable heap was accepted without invariant"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_conditional_resume.cmt"
   |> List.iter (fun obligation ->

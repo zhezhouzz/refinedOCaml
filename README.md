@@ -436,7 +436,22 @@ let[@refined.over
 `result_fresh` 表示它必须与 caller 当前可见的同 sort identities 不同。Summary application 会把 symbolic
 result content 写入 caller heap，所以返回值可继续 alias-check、dereference、assignment 或传给其他函数。
 所有 refinement-checked ref results 必须有 `result_state`。目前只允许直接 ref result；tuple/ADT 中内嵌
-reference 会 fail closed，等待 ownership-aware reachable-heap contract。
+reference 则使用有限 reachable-heap ownership contract：
+
+```ocaml
+result_references = [
+  ("0", "value = x");
+  ("1.Box.0", "value = y");
+];
+result_fresh_references = ["0"; "1.Box.0"];
+```
+
+Path 使用零基 tuple index 和 `Constructor.index`，可交替嵌套；例如 `0.Some.0`。Contract 必须精确覆盖
+返回 shape 中所有有限可枚举的 ref fields。Variant selectors 由 constructor recognizer guard；summary 在
+caller heap 中使用 guarded stores。Coverage relation 可通过 `result_value_<sanitized_path>` 引用每个 content，
+例如 `result_value_0`、`result_value_Box_0`。Fresh paths 除了与 entry identities 不同，也必须彼此不同。
+递归 reference-containing ADT 目前 fail closed，需要用户可声明的 ownership invariant，不能用有限 path
+列表冒充无界 reachable heap。
 
 OCaml 5.3 的标准 effect surface 通过 `Effect.perform` 与 `Effect.Deep.match_with` 提供。当前 frontend
 支持 nullary operation 和 canonical abortive handler：
@@ -551,7 +566,8 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | abnormal outcome heap summaries | 支持 | `outcome_state` + caller heap update |
 | heap footprint / frame clauses | 支持 | alias-aware `modifies` / `outcome_modifies` |
 | pointer equality / direct escaping refs | 支持 | `==`/`!=` + `result_state/result_fresh` |
-| refs nested in returned tuple/ADT | 明确拒绝 | 需要 ownership-aware reachable-heap contract |
+| refs nested in returned tuple/ADT | 支持有限非递归 shape | guarded reachable-heap ownership paths |
+| recursive reachable heap | 明确拒绝 | 需要 recursive ownership invariant |
 | multi-payload/multi-shot handlers | 明确拒绝 | 需要 richer binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
@@ -563,7 +579,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. reference-containing tuple/ADT ownership 与 reachable-heap contracts；
+1. recursive ownership invariants 与 borrow/transfer permissions；
 2. 可重放 proof certificate 与稳定 artifact 格式；
 3. 显式 continuation cloning（若未来 OCaml API 支持）。
 

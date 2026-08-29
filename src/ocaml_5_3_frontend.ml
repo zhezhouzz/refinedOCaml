@@ -1039,6 +1039,8 @@ let typed_contracts registry attributes =
             post,
             result_state,
             result_fresh,
+            result_references,
+            result_fresh_references,
             witnesses,
             witness_relation,
             ghosts,
@@ -1059,6 +1061,8 @@ let typed_contracts registry attributes =
                 post;
                 result_state;
                 result_fresh;
+                result_references;
+                result_fresh_references;
                 witnesses;
                 witness_relation;
                 ghosts =
