@@ -5,25 +5,46 @@ let[@refined.over
        pre = "true";
        post = "true";
        result_recursive = true;
-       result_references = [ ("Link.0", "value = x") ];
+       result_region = "nonnegative_chain";
+       result_references = [ ("Link.0", "value >= 0") ];
        result_reference_permissions = [ ("Link.0", "transfer") ];
-     }]
-   [@refined.coverage
+     }] empty_chain (_seed : int) : chain =
+  End
+
+let[@refined.over
      {
-       pre = "true";
-       post = "result <> End";
+       pre = "x >= 0";
+       post = "true";
        result_recursive = true;
-       result_references = [ ("Link.0", "true") ];
+       result_region = "nonnegative_chain";
+       requires_regions = [ ("tail", "nonnegative_chain") ];
+       result_references = [ ("Link.0", "value >= 0") ];
        result_reference_permissions = [ ("Link.0", "transfer") ];
-       witness_relation =
-         "x = result_value_Link_0 && result = Link(result_identity_Link_0, \
-          tail)";
      }] make_link (x : int) (tail : chain) : chain =
   Link (ref x, tail)
 
-let[@refined.over { pre = "true"; post = "result = 0 || result = x" }] read_new_link
-    (x : int) (tail : chain) : int =
-  match make_link x tail with End -> 0 | Link (cell, _tail) -> !cell
+let[@refined.over { pre = "x >= 0"; post = "true" }] read_new_link (x : int) :
+    int =
+  match make_link x End with End -> 0 | Link (cell, _tail) -> !cell
+
+let[@refined.over
+     {
+       pre = "true";
+       post = "true";
+       requires_regions = [ ("value", "nonnegative_chain") ];
+       consumes_regions = [ "value" ];
+     }] consume_chain (value : chain) : int =
+  let _discarded = value in
+  0
+
+let[@refined.over
+     {
+       pre = "true";
+       post = "result >= 0";
+       requires_regions = [ ("value", "nonnegative_chain") ];
+       consumes_regions = [ "value" ];
+     }] head_nonnegative (value : chain) : int =
+  match value with End -> 0 | Link (cell, _tail) -> !cell
 
 let[@refined.over
      {

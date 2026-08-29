@@ -234,6 +234,14 @@ let contract_of_attribute attribute =
                 error ~loc:expression.pexp_loc
                   "result_recursive must be a boolean literal"
           in
+          let result_region = find "result_region" in
+          let requires_regions = state_pairs "requires_regions" in
+          let consumes_regions =
+            match find_expression "consumes_regions" with
+            | None -> []
+            | Some expression ->
+                List.map string_constant (expression_list expression)
+          in
           let requires_state = state_pairs "requires_state" in
           let state_witnesses = state_pairs "state_witnesses" in
           let performs =
@@ -372,6 +380,9 @@ let contract_of_attribute attribute =
               result_fresh_references,
               result_reference_permissions,
               result_recursive,
+              result_region,
+              requires_regions,
+              consumes_regions,
               witnesses,
               witness_relation,
               ghosts,

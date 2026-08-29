@@ -194,7 +194,14 @@ does not claim an unproved invariant over the entire tail. Per-path `borrow` req
 and preserves framed content, while `transfer` requires fresh separation and moves symbolic content into the
 caller heap. Ownership predicates may reference both `identity` and `value`.
 
-The next implementation slice is deep recursive region invariants and linear ownership consumption.
+Named recursive regions now connect frontier contracts into an inductive, syntax-directed provenance check.
+`result_region` producers must rebuild recursive fields from the same region; `requires_regions` expands the
+current frontier predicate at function entry and carries the token across summary boundaries. Pattern matching
+consumes the old root and assigns fresh same-region origins to recursive subfields. `consumes_regions` adds affine
+tracking that rejects double consumption, use-after-consume, and consumption after an aliasing borrow. This avoids
+introducing untrusted or non-terminating recursive SMT axioms.
+
+The next implementation slice is a stable proof-artifact format and a small replay kernel.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

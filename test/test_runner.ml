@@ -474,6 +474,12 @@ let () =
   compile "../examples/recursive_ownership.ml" "typed_recursive_ownership";
   compile "../examples/recursive_ownership_bad_permission.ml"
     "typed_recursive_ownership_bad_permission";
+  compile "../examples/recursive_ownership_linear_invalid.ml"
+    "typed_recursive_ownership_linear_invalid";
+  compile "../examples/recursive_ownership_alias_invalid.ml"
+    "typed_recursive_ownership_alias_invalid";
+  compile "../examples/recursive_ownership_bad_tail.ml"
+    "typed_recursive_ownership_bad_tail";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
@@ -806,9 +812,22 @@ let () =
         || obligation.name = "borrowed_identity")
         && not (contains obligation.smt "call_reachable_state_")
       then failwith "recursive ownership frontier was not composed";
+      if
+        obligation.name = "head_nonnegative"
+        && not (contains obligation.smt "region_value")
+      then failwith "required region invariant was not added to the entry VC";
       require `Valid obligation);
   (match obligations_of_cmt "typed_recursive_ownership_bad_permission.cmt" with
   | _ -> failwith "unknown ownership permission was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_recursive_ownership_linear_invalid.cmt" with
+  | _ -> failwith "ownership region was consumed twice"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_recursive_ownership_alias_invalid.cmt" with
+  | _ -> failwith "borrowed ownership alias was consumed"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_recursive_ownership_bad_tail.cmt" with
+  | _ -> failwith "unowned recursive tail was accepted as a region"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_conditional_resume.cmt"
   |> List.iter (fun obligation ->

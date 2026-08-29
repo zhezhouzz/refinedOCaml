@@ -93,6 +93,9 @@
   ../examples/reachable_heap_recursive.ml
   ../examples/recursive_ownership.ml
   ../examples/recursive_ownership_bad_permission.ml
+  ../examples/recursive_ownership_linear_invalid.ml
+  ../examples/recursive_ownership_alias_invalid.ml
+  ../examples/recursive_ownership_bad_tail.ml
   ../examples/conditional_resume.ml
   ../examples/multishot_unsupported.ml))
 

@@ -462,6 +462,21 @@ summary 边界的 constructor-frontier invariant：例如 `Link.0` 约束当前 
 已经证明整个 tail。逐层 consumer 必须让 recursive tail 再经过有同类 contract 的函数边界。这个规则支持
 保守的 recursive borrow/transfer，同时避免把有限 path 列表冒充无界 reachable heap。
 
+命名 deep region 使用：
+
+```ocaml
+result_region = "nonnegative_chain";
+requires_regions = [("tail", "nonnegative_chain")];
+consumes_regions = ["tail"];
+```
+
+同名 region producer 必须具有兼容的 recursive frontier spec。Checker 对 constructor 的 recursive fields
+做归纳式 provenance 检查：field 必须来自同 region 参数、同 region callee，或合法 base constructor。
+`requires_regions` 在 consumer entry VC 中展开当前 frontier predicate；recursive subfield 只有跨下一个
+summary boundary 才重新获得 invariant。Region values 按 origin 做 affine tracking：pattern match 线性拆开
+root 并给 recursive fields 新 origin；double consume、use-after-consume，以及先建立 alias 再 consume 都会
+静态拒绝。
+
 OCaml 5.3 的标准 effect surface 通过 `Effect.perform` 与 `Effect.Deep.match_with` 提供。当前 frontend
 支持 nullary operation 和 canonical abortive handler：
 
@@ -577,7 +592,8 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | pointer equality / direct escaping refs | 支持 | `==`/`!=` + `result_state/result_fresh` |
 | refs nested in returned tuple/ADT | 支持有限非递归 shape | guarded reachable-heap ownership paths |
 | recursive ownership frontier | 支持 | 显式 `result_recursive` + borrow/transfer |
-| deep recursive region invariant | 明确拒绝 | 需要 induction/region ownership |
+| deep recursive region invariant | 支持 | named region + inductive provenance/frontier entry VC |
+| affine region consumption | 支持 | origin tracking + alias/double-consume rejection |
 | multi-payload/multi-shot handlers | 明确拒绝 | 需要 richer binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
 | Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
@@ -589,7 +605,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. deep recursive region invariants 与 linear ownership consumption；
+1. 稳定 proof artifact 格式与小型 replay kernel；
 2. 可重放 proof certificate 与稳定 artifact 格式；
 3. 显式 continuation cloning（若未来 OCaml API 支持）。
 

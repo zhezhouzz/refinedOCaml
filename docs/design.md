@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-deep recursive region invariants、linear ownership consumption、可重放 proof certificate、增量缓存。
+稳定 proof artifact 格式、小型 replay kernel、增量缓存。
 
 ### M2
 
