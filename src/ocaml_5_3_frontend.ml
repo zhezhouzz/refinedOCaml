@@ -1041,6 +1041,8 @@ let typed_contracts registry attributes =
             result_fresh,
             result_references,
             result_fresh_references,
+            result_reference_permissions,
+            result_recursive,
             witnesses,
             witness_relation,
             ghosts,
@@ -1063,6 +1065,8 @@ let typed_contracts registry attributes =
                 result_fresh;
                 result_references;
                 result_fresh_references;
+                result_reference_permissions;
+                result_recursive;
                 witnesses;
                 witness_relation;
                 ghosts =

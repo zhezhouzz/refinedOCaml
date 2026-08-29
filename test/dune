@@ -91,6 +91,8 @@
   ../examples/reachable_heap_invalid.ml
   ../examples/reachable_heap_incomplete.ml
   ../examples/reachable_heap_recursive.ml
+  ../examples/recursive_ownership.ml
+  ../examples/recursive_ownership_bad_permission.ml
   ../examples/conditional_resume.ml
   ../examples/multishot_unsupported.ml))
 

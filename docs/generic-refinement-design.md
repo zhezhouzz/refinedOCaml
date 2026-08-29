@@ -186,9 +186,15 @@ and guarded `Constructor.index` selectors can alternate; every statically reacha
 covered. Summary application transfers each content with a guarded store, and `result_fresh_references` checks
 both entry separation and pairwise separation. Coverage exposes sanitized per-path content targets to witness
 relations. Relational pattern matching can consume the returned structure and continue with dereference/effects.
-Recursive reachable shapes remain fail closed rather than being finitely truncated.
+Recursive reachable shapes remain fail closed unless frontier mode is explicit.
 
-The next implementation slice is recursive ownership invariants and borrow/transfer permissions.
+Recursive shapes now have an explicit frontier mode. With `result_recursive = true`, ownership paths describe the
+current constructor frontier and are rechecked whenever a recursive value crosses another summary boundary; this
+does not claim an unproved invariant over the entire tail. Per-path `borrow` requires aliasing an entry reference
+and preserves framed content, while `transfer` requires fresh separation and moves symbolic content into the
+caller heap. Ownership predicates may reference both `identity` and `value`.
+
+The next implementation slice is deep recursive region invariants and linear ownership consumption.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

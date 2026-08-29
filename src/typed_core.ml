@@ -91,6 +91,8 @@ type contract = {
   result_fresh : bool;
   result_references : (string * string) list;
   result_fresh_references : string list;
+  result_reference_permissions : (string * string) list;
+  result_recursive : bool;
   witnesses : (string * string) list;
   witness_relation : string option;
   ghosts : (string * sort) list;

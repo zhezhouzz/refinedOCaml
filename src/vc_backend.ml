@@ -1663,7 +1663,12 @@ let typed_requires_relational (program : Typed_core.program) expression =
         else
           Option.fold ~none:false
             ~some:(fun (callee : Typed_core.function_def) ->
-              check (symbol.key :: visited) callee.body)
+              List.exists
+                (fun (contract : Typed_core.contract) ->
+                  contract.result_state <> None
+                  || contract.result_references <> [])
+                callee.contracts
+              || check (symbol.key :: visited) callee.body)
             (List.find_opt
                (fun (callee : Typed_core.function_def) ->
                  callee.symbol.key = symbol.key)
@@ -2018,6 +2023,35 @@ type returned_reference_path = {
 
 let returned_reference_value_name path = "result_value_" ^ smt_identifier path
 
+let returned_reference_identity_name path =
+  "result_identity_" ^ smt_identifier path
+
+let result_reference_is_transfer (contract : Typed_core.contract) path =
+  List.mem path contract.result_fresh_references
+  || List.assoc_opt path contract.result_reference_permissions = Some "transfer"
+
+let validate_result_reference_permissions ~loc (contract : Typed_core.contract)
+    expected_paths =
+  let permissions = List.map fst contract.result_reference_permissions in
+  if
+    List.length permissions
+    <> List.length (List.sort_uniq String.compare permissions)
+  then
+    typed_error_at loc
+      "result_reference_permissions must name each path at most once";
+  List.iter
+    (fun (path, permission) ->
+      if not (List.mem path expected_paths) then
+        typed_error_at loc
+          "result_reference_permissions names unknown path `%s`" path;
+      if permission <> "borrow" && permission <> "transfer" then
+        typed_error_at loc "reference permission must be `borrow` or `transfer`";
+      if permission = "borrow" && List.mem path contract.result_fresh_references
+      then
+        typed_error_at loc
+          "fresh reference path `%s` cannot have borrow permission" path)
+    contract.result_reference_permissions
+
 let sort_reaches_reference registry sort =
   let rec visit visited sort =
     match reference_content_sort sort with
@@ -2049,7 +2083,8 @@ let sort_reaches_reference registry sort =
   in
   visit [] sort
 
-let returned_reference_paths registry ~result_sort ~result =
+let returned_reference_paths ?(recursive_frontier = false) registry ~result_sort
+    ~result =
   let datatype_for sort =
     registry.Typed_core.datatypes
     |> List.find_opt (fun (datatype : Typed_core.datatype) ->
@@ -2090,7 +2125,8 @@ let returned_reference_paths registry ~result_sort ~result =
             | Some datatype ->
                 let sort_name = typed_smt_sort sort in
                 if List.mem sort_name visited then
-                  if sort_reaches_reference registry sort then
+                  if recursive_frontier then Ok []
+                  else if sort_reaches_reference registry sort then
                     Error (path_name segments)
                   else Ok []
                 else
@@ -2526,8 +2562,9 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   if reference_content_sort callee.result <> None then []
                   else
                     match
-                      returned_reference_paths program.registry
-                        ~result_sort:callee.result ~result
+                      returned_reference_paths
+                        ~recursive_frontier:summary.result_recursive
+                        program.registry ~result_sort:callee.result ~result
                     with
                     | Ok paths -> paths
                     | Error path ->
@@ -2548,6 +2585,9 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   typed_error_at expression.loc
                     "reference-containing coverage summary has incomplete \
                      result_references";
+                validate_result_reference_permissions ~loc:expression.loc
+                  summary
+                  (List.map (fun path -> path.path) owned_paths);
                 let ( owned_targets,
                       owned_freshness,
                       owned_final_state,
@@ -2557,11 +2597,57 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       let content =
                         fresh "call_reachable_state_" path.content_sort
                       in
+                      let transfer =
+                        result_reference_is_transfer summary path.path
+                      in
+                      let borrow_guards =
+                        if transfer then []
+                        else
+                          let candidates =
+                            reference_formals
+                            |> List.filter_map (fun (name, _, sort) ->
+                                if
+                                  typed_smt_sort sort
+                                  = typed_smt_sort path.content_sort
+                                then
+                                  let actual, _ = actual_cell name in
+                                  Some (name, actual, sort)
+                                else None)
+                          in
+                          app "=>"
+                            [
+                              path.guard;
+                              or_
+                                (List.map
+                                   (fun (_name, actual, _sort) ->
+                                     app "=" [ path.identity; actual ])
+                                   candidates);
+                            ]
+                          :: List.filter_map
+                               (fun (name, actual, sort) ->
+                                 if
+                                   List.mem name summary.modifies
+                                   || List.mem_assoc name summary.state
+                                 then None
+                                 else
+                                   Some
+                                     (app "=>"
+                                        [
+                                          and_
+                                            [
+                                              path.guard;
+                                              app "=" [ path.identity; actual ];
+                                            ];
+                                          app "="
+                                            [
+                                              content;
+                                              heap_select state actual sort;
+                                            ];
+                                        ]))
+                               candidates
+                      in
                       let freshness =
-                        if
-                          not
-                            (List.mem path.path summary.result_fresh_references)
-                        then []
+                        if not transfer then []
                         else
                           let existing =
                             !allocated_references
@@ -2591,7 +2677,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                           parse (List.assoc path.path summary.result_references)
                         )
                         :: targets,
-                        freshness @ guards,
+                        borrow_guards @ freshness @ guards,
                         heap_store_guarded final_state path.guard path.identity
                           path.content_sort content,
                         (path.identity, path.content_sort, content, path.guard)
@@ -2617,10 +2703,14 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                        ~some:(fun (sort, content, _predicate) ->
                          [ ("result_value", (content, sort)) ])
                        result_target
-                  @ List.map
+                  @ List.concat_map
                       (fun (path, content, _predicate) ->
-                        ( returned_reference_value_name path.path,
-                          (content, path.content_sort) ))
+                        [
+                          ( returned_reference_value_name path.path,
+                            (content, path.content_sort) );
+                          ( returned_reference_identity_name path.path,
+                            (path.identity, reference_sort path.content_sort) );
+                        ])
                       owned_targets
                   @ List.map
                       (fun (name, _, sort, target, _) -> (name, (target, sort)))
@@ -2651,7 +2741,9 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   List.map
                     (fun (path, content, predicate) ->
                       let state_env =
-                        ("value", (content, path.content_sort))
+                        ( "identity",
+                          (path.identity, reference_sort path.content_sort) )
+                        :: ("value", (content, path.content_sort))
                         :: public_target_env
                       in
                       formula_theory_symbols program.registry state_env
@@ -3081,8 +3173,9 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 if reference_content_sort callee.result <> None then []
                 else
                   match
-                    returned_reference_paths program.registry
-                      ~result_sort:callee.result ~result
+                    returned_reference_paths
+                      ~recursive_frontier:summary.result_recursive
+                      program.registry ~result_sort:callee.result ~result
                   with
                   | Ok paths -> paths
                   | Error path ->
@@ -3105,6 +3198,8 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 typed_error_at expression.loc
                   "reference-containing result summary has incomplete \
                    result_references";
+              validate_result_reference_permissions ~loc:expression.loc summary
+                expected_paths;
               let owned_guards, owned_final_state, owned_updates =
                 List.fold_left
                   (fun (guards, final_state, updates) path ->
@@ -3115,7 +3210,10 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       fresh "call_reachable_state_" path.content_sort
                     in
                     let state_env =
-                      ("value", (content, path.content_sort)) :: result_env
+                      ( "identity",
+                        (path.identity, reference_sort path.content_sort) )
+                      :: ("value", (content, path.content_sort))
+                      :: result_env
                     in
                     mark state_env predicate;
                     let predicate =
@@ -3125,10 +3223,57 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                           typed_formula program.registry state_env predicate;
                         ]
                     in
+                    let transfer =
+                      result_reference_is_transfer summary path.path
+                    in
+                    let borrow_guards =
+                      if transfer then []
+                      else
+                        let candidates =
+                          reference_formals
+                          |> List.filter_map (fun (name, _, sort) ->
+                              if
+                                typed_smt_sort sort
+                                = typed_smt_sort path.content_sort
+                              then
+                                let actual, _ = actual_cell name in
+                                Some (name, actual, sort)
+                              else None)
+                        in
+                        app "=>"
+                          [
+                            path.guard;
+                            or_
+                              (List.map
+                                 (fun (_name, actual, _sort) ->
+                                   app "=" [ path.identity; actual ])
+                                 candidates);
+                          ]
+                        :: List.filter_map
+                             (fun (name, actual, sort) ->
+                               if
+                                 List.mem name summary.modifies
+                                 || List.mem_assoc name summary.state
+                               then None
+                               else
+                                 Some
+                                   (app "=>"
+                                      [
+                                        and_
+                                          [
+                                            path.guard;
+                                            app "=" [ path.identity; actual ];
+                                          ];
+                                        app "="
+                                          [
+                                            content;
+                                            heap_select state actual sort;
+                                          ];
+                                      ]))
+                             candidates
+                    in
                     let freshness =
-                      if
-                        not (List.mem path.path summary.result_fresh_references)
-                      then []
+                      if not transfer then []
                       else
                         let existing =
                           !allocated_references
@@ -3153,7 +3298,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                     allocated_references :=
                       (path.identity, path.content_sort)
                       :: !allocated_references;
-                    ( (predicate :: freshness) @ guards,
+                    ( ((predicate :: borrow_guards) @ freshness) @ guards,
                       heap_store_guarded final_state path.guard path.identity
                         path.content_sort content,
                       (path.identity, path.content_sort, content, path.guard)
@@ -4246,8 +4391,8 @@ let typed_exception_obligation (program : Typed_core.program) analysis
     if result_reference_sort <> None then []
     else
       match
-        returned_reference_paths program.registry
-          ~result_sort:function_def.result ~result
+        returned_reference_paths ~recursive_frontier:contract.result_recursive
+          program.registry ~result_sort:function_def.result ~result
       with
       | Ok paths -> paths
       | Error path ->
@@ -4265,7 +4410,11 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         "direct reference results use result_state, not result_references";
     if contract.result_fresh_references <> [] then
       typed_error_at contract.loc
-        "direct reference results use result_fresh, not result_fresh_references")
+        "direct reference results use result_fresh, not result_fresh_references";
+    if contract.result_reference_permissions <> [] || contract.result_recursive
+    then
+      typed_error_at contract.loc
+        "direct reference results do not use nested ownership permissions")
   else if
     List.sort String.compare expected_owned_paths
     <> List.sort String.compare actual_owned_paths
@@ -4281,12 +4430,14 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   then
     typed_error_at contract.loc
       "result_fresh_references names an unknown returned reference path";
+  validate_result_reference_permissions ~loc:contract.loc contract
+    expected_owned_paths;
   let owned_result_expressions =
     List.map
       (fun path ->
         ( path,
           parse (List.assoc path.path contract.result_references),
-          List.mem path.path contract.result_fresh_references ))
+          result_reference_is_transfer contract path.path ))
       owned_paths
   in
   let relation, choices, generic_calls =
@@ -4319,7 +4470,10 @@ let typed_exception_obligation (program : Typed_core.program) analysis
     @ List.concat_map
         (fun (path, expression, _fresh) ->
           formula_theory_symbols program.registry
-            (("value", ("reachable_result_value", path.content_sort))
+            (( "identity",
+               ("reachable_result_identity", reference_sort path.content_sort)
+             )
+            :: ("value", ("reachable_result_value", path.content_sort))
             :: ("result", ("result", function_def.result))
             :: formula_env)
             expression)
@@ -4415,7 +4569,10 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         ( path.path,
           path.content_sort,
           typed_formula program.registry
-            (("value", ("reachable_result_value", path.content_sort))
+            (( "identity",
+               ("reachable_result_identity", reference_sort path.content_sort)
+             )
+            :: ("value", ("reachable_result_value", path.content_sort))
             :: ("result", ("result", function_def.result))
             :: formula_env)
             expression,
@@ -4550,11 +4707,30 @@ let typed_exception_obligation (program : Typed_core.program) analysis
               let content = heap_select final path.identity content_sort in
               let state =
                 Printf.sprintf
-                  "(let ((result %s) (reachable_result_value %s)) %s)" value
-                  content predicate
+                  "(let ((result %s) (reachable_result_identity %s) \
+                   (reachable_result_value %s)) %s)"
+                  value path.identity content predicate
               in
               let obligations = [ app "=>" [ path.guard; state ] ] in
-              if not fresh then obligations
+              if not fresh then
+                let identities =
+                  reference_cells
+                  |> List.filter_map (fun (_name, identity, sort) ->
+                      if typed_smt_sort sort = typed_smt_sort content_sort then
+                        Some identity
+                      else None)
+                in
+                let borrowed_from_entry =
+                  app "=>"
+                    [
+                      path.guard;
+                      or_
+                        (List.map
+                           (fun identity -> app "=" [ path.identity; identity ])
+                           identities);
+                    ]
+                in
+                borrowed_from_entry :: obligations
               else
                 let identities =
                   List.map (fun (_, identity, _) -> identity) reference_cells
@@ -4727,8 +4903,8 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     if result_reference_sort <> None then []
     else
       match
-        returned_reference_paths program.registry
-          ~result_sort:function_def.result ~result
+        returned_reference_paths ~recursive_frontier:contract.result_recursive
+          program.registry ~result_sort:function_def.result ~result
       with
       | Ok paths -> paths
       | Error path ->
@@ -4746,7 +4922,11 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         "direct reference results use result_state, not result_references";
     if contract.result_fresh_references <> [] then
       typed_error_at contract.loc
-        "direct reference results use result_fresh, not result_fresh_references")
+        "direct reference results use result_fresh, not result_fresh_references";
+    if contract.result_reference_permissions <> [] || contract.result_recursive
+    then
+      typed_error_at contract.loc
+        "direct reference results do not use nested ownership permissions")
   else if
     List.sort String.compare expected_owned_paths
     <> List.sort String.compare actual_owned_paths
@@ -4762,12 +4942,14 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   then
     typed_error_at contract.loc
       "result_fresh_references names an unknown returned reference path";
+  validate_result_reference_permissions ~loc:contract.loc contract
+    expected_owned_paths;
   let owned_result_expressions =
     List.map
       (fun path ->
         ( path,
           parse (List.assoc path.path contract.result_references),
-          List.mem path.path contract.result_fresh_references ))
+          result_reference_is_transfer contract path.path ))
       owned_paths
   in
   let relation, choices, generic_calls =
@@ -5032,16 +5214,22 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
           fresh ))
       owned_result_expressions
   in
+  let owned_result_env =
+    List.concat_map
+      (fun (path, target, _expression, _fresh) ->
+        [
+          (returned_reference_value_name path.path, (target, path.content_sort));
+          ( returned_reference_identity_name path.path,
+            (path.identity, reference_sort path.content_sort) );
+        ])
+      owned_result_targets
+  in
   let result_target_env =
     ("result", ("missing_result", function_def.result))
     :: Option.fold ~none:[]
          ~some:(fun (sort, target, _) -> [ ("result_value", (target, sort)) ])
          result_state_target
-    @ List.map
-        (fun (path, target, _expression, _fresh) ->
-          (returned_reference_value_name path.path, (target, path.content_sort)))
-        owned_result_targets
-    @ state_target_env
+    @ owned_result_env @ state_target_env
   in
   let roots =
     generic_calls.used_theory_symbols
@@ -5060,7 +5248,9 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     @ List.concat_map
         (fun (path, target, expression, _fresh) ->
           formula_theory_symbols program.registry
-            (("value", (target, path.content_sort)) :: result_target_env)
+            (("identity", (path.identity, reference_sort path.content_sort))
+            :: ("value", (target, path.content_sort))
+            :: result_target_env)
             expression)
         owned_result_targets
     @ Option.fold ~none:[]
@@ -5283,7 +5473,28 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
                     let equality =
                       app "=>" [ owned_path.guard; app "=" [ content; target ] ]
                     in
-                    if not fresh then [ equality ]
+                    if not fresh then
+                      let identities =
+                        reference_cells
+                        |> List.filter_map (fun (_name, identity, sort) ->
+                            if
+                              typed_smt_sort sort
+                              = typed_smt_sort owned_path.content_sort
+                            then Some identity
+                            else None)
+                      in
+                      [
+                        app "=>"
+                          [
+                            owned_path.guard;
+                            or_
+                              (List.map
+                                 (fun identity ->
+                                   app "=" [ owned_path.identity; identity ])
+                                 identities);
+                          ];
+                        equality;
+                      ]
                     else
                       let identities =
                         List.map
@@ -5374,7 +5585,9 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         (fun (path, target, expression, _fresh) ->
           let predicate =
             typed_formula program.registry
-              (("value", (target, path.content_sort)) :: result_target_env)
+              (("identity", (path.identity, reference_sort path.content_sort))
+              :: ("value", (target, path.content_sort))
+              :: result_target_env)
               expression
           in
           app "=>" [ path.guard; predicate ])

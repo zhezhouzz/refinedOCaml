@@ -471,6 +471,9 @@ let () =
     "typed_reachable_heap_incomplete";
   compile "../examples/reachable_heap_recursive.ml"
     "typed_reachable_heap_recursive";
+  compile "../examples/recursive_ownership.ml" "typed_recursive_ownership";
+  compile "../examples/recursive_ownership_bad_permission.ml"
+    "typed_recursive_ownership_bad_permission";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
@@ -795,6 +798,17 @@ let () =
   | exception Location.Error _ -> ());
   (match obligations_of_cmt "typed_reachable_heap_recursive.cmt" with
   | _ -> failwith "recursive reachable heap was accepted without invariant"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_recursive_ownership.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "read_new_link"
+        || obligation.name = "borrowed_identity")
+        && not (contains obligation.smt "call_reachable_state_")
+      then failwith "recursive ownership frontier was not composed";
+      require `Valid obligation);
+  (match obligations_of_cmt "typed_recursive_ownership_bad_permission.cmt" with
+  | _ -> failwith "unknown ownership permission was accepted"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_conditional_resume.cmt"
   |> List.iter (fun obligation ->

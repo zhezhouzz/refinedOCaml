@@ -212,6 +212,28 @@ let contract_of_attribute attribute =
             | Some expression ->
                 List.map string_constant (expression_list expression)
           in
+          let result_reference_permissions =
+            state_pairs "result_reference_permissions"
+          in
+          let result_recursive =
+            match find_expression "result_recursive" with
+            | None -> false
+            | Some
+                {
+                  pexp_desc = Pexp_construct ({ txt = Lident "true"; _ }, None);
+                  _;
+                } ->
+                true
+            | Some
+                {
+                  pexp_desc = Pexp_construct ({ txt = Lident "false"; _ }, None);
+                  _;
+                } ->
+                false
+            | Some expression ->
+                error ~loc:expression.pexp_loc
+                  "result_recursive must be a boolean literal"
+          in
           let requires_state = state_pairs "requires_state" in
           let state_witnesses = state_pairs "state_witnesses" in
           let performs =
@@ -348,6 +370,8 @@ let contract_of_attribute attribute =
               result_fresh,
               result_references,
               result_fresh_references,
+              result_reference_permissions,
+              result_recursive,
               witnesses,
               witness_relation,
               ghosts,
