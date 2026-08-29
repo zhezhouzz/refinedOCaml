@@ -30,8 +30,8 @@ dune build @fuzz
 REFINED_FUZZ_CASES=20000 REFINED_FUZZ_SEED=1592594470 dune build @fuzz --force
 ```
 
-Fuzzer 默认使用固定 seed 跑 5,000 cases；CI 跑 20,000 cases。失败信息包含 seed 和 case index，
-可以原样重放。
+Fuzzer 由 QCheck2 驱动，默认使用固定 master seed 跑 5,000 cases；CI 跑 20,000 cases。每个 case 使用
+独立 seed，失败时 QCheck2 会缩减该 seed，并输出可重放的最小失败 seed。
 
 `autofix.ci` workflow 会在 pull request 和 `main` push 上运行 `dune fmt`，并把格式修复提交回来源
 分支。仓库管理员需要先为该仓库安装 [autofix.ci GitHub App](https://autofix.ci/setup)；workflow
@@ -62,8 +62,8 @@ let[@refined.coverage { pre = "x >= 0"; post = "result >= 1" }]
 
 ```sh
 ocamlc -bin-annot -c examples/valid.ml
-dune exec refined-ocaml -- examples/valid.cmt
-dune exec refined-ocaml -- --emit-smt work/smt examples/valid.cmt
+dune exec refined-ocaml -- check examples/valid.cmt
+dune exec refined-ocaml -- check --emit-smt work/smt examples/valid.cmt
 dune build @refined
 ```
 
@@ -176,8 +176,8 @@ val hd : 'a list -> 'a -> bool [@@refined.predicate]
 从 `.cmti` 生成带 `.cmi` digest 的 refinement interface：
 
 ```sh
-refined-ocaml --emit-rmi list_theory.rmi list_theory.cmti
-refined-ocaml --theory list_theory.rmi client.cmt
+refined-ocaml emit-rmi -o list_theory.rmi list_theory.cmti
+refined-ocaml check --theory list_theory.rmi client.cmt
 ```
 
 客户端只能获得 `.mli/.rmi` 导出的 theory。验证结果会列出
@@ -197,18 +197,20 @@ refined-ocaml --theory list_theory.rmi client.cmt
 }]
 ```
 
-`--emit-rmi` 会按声明顺序，以 trusted axioms 和先前已检查 lemmas 为上下文为每条 lemma 生成 VC。
+`emit-rmi` 子命令会按声明顺序，以 trusted axioms 和先前已检查 lemmas 为上下文为每条 lemma 生成 VC。
 只有全部得到 `unsat` 才会原子替换目标 `.rmi`；`sat` 或 `unknown` 都不会留下新 artifact。导出同时生成
 `FILE.rmi.rpa` 稳定 proof bundle。RPA1 使用版本化 netstring，不依赖 OCaml Marshal；每条 artifact 保存
 canonical statement SHA-256、完整 SMT VC、VC SHA-256、solver/timeout 和依赖顺序。
 
 ```sh
-refined-ocaml --replay-proof list_theory.rmi.rpa
+refined-ocaml replay list_theory.rmi.rpa
 ```
 
 Replay kernel 先验证格式、statement/VC digest 和依赖拓扑，再用当前 Z3 重新要求每条 VC 为 `unsat`。
 v6 `.rmi` import 必须带匹配 sidecar；Marshal 只保留 OCaml-specific theory cache。RPA1 仍是 solver replay
 record，不是原生 Z3 proof certificate。详细格式见 [`docs/proof-artifacts.md`](docs/proof-artifacts.md)。
+
+CLI 使用 Cmdliner，主命令为 `check`、`emit-rmi` 和 `replay`，自动提供分命令 help 与参数校验。
 
 ### Abstract type theory 与 module alias
 
@@ -601,7 +603,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | affine region consumption | 支持 | origin tracking + alias/double-consume rejection |
 | multi-payload/multi-shot handlers | 明确拒绝 | 需要 richer binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
-| Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | deterministic `@fuzz` + graph oracle |
+| Evar/Hindley/Horn/function-SCC/theory-slice fuzzing | 支持 | QCheck2 shrinking + deterministic graph oracle |
 | Generic result propagation | 支持 | ANF Let/Var、inlining、同型 branch merge |
 
 未支持的 Typedtree node 会报错。

@@ -27,7 +27,7 @@ implementation.
 ## Replay kernel
 
 ```sh
-refined-ocaml --replay-proof theory.rmi.rpa
+refined-ocaml replay theory.rmi.rpa
 ```
 
 Replay performs three stages:

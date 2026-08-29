@@ -214,7 +214,8 @@ all typing rules: witness scope, nondeterministic choice, recursion and effects 
 
 ## Property fuzzing
 
-`test/fuzz_runner.ml` recursively generates ground/template term trees, higher-sorted predicate lambdas,
+`test/fuzz_runner.ml` uses QCheck2 to drive and shrink deterministic per-case seeds, then recursively generates
+ground/template term trees, higher-sorted predicate lambdas,
 random mutually-recursive Horn graphs, and random function call graphs. It checks that successful unification
 reconstructs the ground term, solved contexts are complete, recursive evar solutions fail the occurs-check,
 Hindley application elaboration

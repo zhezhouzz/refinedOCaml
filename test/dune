@@ -1,6 +1,6 @@
 (test
  (name test_runner)
- (libraries refined_core refined_ir)
+ (libraries refined_core refined_ir alcotest)
  (deps
   ../examples/valid.ml
   ../examples/invalid.ml
@@ -114,7 +114,7 @@
 (executable
  (name fuzz_runner)
  (modules fuzz_runner)
- (libraries refined_ir))
+ (libraries refined_ir qcheck-core qcheck-core.runner))
 
 (rule
  (alias fuzz)

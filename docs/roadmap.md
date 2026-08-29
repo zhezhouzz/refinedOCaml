@@ -84,8 +84,9 @@ target-totality 和 pointwise-soundness obligations，避免把“存在某个�
 ### 5. 工程可复现基线已经建立
 
 仓库现在固定 OCaml 5.3.0，提交 `refined_ocaml.opam.locked`，提供 `dev/setup-switch.sh`，并由 GitHub
-Actions 运行 `@all/@install/@refined/@fmt/@fuzz`，autofix.ci 自动提交 `dune fmt` 修复。fuzz job 固定
-seed 跑 20,000 个 evar/Hindley/Horn/function-SCC/theory-slice cases，并用图闭包作 oracle。`refined_ocaml.ir`
+Actions 运行 `@all/@install/@refined/@fmt/@fuzz`，autofix.ci 自动提交 `dune fmt` 修复。测试由 Alcotest
+分组；fuzz job 用 QCheck2 固定 seed 跑 20,000 个 evar/Hindley/Horn/function-SCC/theory-slice cases，失败时
+缩减 case seed，并用图闭包作 oracle。CLI 使用 Cmdliner 子命令。`refined_ocaml.ir`
 不依赖 compiler-libs；所有版本敏感 API 集中在 `Ocaml_5_3_frontend`。升级流程记录在
 `docs/versioning.md`。
 

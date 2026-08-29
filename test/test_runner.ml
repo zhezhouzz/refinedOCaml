@@ -15,15 +15,14 @@ let require expected obligation =
   match (expected, solve obligation) with
   | `Valid, Valid | `Invalid, Invalid _ -> ()
   | `Valid, (Invalid _ | Unknown _) ->
-      failwith (obligation.name ^ " should be valid")
+      Alcotest.failf "%s should be valid" obligation.name
   | `Invalid, (Valid | Unknown _) ->
-      failwith (obligation.name ^ " should be invalid")
+      Alcotest.failf "%s should be invalid" obligation.name
 
-let () =
-  if
-    proof_digest "abc"
-    <> "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-  then failwith "proof artifact SHA-256 implementation is incorrect"
+let test_sha256 () =
+  Alcotest.check Alcotest.string "SHA-256 abc vector"
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    (proof_digest "abc")
 
 let test_compositional_judgment () =
   let module Typing = Refined_ir.Typing_judgment in
@@ -386,12 +385,7 @@ let test_relational_outcomes () =
   if not (contains coverage "wanted") then
     failwith "relational coverage omitted a reachable outcome"
 
-let () =
-  test_compositional_judgment ();
-  test_hindley_evars ();
-  test_higher_sorted_hindley_application ();
-  test_mutually_recursive_horn_fixpoint ();
-  test_relational_outcomes ();
+let integration_suite () =
   let compile source output =
     let command =
       Printf.sprintf "ocamlc -bin-annot -c %s -o %s.cmo" (Filename.quote source)
@@ -1213,3 +1207,25 @@ let () =
     | _ ->
         failwith "the refinement checker accepted a partial ill-typed Typedtree"
     | exception Location.Error _ -> ()
+
+let () =
+  Alcotest.run "refinedOCaml"
+    [
+      ( "core judgments",
+        [
+          Alcotest.test_case "compositional checking" `Quick
+            test_compositional_judgment;
+          Alcotest.test_case "proof SHA-256" `Quick test_sha256;
+          Alcotest.test_case "Hindley evars" `Quick test_hindley_evars;
+          Alcotest.test_case "higher-sorted application" `Quick
+            test_higher_sorted_hindley_application;
+          Alcotest.test_case "recursive Horn fixpoint" `Quick
+            test_mutually_recursive_horn_fixpoint;
+          Alcotest.test_case "relational outcomes" `Quick
+            test_relational_outcomes;
+        ] );
+      ( "Typedtree integration",
+        [
+          Alcotest.test_case "full verification matrix" `Slow integration_suite;
+        ] );
+    ]

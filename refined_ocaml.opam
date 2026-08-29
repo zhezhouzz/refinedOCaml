@@ -26,8 +26,11 @@ bug-reports: "https://github.com/asukaminato0721/refinedOCaml/issues"
 depends: [
   "ocaml" {= "5.3.0"}
   "dune" {>= "3.18"}
+  "cmdliner" {>= "1.3.0"}
   "digestif" {>= "1.3.0"}
   "ppxlib" {>= "0.35"}
   "ocamlformat" {with-test}
+  "alcotest" {with-test}
+  "qcheck-core" {with-test}
   "odoc" {with-doc}
 ]

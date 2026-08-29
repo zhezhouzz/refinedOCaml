@@ -592,18 +592,28 @@ let () =
   let cases = env_int "REFINED_FUZZ_CASES" 5_000 in
   let seed = env_int "REFINED_FUZZ_SEED" 0x5eed_2026 in
   if cases <= 0 then failwith "REFINED_FUZZ_CASES must be positive";
+  let property case_seed =
+    let random = Random.State.make [| case_seed |] in
+    try
+      fuzz_evars random case_seed;
+      fuzz_hindley random case_seed;
+      fuzz_horn random case_seed;
+      fuzz_recursive_horn random case_seed;
+      fuzz_function_scc random case_seed;
+      fuzz_theory_slice random case_seed;
+      fuzz_relational_outcomes random case_seed;
+      true
+    with Fuzz_failure (_case, message) ->
+      QCheck2.Test.fail_reportf "seed=%d: %s" case_seed message
+  in
+  let test =
+    QCheck2.Test.make ~count:cases ~name:"refinedOCaml semantic oracles"
+      ~print:string_of_int QCheck2.Gen.int property
+  in
   let random = Random.State.make [| seed |] in
-  try
-    for case = 0 to cases - 1 do
-      fuzz_evars random case;
-      fuzz_hindley random case;
-      fuzz_horn random case;
-      fuzz_recursive_horn random case;
-      fuzz_function_scc random case;
-      fuzz_theory_slice random case;
-      fuzz_relational_outcomes random case
-    done;
-    Printf.printf "fuzz: %d cases passed (seed=%d)\n%!" cases seed
-  with Fuzz_failure (case, message) ->
-    Printf.eprintf "fuzz failure: seed=%d case=%d: %s\n%!" seed case message;
-    exit 1
+  (try QCheck2.Test.check_exn ~rand:random test
+   with exception_ ->
+     Printf.eprintf "fuzz failure: master-seed=%d\n%!" seed;
+     raise exception_);
+  Printf.printf "fuzz: %d cases passed (seed=%d, qcheck2-shrinking)\n%!" cases
+    seed
