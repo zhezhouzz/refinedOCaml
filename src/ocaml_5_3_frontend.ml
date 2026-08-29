@@ -964,7 +964,65 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       typed_error ~loc:expression.exp_loc
         "unsupported Typedtree expression in the MVP Core"
 
-let typed_contracts attributes =
+let contract_ghost_sort registry ~loc text =
+  let open Typed_core in
+  let rec convert core_type =
+    match core_type.Parsetree.ptyp_desc with
+    | Ptyp_constr ({ txt; _ }, arguments) -> (
+        let name = longident_name txt in
+        let short = String.split_on_char '.' name |> List.rev |> List.hd in
+        let arguments = List.map convert arguments in
+        match (name, arguments) with
+        | "int", [] -> Typed_core.S_int
+        | "bool", [] -> S_bool
+        | "unit", [] -> S_unit
+        | "list", [ argument ] ->
+            S_app ({ key = "list"; display = "list" }, [ argument ])
+        | "option", [ argument ] ->
+            S_app ({ key = "option"; display = "option" }, [ argument ])
+        | _ -> (
+            let abstract =
+              match
+                Hashtbl.find_opt registry.Typed_core.abstract_sorts_by_name name
+              with
+              | Some sort -> Some sort
+              | None -> Hashtbl.find_opt registry.abstract_sorts_by_name short
+            in
+            match abstract with
+            | Some (S_app (symbol, parameters))
+              when List.length parameters = List.length arguments ->
+                S_app (symbol, arguments)
+            | Some sort when arguments = [] -> sort
+            | Some _ ->
+                typed_error ~loc
+                  "ghost sort `%s` has the wrong number of parameters" text
+            | None -> (
+                let candidates =
+                  registry.datatype_templates
+                  |> List.filter_map (fun (datatype : Typed_core.datatype) ->
+                      match datatype.owner with
+                      | S_app (symbol, parameters)
+                        when symbol.display = short
+                             && List.length parameters = List.length arguments
+                        ->
+                          Some (S_app (symbol, arguments))
+                      | _ -> None)
+                  |> List.sort_uniq compare
+                in
+                match candidates with
+                | [ sort ] -> sort
+                | [] -> typed_error ~loc "unknown ghost sort `%s`" text
+                | _ -> typed_error ~loc "ambiguous ghost sort `%s`" text)))
+    | Ptyp_tuple elements -> S_tuple (List.map convert elements)
+    | _ -> typed_error ~loc "unsupported ghost sort `%s`" text
+  in
+  let lexbuf = Lexing.from_string text in
+  Location.init lexbuf loc.Location.loc_start.pos_fname;
+  try convert (Parse.core_type lexbuf) with
+  | Location.Error _ as error -> raise error
+  | _ -> typed_error ~loc "cannot parse ghost sort `%s`" text
+
+let typed_contracts registry attributes =
   List.filter_map
     (fun attribute ->
       match contract_of_attribute attribute with
@@ -978,11 +1036,13 @@ let typed_contracts attributes =
             ghosts,
             raises,
             state,
+            modifies,
             requires_state,
             state_witnesses,
             performs,
             outcomes,
-            outcome_state ) ->
+            outcome_state,
+            outcome_modifies ) ->
           Some
             Typed_core.
               {
@@ -995,13 +1055,12 @@ let typed_contracts attributes =
                   List.map
                     (fun (name, sort) ->
                       ( name,
-                        match sort with
-                        | "int" -> Typed_core.S_int
-                        | "bool" -> S_bool
-                        | _ -> assert false ))
+                        contract_ghost_sort registry ~loc:attribute.attr_loc
+                          sort ))
                     ghosts;
                 raises;
                 state;
+                modifies;
                 requires_state;
                 state_witnesses;
                 performs;
@@ -1012,6 +1071,7 @@ let typed_contracts attributes =
                         { kind; name; post; witnesses; witness_relation })
                     outcomes;
                 outcome_state;
+                outcome_modifies;
                 loc = span_of_location attribute.attr_loc;
               })
     attributes
@@ -1207,7 +1267,7 @@ let typed_bound_variable (pattern : Typedtree.pattern) =
 
 let typed_function registry binding =
   let open Typed_core in
-  let contracts = typed_contracts binding.Typedtree.vb_attributes in
+  let contracts = typed_contracts registry binding.Typedtree.vb_attributes in
   match binding.vb_expr.exp_desc with
   | Typedtree.Texp_function (parameters, Tfunction_body body) ->
       let symbol =

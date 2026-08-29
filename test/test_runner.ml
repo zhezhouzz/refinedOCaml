@@ -454,6 +454,8 @@ let () =
   compile "../examples/relational_witness.ml" "typed_relational_witness";
   compile "../examples/relational_witness_invalid.ml"
     "typed_relational_witness_invalid";
+  compile "../examples/typed_ghost_frame.ml" "typed_ghost_frame";
+  compile "../examples/typed_ghost_frame_invalid.ml" "typed_ghost_frame_invalid";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
@@ -718,6 +720,26 @@ let () =
       require `Valid obligation);
   obligations_of_cmt "typed_relational_witness_invalid.cmt"
   |> List.iter (require `Invalid);
+  obligations_of_cmt "typed_ghost_frame.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "adt_ghost" || obligation.name = "adt_ghost_wrapper")
+        && not (contains obligation.smt "token" && contains obligation.smt "Int")
+      then failwith "typed ADT ghost was not monomorphized";
+      if
+        (obligation.name = "framed_write" || obligation.name = "framed_raise")
+        && not (contains obligation.smt "initial_heap_Bool")
+      then failwith "heap frame obligation was not emitted";
+      require `Valid obligation);
+  obligations_of_cmt "typed_ghost_frame_invalid.cmt"
+  |> List.iter (fun obligation ->
+      if obligation.name = "havoc" then require `Valid obligation
+      else (
+        if
+          obligation.name = "missing_call_frame"
+          && not (contains obligation.smt "call_state_")
+        then failwith "safety modifies footprint was not havoced at call site";
+        require `Invalid obligation));
   obligations_of_cmt "typed_conditional_resume.cmt"
   |> List.iter (fun obligation ->
       if obligation.name = "conditional" && not (contains obligation.smt "flag")

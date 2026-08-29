@@ -4,7 +4,7 @@ let[@refined.over
      {
        pre = "true";
        post = "result = x + 1";
-       state = [ ("cell", "value = result") ];
+       state = [ ("cell", "old = x && value = old + 1 && value = result") ];
      }] bump (x : int) : int =
   let cell = ref x in
   cell := !cell + 1;

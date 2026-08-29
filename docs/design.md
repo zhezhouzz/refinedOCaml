@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-typed ADT ghosts、heap footprint/frame clauses、可重放 proof certificate、增量缓存。
+first-class reference identity、pointer equality/escaping discipline、可重放 proof certificate、增量缓存。
 
 ### M2
 

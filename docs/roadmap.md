@@ -12,9 +12,9 @@
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v5 保存 OCaml version、unit/digest、abstract sorts、aliases、functor templates 和 proof metadata | MVP 已完成 | 设计非 `Marshal` 的长期稳定格式 |
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
-| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Stateful `choose`、Outcome/state paths、alias-aware heap summaries、dynamic allocation 与 relational ghost witnesses 已组合 | Relational heap/outcome MVP 完成 | heap footprint/frame clauses 与 escaping-reference discipline |
-| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、summary、递归 SCC/measure、relational outcome algebra 与 witness relations 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | frame/separation domain 与 typed ADT ghosts |
-| C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | Functional/relational inverses、typed ghosts、normal/abnormal heap targets；relation 同时检查 totality 与 pointwise soundness | Relational witness coverage MVP 已完成 | typed ADT ghosts 与 heap footprint synthesis |
+| C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | Stateful `choose`、Outcome/state paths、alias-aware footprint/frame、dynamic allocation 与 relational ghost witnesses 已组合 | Framed relational heap/outcome MVP 完成 | first-class identity、pointer equality 与 escaping-reference discipline |
+| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、递归 measure、relational outcomes/witnesses、typed ADT ghosts 与 frame rules 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | observable identity 与 separation-style ownership domain |
+| C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | Functional/relational inverses、closed typed ghosts、normal/abnormal footprint targets；relation 检查 totality/soundness | Framed relational coverage MVP 已完成 | escaping references 与 ownership-aware witnesses |
 | 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
 | OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 reference identity/local alias、stateful `choose`、abnormal heap effects、conditional tail Resume/Abort | Relational effects + linear continuation MVP | pointer equality/escaping refs；显式 clone API 出现后再做 multi-shot |
@@ -77,7 +77,7 @@ target-totality 和 pointwise-soundness obligations，避免把“存在某个�
 可用”。后续仍需决定：
 
 - coverage judgment 是否和 safety 共享同一 Core typing skeleton；
-- ADT/abstract-sort ghosts 与 heap footprint 如何表达；
+- first-class identity、escaping references 与 ownership 如何表达；
 - coverage subtyping/entailment 是否能复用 safety 的 refinement domain；
 - nondeterminism、effects、exceptions 是否需要 relational outcome semantics。
 
@@ -166,7 +166,14 @@ backend 将两个 computation 保留为 path union，因此 Safety 对所有分�
 至少一条分支。分支可独立写 heap、raise 或 perform。
 
 Relational witnesses 与 ghost-state synthesis 已完成。`witness_relation` 可同时引用普通参数、目标、
-`old_<ref>` initial heap contents 和 `int`/`bool` existential ghosts；normal 与 Raised/Performed summaries
+`old_<ref>` initial heap contents 和 typed existential ghosts；normal 与 Raised/Performed summaries
 都能跨函数组合。Functional witnesses 保持兼容，但不能与 relation 混用。
 
-roadmap 的下一实现步骤是 typed ADT ghosts 与 heap footprint/frame clauses。
+Typed ADT ghosts 与 heap footprint/frame clauses 已完成。Ghost sort 使用 OCaml core-type syntax，支持
+primitive、tuple、list/option、闭合用户 ADT 与 abstract sort，并进入 use-site monomorphisation。
+`modifies`/`outcome_modifies` 声明 reference-parameter footprint；未修改 cell 生成 alias-aware frame，
+Safety 可 havoc 无 predicate 的 modified cell，Coverage 则要求每个 modified cell 有 final target。Translator
+同时统一恢复函数 entry heap，避免 literal assignment 把 parameter `old`/frame 错写成中间 heap；局部
+reference 则单独保存 allocation-time initial value。
+
+roadmap 的下一实现步骤是 first-class reference identity、pointer equality 与 escaping-reference discipline。

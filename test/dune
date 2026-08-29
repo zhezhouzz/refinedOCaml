@@ -80,6 +80,8 @@
   ../examples/abnormal_state_invalid.ml
   ../examples/relational_witness.ml
   ../examples/relational_witness_invalid.ml
+  ../examples/typed_ghost_frame.ml
+  ../examples/typed_ghost_frame_invalid.ml
   ../examples/conditional_resume.ml
   ../examples/multishot_unsupported.ml))
 

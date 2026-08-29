@@ -91,11 +91,13 @@ type contract = {
   ghosts : (string * sort) list;
   raises : (string * string) list;
   state : (string * string) list;
+  modifies : string list;
   requires_state : (string * string) list;
   state_witnesses : (string * string) list;
   performs : (string * string) list;
   outcomes : coverage_outcome list;
   outcome_state : (string * string * string * string) list;
+  outcome_modifies : (string * string * string) list;
   loc : Source_span.t;
 }
 

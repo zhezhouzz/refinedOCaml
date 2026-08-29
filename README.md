@@ -126,8 +126,9 @@ let[@refined.coverage
 ```
 
 Relation 可引用普通参数、`result`/outcome `payload`、final-state target，以及 reference 参数的
-`old_<name>`。`ghosts = [("inverse", "int")]` 或 `bool` 会引入 existential ghost；同一 ghost 在 relation
-和 functional state witness 中可复用。Checker 分别证明 relation 对每个目标具有 witness（totality），
+`old_<name>`。`ghosts = [("inverse", "int")]` 会引入 existential ghost；sort 也可以是 `bool`、tuple、
+list/option、用户单态或闭合参数化 ADT，以及已导入的 abstract sort。同一 ghost 在 relation 和 functional
+state witness 中可复用。Checker 分别证明 relation 对每个目标具有 witness（totality），
 以及每个满足 relation 的 input/ghost 都执行到该目标（pointwise soundness），因此可安全用于 under call
 summary。
 
@@ -375,8 +376,9 @@ let[@refined.over
   !cell
 ```
 
-`value` 表示该 path 的最终 cell 内容，`old` 表示 initial content。State 会穿过 branch、raise 和
-handler；因此 handler 可以观察异常发生前的写入。
+`value` 表示该 path 的最终 cell 内容。Reference 参数的 `old` 是 function-entry content；局部
+`let cell = ref init` 的 `old` 是 allocation-time `init`。State 会穿过 branch、raise 和 handler；因此
+handler 可以观察异常发生前的写入。
 
 Reference 参数作为 relational heap identities。`requires_state`约束 initial contents；Coverage 用
 `state_witnesses`从目标 result/final cells 构造 initial contents：
@@ -391,6 +393,13 @@ state_witnesses = [ ("cell", "result - 1") ];
 Safety/coverage call summaries 会把 callee final contents 更新回 caller heap；同一实际 identity 传给多个
 ref formals 时生成 final-value consistency constraints。局部 `ref` 分配 fresh identity，并支持 lexical
 alias。Pointer equality 与 reference 跨当前关系边界逃逸仍 fail closed。
+
+Reference-parameter footprint 使用 `modifies = ["cell"]` 声明；`state` 中出现的 reference 会隐式加入
+normal footprint。Raised/Performed paths 对应使用
+`outcome_modifies = [("raise", "Bad", "cell")]`，`outcome_state` 同样会隐式加入。未列出的 reference
+生成 frame obligation：只有当它不 alias 任一同 sort 的 modified identity 时，final content 必须等于
+entry content。Safety 允许只有 `modifies`、没有 state predicate，此时 caller 对该 cell 做 havoc；Coverage
+必须为每个 modified cell 提供 final-state target，防止 under-summary 凭空选择不可达状态。
 
 异常与效果的 final heap 用 `outcome_state` 分别描述：
 
@@ -499,7 +508,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | typed Logic AST / expected-sort elaboration | 支持 | resolved constructor/selector symbols |
 | over / coverage contract | 支持 | upper validity / lower image coverage |
 | constructive coverage call summary | 支持 | functional/relational inverse witnesses |
-| typed existential coverage ghosts | 支持 | `int`/`bool` ghost synthesis |
+| typed existential coverage ghosts | 支持 | primitives、tuple、closed ADT/abstract sorts |
 | relational state/outcome semantic algebra | 支持 | guarded transition paths |
 | stateful/outcome nondeterministic `choose` | 支持 | path union；demonic upper / angelic lower |
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
@@ -516,6 +525,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | exception/effect coverage summary | 支持 | per-outcome payload inverse witnesses |
 | aliased reference parameters / state summaries | 支持 | identity select/store + consistency guards |
 | abnormal outcome heap summaries | 支持 | `outcome_state` + caller heap update |
+| heap footprint / frame clauses | 支持 | alias-aware `modifies` / `outcome_modifies` |
 | pointer equality / escaping refs | 明确拒绝 | 需要 observable/first-class identity contracts |
 | multi-payload/multi-shot handlers | 明确拒绝 | 需要 richer binders/continuation multiplicity |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
@@ -528,7 +538,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. typed ADT ghosts 与 heap footprint/frame clauses；
+1. first-class reference identity、pointer equality 与 escaping-reference discipline；
 2. 可重放 proof certificate 与稳定 artifact 格式；
 3. 显式 continuation cloning（若未来 OCaml API 支持）。
 

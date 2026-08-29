@@ -432,6 +432,10 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
   in
   List.iter (fun (_, sort) -> collect sort) function_def.arguments;
   collect function_def.result;
+  List.iter
+    (fun (contract : Typed_core.contract) ->
+      List.iter (fun (_, sort) -> collect sort) contract.ghosts)
+    function_def.contracts;
   collect_expression function_def.body;
   (match !open_instance with
   | Some sort ->
@@ -881,6 +885,7 @@ type generic_call_state = {
   mutable ghost_instantiations : string list;
   mutable used_theory_symbols : string list;
   mutable semantic_assumptions : string list;
+  mutable local_initial_values : (string * string) list;
 }
 
 let new_generic_call_state () =
@@ -891,6 +896,7 @@ let new_generic_call_state () =
     ghost_instantiations = [];
     used_theory_symbols = [];
     semantic_assumptions = [];
+    local_initial_values = [];
   }
 
 let use_theory_symbol state symbol =
@@ -1103,6 +1109,17 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
         function_def.arguments;
     result = substitute function_def.result;
     body = map_expression function_def.body;
+    contracts =
+      List.map
+        (fun (contract : Typed_core.contract) ->
+          {
+            contract with
+            ghosts =
+              List.map
+                (fun (name, sort) -> (name, substitute sort))
+                contract.ghosts;
+          })
+        function_def.contracts;
   }
 
 let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
@@ -1741,6 +1758,45 @@ let alias_consistency updates =
   in
   pairs updates
 
+let frame_obligations ~initial ~final ~references ~modified =
+  references
+  |> List.filter_map (fun (_name, identity, sort) ->
+      if List.mem identity modified then None
+      else
+        let possible_aliases =
+          references
+          |> List.filter_map (fun (_name, candidate, candidate_sort) ->
+              if
+                List.mem candidate modified
+                && typed_smt_sort candidate_sort = typed_smt_sort sort
+              then Some candidate
+              else None)
+        in
+        let unchanged =
+          app "="
+            [
+              heap_select final identity sort; heap_select initial identity sort;
+            ]
+        in
+        match possible_aliases with
+        | [] -> Some unchanged
+        | aliases ->
+            Some
+              (app "=>"
+                 [
+                   and_
+                     (List.map
+                        (fun modified_identity ->
+                          app "distinct" [ identity; modified_identity ])
+                        aliases);
+                   unchanged;
+                 ]))
+
+let reference_modified_identities references names =
+  references
+  |> List.filter_map (fun (name, identity, _sort) ->
+      if List.mem name names then Some identity else None)
+
 let typed_initial_reference_state function_def =
   let sorts =
     typed_reference_arguments function_def @ typed_local_cells function_def.body
@@ -2030,6 +2086,14 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                     ("old_" ^ name, (heap_select state actual sort, sort)))
                   reference_formals
               in
+              List.iter
+                (fun name ->
+                  let _ = actual_cell name in
+                  if not (List.mem_assoc name summary.state) then
+                    typed_error_at expression.loc
+                      "coverage modifies `%s` needs a state target predicate"
+                      name)
+                summary.modifies;
               let relation_guard relation relation_env =
                 match relation with
                 | None -> []
@@ -2176,6 +2240,23 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               Hashtbl.add continuations continuation_id continuation;
               List.iter
                 (fun (outcome : Typed_core.coverage_outcome) ->
+                  List.iter
+                    (fun (kind, name, cell) ->
+                      if kind = outcome.kind && name = outcome.name then
+                        let _ = actual_cell cell in
+                        if
+                          not
+                            (List.exists
+                               (fun (state_kind, state_name, state_cell, _) ->
+                                 state_kind = kind && state_name = name
+                                 && state_cell = cell)
+                               summary.outcome_state)
+                        then
+                          typed_error_at expression.loc
+                            "coverage outcome modifies `%s` needs a state \
+                             target predicate"
+                            cell)
+                    summary.outcome_modifies;
                   if outcome.witnesses <> [] && not (complete outcome.witnesses)
                   then
                     typed_error_at expression.loc
@@ -2435,6 +2516,15 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               in
               let post_formula = parse summary.post in
               mark result_env post_formula;
+              let normal_state_clauses =
+                summary.state
+                @ List.filter_map
+                    (fun name ->
+                      let _ = actual_cell name in
+                      if List.mem_assoc name summary.state then None
+                      else Some (name, "true"))
+                    summary.modifies
+              in
               let state_guards, final_state, state_updates =
                 List.fold_left
                   (fun (guards, final_state, updates) (name, predicate) ->
@@ -2452,7 +2542,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       :: guards,
                       heap_store final_state actual sort value,
                       (actual, sort, value) :: updates ))
-                  ([], state, []) summary.state
+                  ([], state, []) normal_state_clauses
               in
               let state_guards =
                 alias_consistency state_updates @ state_guards
@@ -2481,9 +2571,28 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               in
               let outcome_state kind outcome target_env =
                 let guards, final_state, updates =
-                  summary.outcome_state
-                  |> List.filter (fun (candidate_kind, candidate, _, _) ->
-                      candidate_kind = kind && candidate = outcome)
+                  let clauses =
+                    summary.outcome_state
+                    |> List.filter (fun (candidate_kind, candidate, _, _) ->
+                        candidate_kind = kind && candidate = outcome)
+                  in
+                  let clauses =
+                    clauses
+                    @ List.filter_map
+                        (fun (candidate_kind, candidate, name) ->
+                          if candidate_kind <> kind || candidate <> outcome then
+                            None
+                          else
+                            let _ = actual_cell name in
+                            if
+                              List.exists
+                                (fun (_, _, existing, _) -> existing = name)
+                                clauses
+                            then None
+                            else Some (kind, outcome, name, "true"))
+                        summary.outcome_modifies
+                  in
+                  clauses
                   |> List.fold_left
                        (fun (guards, final_state, updates)
                             (_kind, _outcome, name, predicate) ->
@@ -2704,6 +2813,8 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   app "distinct" (identity :: existing)
                   :: generic_calls.semantic_assumptions);
             allocated_references := (identity, sort) :: !allocated_references;
+            generic_calls.local_initial_values <-
+              (identity, value) :: generic_calls.local_initial_values;
             let key = heap_key sort in
             let heap =
               match List.assoc_opt key state with
@@ -2769,7 +2880,10 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
         continuation value.term state
   in
   let boundary value state = R.return ~state value in
-  let relation = translate env initial_state [] expression boundary in
+  let relation =
+    translate env initial_state [] expression boundary
+    |> List.map (fun (path : R.path) -> { path with initial_state })
+  in
   (relation, List.rev !choices, generic_calls)
 
 let typed_collect_sorts program function_def =
@@ -2787,6 +2901,12 @@ let typed_collect_sorts program function_def =
       Set.empty function_def.Typed_core.arguments
   in
   let set = add set function_def.result in
+  let set =
+    List.fold_left
+      (fun set (contract : Typed_core.contract) ->
+        List.fold_left (fun set (_, sort) -> add set sort) set contract.ghosts)
+      set function_def.contracts
+  in
   let set =
     List.fold_left
       (fun set (_, _, sort) -> add (add set sort) (reference_sort sort))
@@ -2833,6 +2953,10 @@ let typed_collect_sort_values program function_def =
   in
   List.iter (fun (_, sort) -> add sort) function_def.Typed_core.arguments;
   add function_def.result;
+  List.iter
+    (fun (contract : Typed_core.contract) ->
+      List.iter (fun (_, sort) -> add sort) contract.ghosts)
+    function_def.contracts;
   List.iter
     (fun (_, _, sort) ->
       add sort;
@@ -3273,6 +3397,47 @@ let typed_exception_obligation (program : Typed_core.program) analysis
               "state postcondition names unknown local cell `%s`" name)
       contract.state
   in
+  let reference_names = List.map (fun (name, _, _) -> name) reference_cells in
+  let validate_modified name =
+    if not (List.mem name reference_names) then
+      typed_error_at contract.loc
+        "modifies footprint names non-reference parameter `%s`" name
+  in
+  List.iter validate_modified contract.modifies;
+  List.iter
+    (fun (kind, outcome, name) ->
+      validate_modified name;
+      if
+        (kind = "raise" && not (List.mem_assoc outcome contract.raises))
+        || (kind = "perform" && not (List.mem_assoc outcome contract.performs))
+        || (kind <> "raise" && kind <> "perform")
+      then
+        typed_error_at contract.loc
+          "outcome_modifies names undeclared outcome `%s:%s`" kind outcome)
+    contract.outcome_modifies;
+  let normal_modified_names =
+    contract.modifies
+    @ List.filter_map
+        (fun (name, _) ->
+          if List.mem name reference_names then Some name else None)
+        contract.state
+    |> List.sort_uniq String.compare
+  in
+  let outcome_modified_names kind outcome =
+    List.filter_map
+      (fun (candidate_kind, candidate, name) ->
+        if candidate_kind = kind && candidate = outcome then Some name else None)
+      contract.outcome_modifies
+    @ List.filter_map
+        (fun (candidate_kind, candidate, name, _predicate) ->
+          if
+            candidate_kind = kind && candidate = outcome
+            && List.mem name reference_names
+          then Some name
+          else None)
+        contract.outcome_state
+    |> List.sort_uniq String.compare
+  in
   let required_state_expressions =
     List.map
       (fun (name, predicate) ->
@@ -3501,6 +3666,11 @@ let typed_exception_obligation (program : Typed_core.program) analysis
         Printf.sprintf "(let ((payload %s)) %s)" payload predicate
     | Some _, None -> "false"
   in
+  let initial_cell_value initial key sort =
+    match List.assoc_opt key generic_calls.local_initial_values with
+    | Some value -> value
+    | None -> heap_select initial key sort
+  in
   let abnormal_state kind outcome payload initial final =
     outcome_state_posts
     |> List.filter_map
@@ -3510,7 +3680,7 @@ let typed_exception_obligation (program : Typed_core.program) analysis
            if candidate_kind <> kind || candidate <> outcome then None
            else
              let value = heap_select final key sort in
-             let old = heap_select initial key sort in
+             let old = initial_cell_value initial key sort in
              Some
                (bind_payload payload_sort payload
                   (Printf.sprintf
@@ -3524,14 +3694,19 @@ let typed_exception_obligation (program : Typed_core.program) analysis
           List.map
             (fun (_name, key, sort, predicate) ->
               let state_value = heap_select final key sort in
-              let old_state = heap_select initial key sort in
+              let old_state = initial_cell_value initial key sort in
               Printf.sprintf
                 "(let ((result %s) (state_value %s) (old_state_value %s)) %s)"
                 value state_value old_state predicate)
             state_posts
         in
         Printf.sprintf "(let ((result %s)) %s)" value
-          (and_ (post :: state_obligations)))
+          (and_
+             ((post :: state_obligations)
+             @ frame_obligations ~initial ~final ~references:reference_cells
+                 ~modified:
+                   (reference_modified_identities reference_cells
+                      normal_modified_names))))
       ~raised:(fun ~exception_ ~payload ~initial ~final ->
         let post =
           match
@@ -3541,7 +3716,12 @@ let typed_exception_obligation (program : Typed_core.program) analysis
               bind_payload payload_sort payload predicate
           | None -> "false"
         in
-        and_ (post :: abnormal_state "raise" exception_ payload initial final))
+        and_
+          ((post :: abnormal_state "raise" exception_ payload initial final)
+          @ frame_obligations ~initial ~final ~references:reference_cells
+              ~modified:
+                (reference_modified_identities reference_cells
+                   (outcome_modified_names "raise" exception_))))
       ~performed:(fun ~operation ~payload ~continuation:_ ~initial ~final ->
         let post =
           match
@@ -3551,7 +3731,12 @@ let typed_exception_obligation (program : Typed_core.program) analysis
               bind_payload payload_sort payload predicate
           | None -> "false"
         in
-        and_ (post :: abnormal_state "perform" operation payload initial final))
+        and_
+          ((post :: abnormal_state "perform" operation payload initial final)
+          @ frame_obligations ~initial ~final ~references:reference_cells
+              ~modified:
+                (reference_modified_identities reference_cells
+                   (outcome_modified_names "perform" operation))))
       relation
   in
   let obligation =
@@ -3728,6 +3913,39 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
               name)
       contract.state
   in
+  let reference_names = List.map (fun (name, _, _) -> name) reference_cells in
+  List.iter
+    (fun name ->
+      if not (List.mem name reference_names) then
+        typed_error_at contract.loc
+          "modifies footprint names non-reference parameter `%s`" name;
+      if not (List.mem_assoc name contract.state) then
+        typed_error_at contract.loc
+          "coverage modifies `%s` needs a state target predicate" name)
+    contract.modifies;
+  let normal_modified_names =
+    contract.modifies
+    @ List.filter_map
+        (fun (name, _) ->
+          if List.mem name reference_names then Some name else None)
+        contract.state
+    |> List.sort_uniq String.compare
+  in
+  let outcome_modified_names kind outcome =
+    List.filter_map
+      (fun (candidate_kind, candidate, name) ->
+        if candidate_kind = kind && candidate = outcome then Some name else None)
+      contract.outcome_modifies
+    @ List.filter_map
+        (fun (candidate_kind, candidate, name, _predicate) ->
+          if
+            candidate_kind = kind && candidate = outcome
+            && List.mem name reference_names
+          then Some name
+          else None)
+        contract.outcome_state
+    |> List.sort_uniq String.compare
+  in
   let state_witnesses =
     let expected = List.map (fun (name, _, _) -> name) reference_cells in
     let actual = List.map fst contract.state_witnesses in
@@ -3775,6 +3993,31 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         typed_error_at contract.loc
           "outcome_state names undeclared coverage outcome `%s:%s`" kind outcome)
     contract.outcome_state;
+  List.iter
+    (fun (kind, outcome, name) ->
+      if not (List.mem name reference_names) then
+        typed_error_at contract.loc
+          "outcome_modifies names non-reference parameter `%s`" name;
+      if
+        not
+          (List.exists
+             (fun (candidate : Typed_core.coverage_outcome) ->
+               candidate.kind = kind && candidate.name = outcome)
+             contract.outcomes)
+      then
+        typed_error_at contract.loc
+          "outcome_modifies names undeclared coverage outcome `%s:%s`" kind
+          outcome;
+      if
+        not
+          (List.exists
+             (fun (state_kind, state_outcome, state_name, _) ->
+               state_kind = kind && state_outcome = outcome && state_name = name)
+             contract.outcome_state)
+      then
+        typed_error_at contract.loc
+          "coverage outcome modifies `%s` needs a state target predicate" name)
+    contract.outcome_modifies;
   if
     List.length outcome_state_names
     <> List.length (List.sort_uniq compare outcome_state_names)
@@ -4036,8 +4279,13 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             Some
               (and_
                  (path.guard
-                 :: app "=" [ value; "missing_result" ]
-                 :: state_equalities))
+                  :: app "=" [ value; "missing_result" ]
+                  :: state_equalities
+                 @ frame_obligations ~initial:path.initial_state
+                     ~final:path.final_state ~references:reference_cells
+                     ~modified:
+                       (reference_modified_identities reference_cells
+                          normal_modified_names)))
         | Raised _ | Performed _ -> None)
     |> or_
   in
@@ -4124,6 +4372,16 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         let matching =
           relation
           |> List.filter_map (fun (path : R.path) ->
+              let kind_name =
+                match kind with `Raised -> "raise" | `Performed -> "perform"
+              in
+              let frames =
+                frame_obligations ~initial:path.initial_state
+                  ~final:path.final_state ~references:reference_cells
+                  ~modified:
+                    (reference_modified_identities reference_cells
+                       (outcome_modified_names kind_name name))
+              in
               let state_equalities =
                 List.map
                   (fun (_name, key, state_sort, state_target, _) ->
@@ -4141,9 +4399,11 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
                       Some
                         (and_
                            (path.guard
-                           :: app "=" [ payload; target ]
-                           :: state_equalities))
-                  | None, None -> Some (and_ (path.guard :: state_equalities))
+                            :: app "=" [ payload; target ]
+                            :: state_equalities
+                           @ frames))
+                  | None, None ->
+                      Some (and_ ((path.guard :: state_equalities) @ frames))
                   | _ -> None)
               | `Performed, Performed performed when performed.operation = name
                 -> (
@@ -4152,9 +4412,11 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
                       Some
                         (and_
                            (path.guard
-                           :: app "=" [ payload; target ]
-                           :: state_equalities))
-                  | None, None -> Some (and_ (path.guard :: state_equalities))
+                            :: app "=" [ payload; target ]
+                            :: state_equalities
+                           @ frames))
+                  | None, None ->
+                      Some (and_ ((path.guard :: state_equalities) @ frames))
                   | _ -> None)
               | _ -> None)
           |> or_

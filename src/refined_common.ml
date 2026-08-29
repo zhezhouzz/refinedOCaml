@@ -133,9 +133,6 @@ let contract_of_attribute attribute =
                     | Pexp_tuple [ name; sort ] ->
                         let name = string_constant name in
                         let sort = string_constant sort in
-                        if not (List.mem sort [ "int"; "bool" ]) then
-                          error ~loc:expression.pexp_loc
-                            "ghost sort must be int or bool";
                         (name, sort)
                     | _ ->
                         error ~loc:expression.pexp_loc
@@ -167,6 +164,12 @@ let contract_of_attribute attribute =
                     | _ ->
                         error ~loc:expression.pexp_loc
                           "state must contain (cell, predicate) string pairs")
+          in
+          let modifies =
+            match find_expression "modifies" with
+            | None -> []
+            | Some expression ->
+                List.map string_constant (expression_list expression)
           in
           let state_pairs field =
             match find_expression field with
@@ -249,6 +252,22 @@ let contract_of_attribute attribute =
                           "outcome_state must contain (kind, name, cell, \
                            predicate) string tuples")
           in
+          let outcome_modifies =
+            match find_expression "outcome_modifies" with
+            | None -> []
+            | Some expression ->
+                expression_list expression
+                |> List.map (fun expression ->
+                    match expression.pexp_desc with
+                    | Pexp_tuple [ kind; name; cell ] ->
+                        ( string_constant kind,
+                          string_constant name,
+                          string_constant cell )
+                    | _ ->
+                        error ~loc:expression.pexp_loc
+                          "outcome_modifies must contain (kind, name, cell) \
+                           string tuples")
+          in
           if mode = Over && witnesses <> [] then
             error ~loc:attribute.attr_loc
               "safety contracts cannot declare coverage witnesses";
@@ -303,11 +322,13 @@ let contract_of_attribute attribute =
               ghosts,
               raises,
               state,
+              modifies,
               requires_state,
               state_witnesses,
               performs,
               outcomes,
-              outcome_state )
+              outcome_state,
+              outcome_modifies )
       | _ ->
           error ~loc:attribute.attr_loc
             "expected [@%s { pre = \"...\"; post = \"...\" }]"
