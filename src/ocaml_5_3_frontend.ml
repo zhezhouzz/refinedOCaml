@@ -797,6 +797,12 @@ let rec typed_expression registry (expression : Typedtree.expression) =
          | ":=" :: _ -> true
          | _ -> false ->
       make (Assign (symbol_of_path cell, recurse value))
+  | Texp_apply
+      ({ exp_desc = Texp_ident (path, _, _); _ }, [ (Nolabel, Some initial) ])
+    when match List.rev (String.split_on_char '.' (Path.name path)) with
+         | "ref" :: _ -> true
+         | _ -> false ->
+      make (Ref (typed_sort_of_type initial.exp_type, recurse initial))
   | Texp_apply ({ exp_desc = Texp_ident (path, _, description); _ }, arguments)
     ->
       let arguments =
@@ -1031,6 +1037,8 @@ let typed_contracts registry attributes =
           ( mode,
             pre,
             post,
+            result_state,
+            result_fresh,
             witnesses,
             witness_relation,
             ghosts,
@@ -1049,6 +1057,8 @@ let typed_contracts registry attributes =
                 mode;
                 pre;
                 post;
+                result_state;
+                result_fresh;
                 witnesses;
                 witness_relation;
                 ghosts =
@@ -1173,6 +1183,9 @@ let typed_normalize expression =
         bind_operation expression
           (Let_ref (symbol, sort, initial, body))
           continuation
+    | Ref (sort, initial) ->
+        anf initial (fun initial ->
+            bind_operation expression (Ref (sort, initial)) continuation)
     | Deref symbol -> bind_operation expression (Deref symbol) continuation
     | Assign (symbol, value) ->
         anf value (fun value ->

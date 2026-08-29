@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-first-class reference identity、pointer equality/escaping discipline、可重放 proof certificate、增量缓存。
+reference-containing ADT/tuple ownership、reachable-heap contracts、可重放 proof certificate、增量缓存。
 
 ### M2
 

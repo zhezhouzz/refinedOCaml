@@ -176,8 +176,14 @@ final-state target for every modified cell. Relational paths are normalized to t
 parameter `old` and frame clauses cannot accidentally observe an intermediate literal-write state; local
 references retain their allocation-time initial value separately.
 
-The next implementation slice is first-class reference identity, pointer equality and an escaping-reference
-discipline.
+Reference identities are now first-class Core/SMT values. Physical `==`/`!=` is restricted to references with the
+same content sort, and `Ref` is an expression rather than only a specialized `let` form. A direct reference result
+must declare `result_state`; identity constraints remain in `post`/`witness_relation`, while the result-state
+predicate transfers final content into the caller heap. `result_fresh` additionally separates the result from
+currently visible identities and later allocations. Safety and Coverage summaries both compose this transfer.
+References nested in returned tuples/ADTs remain fail closed.
+
+The next implementation slice is ownership and reachable-heap contracts for reference-containing tuples/ADTs.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

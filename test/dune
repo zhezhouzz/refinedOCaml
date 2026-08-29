@@ -82,6 +82,11 @@
   ../examples/relational_witness_invalid.ml
   ../examples/typed_ghost_frame.ml
   ../examples/typed_ghost_frame_invalid.ml
+  ../examples/reference_escape.ml
+  ../examples/reference_escape_invalid.ml
+  ../examples/reference_escape_missing_state.ml
+  ../examples/reference_escape_nested.ml
+  ../examples/physical_equality_invalid.ml
   ../examples/conditional_resume.ml
   ../examples/multishot_unsupported.ml))
 

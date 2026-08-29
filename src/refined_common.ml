@@ -122,6 +122,26 @@ let contract_of_attribute attribute =
                           "coverage witnesses must contain (parameter, \
                            expression) string pairs")
           in
+          let result_state = find "result_state" in
+          let result_fresh =
+            match find_expression "result_fresh" with
+            | None -> false
+            | Some
+                {
+                  pexp_desc = Pexp_construct ({ txt = Lident "true"; _ }, None);
+                  _;
+                } ->
+                true
+            | Some
+                {
+                  pexp_desc = Pexp_construct ({ txt = Lident "false"; _ }, None);
+                  _;
+                } ->
+                false
+            | Some expression ->
+                error ~loc:expression.pexp_loc
+                  "result_fresh must be a boolean literal"
+          in
           let witness_relation = find "witness_relation" in
           let ghosts =
             match find_expression "ghosts" with
@@ -317,6 +337,8 @@ let contract_of_attribute attribute =
             ( mode,
               required "pre",
               required "post",
+              result_state,
+              result_fresh,
               witnesses,
               witness_relation,
               ghosts,
@@ -350,6 +372,8 @@ let binary_operator = function
   | "mod" -> Some "mod"
   | "=" -> Some "="
   | "<>" -> Some "distinct"
+  | "==" -> Some "="
+  | "!=" -> Some "distinct"
   | "<" -> Some "<"
   | "<=" -> Some "<="
   | ">" -> Some ">"

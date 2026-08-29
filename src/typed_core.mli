@@ -68,6 +68,7 @@ and expr_desc =
   | Field of constructor * int * expr
   | Raise of symbol * expr option
   | Try of expr * (exception_pattern * expr) list
+  | Ref of sort * expr
   | Let_ref of symbol * sort * expr * expr
   | Deref of symbol
   | Assign of symbol * expr
@@ -86,6 +87,8 @@ type contract = {
   mode : Refined_types.mode;
   pre : string;
   post : string;
+  result_state : string option;
+  result_fresh : bool;
   witnesses : (string * string) list;
   witness_relation : string option;
   ghosts : (string * sort) list;

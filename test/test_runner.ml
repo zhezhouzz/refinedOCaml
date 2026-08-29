@@ -456,6 +456,15 @@ let () =
     "typed_relational_witness_invalid";
   compile "../examples/typed_ghost_frame.ml" "typed_ghost_frame";
   compile "../examples/typed_ghost_frame_invalid.ml" "typed_ghost_frame_invalid";
+  compile "../examples/reference_escape.ml" "typed_reference_escape";
+  compile "../examples/reference_escape_invalid.ml"
+    "typed_reference_escape_invalid";
+  compile "../examples/reference_escape_missing_state.ml"
+    "typed_reference_escape_missing_state";
+  compile "../examples/reference_escape_nested.ml"
+    "typed_reference_escape_nested";
+  compile "../examples/physical_equality_invalid.ml"
+    "typed_physical_equality_invalid";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
@@ -740,6 +749,28 @@ let () =
           && not (contains obligation.smt "call_state_")
         then failwith "safety modifies footprint was not havoced at call site";
         require `Invalid obligation));
+  obligations_of_cmt "typed_reference_escape.cmt"
+  |> List.iter (fun obligation ->
+      if
+        (obligation.name = "return_alias" || obligation.name = "make_ref")
+        && not (contains obligation.smt "result_state")
+      then failwith "escaping reference content was not exposed";
+      if
+        obligation.name = "two_fresh_refs"
+        && not (contains obligation.smt "distinct")
+      then failwith "fresh escaping references lost identity separation";
+      require `Valid obligation);
+  obligations_of_cmt "typed_reference_escape_invalid.cmt"
+  |> List.iter (require `Invalid);
+  (match obligations_of_cmt "typed_reference_escape_missing_state.cmt" with
+  | _ -> failwith "escaping reference without result_state was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_reference_escape_nested.cmt" with
+  | _ -> failwith "nested escaping reference was accepted without ownership"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_physical_equality_invalid.cmt" with
+  | _ -> failwith "physical equality on non-references was accepted"
+  | exception Location.Error _ -> ());
   obligations_of_cmt "typed_conditional_resume.cmt"
   |> List.iter (fun obligation ->
       if obligation.name = "conditional" && not (contains obligation.smt "flag")
