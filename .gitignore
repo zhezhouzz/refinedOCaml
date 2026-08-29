@@ -15,6 +15,7 @@
 *.cmt
 *.cmti
 *.rmi
+*.rpa
 
 # ocamlbuild and Dune default working directory
 _build/

@@ -4,6 +4,7 @@ let files = ref []
 let emit_dir = ref None
 let theories = ref []
 let rmi_output = ref None
+let replay_input = ref None
 let add_file file = files := file :: !files
 
 let options =
@@ -17,6 +18,9 @@ let options =
     ( "--emit-rmi",
       Arg.String (fun path -> rmi_output := Some path),
       "FILE write the theory exported by one input .cmti and exit" );
+    ( "--replay-proof",
+      Arg.String (fun path -> replay_input := Some path),
+      "FILE.rpa validate and re-solve a stable proof artifact bundle" );
   ]
 
 let write_smt dir obligation =
@@ -58,9 +62,23 @@ let report obligation verdict =
 
 let () =
   Arg.parse options add_file
-    "refined-ocaml [--theory FILE.rmi] [--emit-smt DIR] FILE.cmt ...\n\n\
+    "refined-ocaml [--theory FILE.rmi] [--emit-smt DIR] FILE.cmt ...\n\
+     refined-ocaml --replay-proof FILE.rpa\n\n\
      Checks [@refined.over] and [@refined.coverage] contracts after OCaml \
      typing.";
+  (match !replay_input with
+  | Some path when !files = [] && !rmi_output = None -> (
+      try
+        let count = replay_proof path in
+        Printf.printf "%s: replayed %d proof artifact(s)\n%!" path count;
+        exit 0
+      with Location.Error error ->
+        Location.print_report Format.err_formatter error;
+        exit 2)
+  | Some _ ->
+      prerr_endline "--replay-proof cannot be combined with input files";
+      exit 2
+  | None -> ());
   if !files = [] then (
     Arg.usage options "refined-ocaml FILE.cmt ...";
     exit 2);
@@ -69,7 +87,9 @@ let () =
       match List.rev !files with
       | [ cmti ] ->
           write_rmi ~cmti ~output;
-          Printf.printf "%s: wrote refinement interface %s\n%!" cmti output;
+          Printf.printf
+            "%s: wrote refinement interface %s and proof bundle %s\n%!" cmti
+            output (output ^ ".rpa");
           exit 0
       | _ ->
           prerr_endline "--emit-rmi requires exactly one .cmti input";

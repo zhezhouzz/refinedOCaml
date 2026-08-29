@@ -146,7 +146,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M1
 
-稳定 proof artifact 格式、小型 replay kernel、增量缓存。
+基于 VC/theory digest 的增量验证缓存、原生 proof certificate kernel。
 
 ### M2
 

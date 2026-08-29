@@ -21,8 +21,9 @@
  (public_name refined_ocaml.core)
  (modules
   refined_common
+  proof_artifact_io
   ocaml_5_3_frontend
   solver_backend
   vc_backend
   refined_core)
- (libraries refined_ir compiler-libs.common unix))
+ (libraries refined_ir compiler-libs.common digestif unix))

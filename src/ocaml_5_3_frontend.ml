@@ -2028,7 +2028,7 @@ type typed_rmi = {
   proof_artifacts : Refined_types.proof_artifact list;
 }
 
-let current_rmi_version = 5
+let current_rmi_version = 6
 
 let read_rmi path =
   let channel = open_in_bin path in
@@ -2057,6 +2057,17 @@ let read_rmi path =
   if lemma_names <> artifact_names then
     typed_error ~loc:Location.none
       ".rmi `%s` has inconsistent checked-lemma artifacts" path;
+  List.iter2
+    (fun lemma artifact ->
+      if
+        artifact.Refined_types.statement
+        <> Proof_artifact_io.canonical_statement lemma
+        || artifact.statement_digest <> Proof_artifact_io.statement_digest lemma
+      then
+        typed_error ~loc:Location.none
+          ".rmi `%s` has a statement digest mismatch for lemma `%s`" path
+          artifact.lemma_name)
+    rmi.checked_lemmas rmi.proof_artifacts;
   let trusted_axioms =
     List.map (fun (axiom : Typed_core.axiom) -> axiom.axiom_name) rmi.axioms
   in
@@ -2070,6 +2081,13 @@ let read_rmi path =
           (not (subset artifact.trusted_axioms trusted_axioms))
           || (not (subset artifact.checked_dependencies checked))
           || artifact.vc_digest = "" || artifact.solver = ""
+          || artifact.artifact_version <> 1
+          || artifact.statement = ""
+          || artifact.statement_digest
+             <> Proof_artifact_io.sha256 artifact.statement
+          || artifact.digest_algorithm <> "sha256"
+          || artifact.vc_smt = ""
+          || artifact.vc_digest <> Proof_artifact_io.sha256 artifact.vc_smt
           || artifact.timeout_seconds <= 0
         then
           typed_error ~loc:Location.none
@@ -2078,6 +2096,28 @@ let read_rmi path =
         validate_artifacts (checked @ [ artifact.lemma_name ]) rest
   in
   validate_artifacts [] rmi.proof_artifacts;
+  let proof_path = path ^ ".rpa" in
+  if not (Sys.file_exists proof_path) then
+    typed_error ~loc:Location.none
+      ".rmi `%s` is missing stable proof artifact sidecar `%s`" path proof_path;
+  let bundle =
+    try Proof_artifact_io.read proof_path
+    with Invalid_argument message ->
+      typed_error ~loc:Location.none
+        "cannot parse proof artifact sidecar `%s`: %s" proof_path message
+  in
+  (match Proof_artifact_io.validate bundle with
+  | Ok () -> ()
+  | Error message ->
+      typed_error ~loc:Location.none
+        "proof artifact sidecar `%s` is invalid: %s" proof_path message);
+  if
+    bundle.unit_name <> rmi.unit_name
+    || bundle.interface_digest <> rmi.interface_digest
+    || bundle.artifacts <> rmi.proof_artifacts
+  then
+    typed_error ~loc:Location.none
+      ".rmi `%s` does not match stable proof artifact sidecar" path;
   rmi
 
 let write_rmi ~verify ~cmti ~output =
@@ -2196,16 +2236,24 @@ let write_rmi ~verify ~cmti ~output =
       (Filename.basename output ^ ".")
       ".tmp"
   in
-  match
-    let channel = open_out_bin temporary in
-    Fun.protect
-      ~finally:(fun () -> close_out channel)
-      (fun () -> Marshal.to_channel channel rmi [])
-  with
-  | () -> Sys.rename temporary output
-  | exception exception_ ->
-      (try Sys.remove temporary with Sys_error _ -> ());
-      raise exception_
+  let () =
+    match
+      let channel = open_out_bin temporary in
+      Fun.protect
+        ~finally:(fun () -> close_out channel)
+        (fun () -> Marshal.to_channel channel rmi [])
+    with
+    | () -> Sys.rename temporary output
+    | exception exception_ ->
+        (try Sys.remove temporary with Sys_error _ -> ());
+        raise exception_
+  in
+  Proof_artifact_io.write ~path:(output ^ ".rpa")
+    {
+      unit_name = rmi.unit_name;
+      interface_digest = rmi.interface_digest;
+      artifacts = rmi.proof_artifacts;
+    }
 
 let load_rmi_into registry cmt path =
   let rmi = read_rmi path in

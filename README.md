@@ -198,12 +198,17 @@ refined-ocaml --theory list_theory.rmi client.cmt
 ```
 
 `--emit-rmi` 会按声明顺序，以 trusted axioms 和先前已检查 lemmas 为上下文为每条 lemma 生成 VC。
-只有全部得到 `unsat` 才会原子替换目标 `.rmi`；`sat` 或 `unknown` 都不会留下新 artifact。`.rmi` v3
-分别保存 trusted axioms、checked lemmas，以及包含 VC digest、Z3 identity、timeout 和依赖列表的
-verification artifact。客户端诊断也分别列出两类 provenance。
+只有全部得到 `unsat` 才会原子替换目标 `.rmi`；`sat` 或 `unknown` 都不会留下新 artifact。导出同时生成
+`FILE.rmi.rpa` 稳定 proof bundle。RPA1 使用版本化 netstring，不依赖 OCaml Marshal；每条 artifact 保存
+canonical statement SHA-256、完整 SMT VC、VC SHA-256、solver/timeout 和依赖顺序。
 
-这里的 artifact 是可审计的验证记录，不是可由小型 kernel 独立重放的 Z3 proof certificate；solver
-调用仍属于当前 checker 的可信边界。
+```sh
+refined-ocaml --replay-proof list_theory.rmi.rpa
+```
+
+Replay kernel 先验证格式、statement/VC digest 和依赖拓扑，再用当前 Z3 重新要求每条 VC 为 `unsat`。
+v6 `.rmi` import 必须带匹配 sidecar；Marshal 只保留 OCaml-specific theory cache。RPA1 仍是 solver replay
+record，不是原生 Z3 proof certificate。详细格式见 [`docs/proof-artifacts.md`](docs/proof-artifacts.md)。
 
 ### Abstract type theory 与 module alias
 
@@ -605,7 +610,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 稳定 proof artifact 格式与小型 replay kernel；
+1. 基于 VC/theory digest 的增量验证缓存；
 2. 可重放 proof certificate 与稳定 artifact 格式；
 3. 显式 continuation cloning（若未来 OCaml API 支持）。
 

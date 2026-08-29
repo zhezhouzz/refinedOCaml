@@ -9,8 +9,8 @@
 | A. 插入时机 | 在 OCaml normal typecheck 之后运行 refinement checker，并使用 Typedtree typing information | 已从 `.cmt/.cmti` 读取 Typedtree；PPX 只检查并保留 annotation；OCaml API 全部隔离在 `Ocaml_5_3_frontend` | 工程化完成 | 新 OCaml release 必须新增 versioned frontend 和 CI entry |
 | A. 普通类型错误处理 | 只接受完整 typed implementation，拒绝 partial Typedtree | `obligations_of_cmt_with_theories` 只接受 `Implementation`，拒绝 `Partial_implementation` / `Partial_interface`；测试覆盖 ill-typed case | MVP 已完成 | 增加错误信息和 dune 集成 |
 | B. Module theory | 用 module/signature 管理 predicates 和 axioms | 支持 predicate/axiom/lemma、abstract sorts、alias chain，以及具名 applicative/unit-generative functor theory；应用会克隆 result theory 并连接参数 theory | Functor MVP 已完成 | parameterized abstract sorts、nested/first-class functor 与 destructive substitution |
-| B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v5 保存 OCaml version、unit/digest、abstract sorts、aliases、functor templates 和 proof metadata | MVP 已完成 | 设计非 `Marshal` 的长期稳定格式 |
-| B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | `.mli` 支持 `refined.lemma`；导出前按顺序检查 VC；`.rmi` v3 保存 checked lemma、VC digest、solver identity/timeout 和依赖，客户端分别报告 provenance | MVP 已完成 | 可选 Z3 proof/外部 proof assistant certificate 与小型 replay kernel |
+| B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v6 为 OCaml cache；稳定 RPA1 sidecar 保存 unit/interface/proof records 并强制匹配 | Stable proof sidecar 完成 | theory cache 的非 Marshal 长期格式 |
+| B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | Artifact 保存 statement/VC SHA-256、完整 SMT、solver/timeout/依赖；小型 kernel 校验并重解 | Replay MVP 已完成 | 原生 Z3/外部 assistant certificate kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | First-class identity、named deep regions、affine consume、borrow/transfer、frame 与 relational ghosts 已组合 | Region-typed relational heap/outcome MVP 完成 | ownership polymorphism 与 region inference |
 | C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、递归 measure、relational outcomes/witnesses、typed ADT ghosts 与 frame rules 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | observable identity 与 separation-style ownership domain |
@@ -198,4 +198,9 @@ recursive frontier spec；producer 的 recursive fields 必须由同 region prov
 `consumes_regions` 通过 origin tracking 拒绝 double consume、use-after-consume 和 borrowed-alias consume。
 Pattern match 消费旧 root，并为 recursive subfields 创建新 region origins。
 
-roadmap 的下一实现步骤是稳定 proof artifact 格式与小型 replay kernel。
+稳定 proof artifact 格式与小型 replay kernel 已完成。RPA1 是版本化 netstring sidecar，绑定 canonical
+lemma statement、完整 SMT VC、两类 SHA-256、solver/timeout 和 checked dependency order。Replay 先做有界
+parse、digest/拓扑校验，再以当前 Z3 重解全部 VC。`.rmi` 升到 v6，import 必须携带内容完全一致的 sidecar；
+Marshal 只作为 OCaml-specific theory cache。RPA1 是 replay record，而非原生 solver proof certificate。
+
+roadmap 的下一实现步骤是基于 VC/theory digest 的增量验证缓存。

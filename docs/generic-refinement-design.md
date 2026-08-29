@@ -201,7 +201,13 @@ consumes the old root and assigns fresh same-region origins to recursive subfiel
 tracking that rejects double consumption, use-after-consume, and consumption after an aliasing borrow. This avoids
 introducing untrusted or non-terminating recursive SMT axioms.
 
-The next implementation slice is a stable proof-artifact format and a small replay kernel.
+Stable replay artifacts are now emitted as RPA1 netstring sidecars. Each record binds a canonical typed lemma
+statement, the complete SMT VC, SHA-256 digests, solver/timeout metadata, trusted axioms and ordered checked
+dependencies. The replay kernel validates framing, digests and dependency topology before re-solving every VC.
+v6 `.rmi` caches must match their sidecars exactly. This is a solver replay record, not yet a native proof
+certificate.
+
+The next implementation slice is an incremental verification cache keyed by VC and theory digests.
 
 Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
 all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.

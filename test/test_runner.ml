@@ -19,6 +19,12 @@ let require expected obligation =
   | `Invalid, (Valid | Unknown _) ->
       failwith (obligation.name ^ " should be invalid")
 
+let () =
+  if
+    proof_digest "abc"
+    <> "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  then failwith "proof artifact SHA-256 implementation is incorrect"
+
 let test_compositional_judgment () =
   let module Typing = Refined_ir.Typing_judgment in
   let left =
@@ -862,6 +868,10 @@ let () =
   run
     "ocamlc -bin-annot -I . -c ../examples/lemma_client.ml -o lemma_client.cmo";
   write_rmi ~cmti:"lemma_theory.cmti" ~output:"lemma_theory.rmi";
+  if not (Sys.file_exists "lemma_theory.rmi.rpa") then
+    failwith "stable proof artifact sidecar was not emitted";
+  if replay_proof "lemma_theory.rmi.rpa" <> 2 then
+    failwith "proof replay returned the wrong lemma count";
   obligations_of_cmt_with_theories ~theories:[ "lemma_theory.rmi" ]
     "lemma_client.cmt"
   |> List.iter (fun obligation ->
@@ -878,8 +888,18 @@ let () =
       | [ first; second ] ->
           if first.lemma_name <> "Lemma_theory.not_q_implies_not_p" then
             failwith "verification artifact names the wrong lemma";
-          if String.length first.vc_digest <> 32 then
+          if first.artifact_version <> 1 then
+            failwith "verification artifact has the wrong format version";
+          if String.length first.statement_digest <> 64 then
+            failwith "verification artifact has no statement digest";
+          if first.statement = "" then
+            failwith "verification artifact has no canonical statement";
+          if first.digest_algorithm <> "sha256" then
+            failwith "verification artifact has the wrong digest algorithm";
+          if String.length first.vc_digest <> 64 then
             failwith "verification artifact has no VC digest";
+          if not (contains first.vc_smt "(check-sat)") then
+            failwith "verification artifact does not contain its replay VC";
           if not (contains first.solver "Z3") then
             failwith "verification artifact has no solver identity";
           if first.timeout_seconds <> 10 then
@@ -896,11 +916,53 @@ let () =
       if not (contains obligation.smt "; checked lemma:") then
         failwith "checked lemma was not asserted in the client SMT theory";
       require `Valid obligation);
+  let read_file path =
+    let channel = open_in_bin path in
+    Fun.protect
+      ~finally:(fun () -> close_in channel)
+      (fun () -> really_input_string channel (in_channel_length channel))
+  in
+  let write_file path contents =
+    let channel = open_out_bin path in
+    Fun.protect
+      ~finally:(fun () -> close_out channel)
+      (fun () -> output_string channel contents)
+  in
+  let replace_once text pattern replacement =
+    let rec find index =
+      if index + String.length pattern > String.length text then raise Not_found
+      else if String.sub text index (String.length pattern) = pattern then index
+      else find (index + 1)
+    in
+    let index = find 0 in
+    String.sub text 0 index ^ replacement
+    ^ String.sub text
+        (index + String.length pattern)
+        (String.length text - index - String.length pattern)
+  in
+  let tampered =
+    replace_once (read_file "lemma_theory.rmi.rpa") "check-sat" "check-sax"
+  in
+  write_file "lemma_theory.tampered.rpa" tampered;
+  (match replay_proof "lemma_theory.tampered.rpa" with
+  | _ -> failwith "tampered proof artifact replayed successfully"
+  | exception Location.Error _ -> ());
+  write_file "lemma_theory_tampered.rmi" (read_file "lemma_theory.rmi");
+  write_file "lemma_theory_tampered.rmi.rpa" tampered;
+  (match
+     obligations_of_cmt_with_theories
+       ~theories:[ "lemma_theory_tampered.rmi" ]
+       "lemma_client.cmt"
+   with
+  | _ -> failwith "client imported a tampered proof sidecar"
+  | exception Location.Error _ -> ());
   run
     "ocamlc -bin-annot -c ../examples/invalid_lemma_theory.mli -o \
      invalid_lemma_theory.cmi";
   if Sys.file_exists "invalid_lemma_theory.rmi" then
     Sys.remove "invalid_lemma_theory.rmi";
+  if Sys.file_exists "invalid_lemma_theory.rmi.rpa" then
+    Sys.remove "invalid_lemma_theory.rmi.rpa";
   (match
      write_rmi ~cmti:"invalid_lemma_theory.cmti"
        ~output:"invalid_lemma_theory.rmi"
@@ -908,7 +970,9 @@ let () =
   | () -> failwith "an invalid lemma was exported"
   | exception Location.Error _ ->
       if Sys.file_exists "invalid_lemma_theory.rmi" then
-        failwith "failed lemma checking left an .rmi artifact");
+        failwith "failed lemma checking left an .rmi artifact";
+      if Sys.file_exists "invalid_lemma_theory.rmi.rpa" then
+        failwith "failed lemma checking left a proof sidecar");
   run
     "ocamlc -bin-annot -c ../examples/slicing_theory.mli -o slicing_theory.cmi";
   run
