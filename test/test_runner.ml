@@ -85,9 +85,81 @@ let test_hindley_evars () =
   | Ok () | Error (Shape_mismatch _) ->
       failwith "Hindley evar occurs-check did not reject a cyclic solution"
 
+let test_higher_sorted_hindley_application () =
+  let open Refined_ir.Generic_refinement in
+  let int_sort = Base Refined_ir.Typed_core.S_int in
+  let predicate_sort = Arrow (int_sort, Base S_bool) in
+  let indexed predicate =
+    Refined
+      {
+        base = "IntPredicate";
+        index_sort = predicate_sort;
+        index = predicate;
+        predicate = Boolean true;
+      }
+  in
+  let positive =
+    Lambda ("value", int_sort, Greater (Variable "value", Integer 0))
+  in
+  let negated =
+    Lambda
+      ("value", int_sort, Not (Apply (Generic "property", Variable "value")))
+  in
+  let scheme =
+    Forall
+      ( { name = "property"; mode = Hindley; sort = predicate_sort },
+        Mono (Function (indexed (Generic "property"), indexed negated)) )
+  in
+  (match elaborate_application scheme [ indexed positive ] with
+  | Error _ -> failwith "higher-sorted Hindley application did not elaborate"
+  | Ok elaboration ->
+      if
+        elaboration.instantiations
+        <> [ { generic = "property"; refinement = positive } ]
+      then failwith "ghost refinement instantiation was not synthesized";
+      let expected_result =
+        indexed
+          (Lambda
+             ("value", int_sort, Not (Greater (Variable "value", Integer 0))))
+      in
+      if elaboration.result <> expected_result then
+        failwith "Hindley instantiation was not substituted and beta-reduced";
+      if List.length elaboration.constraints <> 1 then
+        failwith "application checking did not retain argument constraints");
+  let output_only =
+    Forall
+      ( { name = "property"; mode = Hindley; sort = predicate_sort },
+        Mono
+          (Function
+             ( Refined
+                 {
+                   base = "int";
+                   index_sort = int_sort;
+                   index = Integer 0;
+                   predicate = Boolean true;
+                 },
+               indexed (Generic "property") )) )
+  in
+  (match well_formed output_only with
+  | Error (Ill_formed_hindley "property") -> ()
+  | Ok () | Error _ ->
+      failwith "output-only Hindley generic was accepted as value-dependent");
+  let horn =
+    Forall
+      ( { name = "property"; mode = Horn; sort = predicate_sort },
+        Mono
+          (Function (indexed (Generic "property"), indexed (Generic "property")))
+      )
+  in
+  match elaborate_application horn [ indexed positive ] with
+  | Error (Horn_not_supported "property") -> ()
+  | Ok _ | Error _ ->
+      failwith "Horn generic was not kept behind its solver boundary"
+
 let () =
   test_compositional_judgment ();
   test_hindley_evars ();
+  test_higher_sorted_hindley_application ();
   let compile source output =
     let command =
       Printf.sprintf "ocamlc -bin-annot -c %s -o %s.cmo" (Filename.quote source)

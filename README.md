@@ -182,11 +182,11 @@ well-founded measure、checked lemma 或有限展开显式引入。
 
 详细语义见 `docs/design.md`。推荐顺序：
 
-1. 实现 higher-sorted Hindley generic schemes 与 application elaboration；
-2. 加入 Horn generic constraints 和 solver；
-3. 函数 summary、递归 SCC、termination measure 与 checked lemma；
-4. 参数化用户 ADT 的按使用点 monomorphisation；
-5. functor/theory transformer 与 generativity。
+1. 在 `.mli/.rmi` theory surface 暴露 Hindley generic schemes；
+2. 将 resolved OCaml calls 接入 generic application elaboration；
+3. 加入 Horn generic constraints 和 solver；
+4. 函数 summary、递归 SCC、termination measure 与 checked lemma；
+5. 参数化用户 ADT 的按使用点 monomorphisation。
 
 当前模块边界：
 
@@ -201,3 +201,7 @@ well-founded measure、checked lemma 或有限展开显式引入。
 IR 还导出 `Refinement_domain.S`、`Typing_judgment.Make` 与 `Evar_context.Make`。当前 Safety/Coverage
 验证已经通过 compositional subsumption judgment 生成，而 use-site theory specialization 使用带
 occurs-check 的 evar unifier。设计依据与后续 Hindley/Horn 边界见 `docs/generic-refinement-design.md`。
+
+`Generic_refinement` 进一步提供 higher-sorted refinement terms、Hindley/Horn schemes 与 application
+elaboration。Hindley generic 必须出现在 value-dependent input index；成功调用会返回显式 ghost
+instantiations、替换后的结果类型和 argument subtyping constraints。
