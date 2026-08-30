@@ -17,14 +17,33 @@ jobs:
 
       - uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 5.3.0
-          dune-cache: true
+          ocaml-compiler: "5.3.0"
+          cache: true
+
+      - name: Restore locked dependencies
+        id: opam-deps-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            _opam
+            ~/.opam/download-cache
+          key: opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.3.0-${{ hashFiles('refined_ocaml.opam.locked') }}
+          restore-keys: |
+            opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.3.0-
 
       - name: Install locked formatting dependencies
         run: opam install . --deps-only --with-test --locked --yes
+
+      - name: Save locked dependencies
+        if: steps.opam-deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            _opam
+            ~/.opam/download-cache
+          key: ${{ steps.opam-deps-cache.outputs.cache-primary-key }}
 
       - name: Format OCaml and Dune files
         run: opam exec -- dune fmt
 
       - uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a
-
