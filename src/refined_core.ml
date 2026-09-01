@@ -37,7 +37,7 @@ let write_rmi ~cmti ~output =
               "lemma `%s` could not be checked:\n%s" obligation.name reason)
       lemmas obligations
   in
-  Ocaml_5_3_frontend.write_rmi ~verify ~cmti ~output
+  Ocaml_5_5_frontend.write_rmi ~verify ~cmti ~output
 
 let replay_proof path =
   let bundle =

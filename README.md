@@ -9,7 +9,7 @@
 每个 ADT 默认编码为 uninterpreted sort；
 constructor、recognizer 和 selector 都是 uninterpreted symbols，代数性质由可查看的 axioms 给出。
 
-当前 versioned frontend 针对 OCaml 5.3.0；运行验证还需要 `z3` 可执行文件。
+当前 versioned frontend 针对 OCaml 5.5.0；运行验证还需要 `z3` 可执行文件。
 
 可复现环境：
 
@@ -19,7 +19,7 @@ eval "$(opam env --switch=. --set-switch)"
 dune build @refined
 ```
 
-脚本使用 `refined_ocaml.opam.locked` 安装经过测试的直接依赖。CI 在 Ubuntu/OCaml 5.3.0 上安装
+脚本使用 `refined_ocaml.opam.locked` 安装经过测试的直接依赖。CI 在 Ubuntu/OCaml 5.5.0 上安装
 Z3，并运行 build、install、完整 refinement tests 和 formatting gate。compiler-libs 升级规则见
 `docs/versioning.md`。
 
@@ -484,7 +484,7 @@ summary boundary 才重新获得 invariant。Region values 按 origin 做 affine
 root 并给 recursive fields 新 origin；double consume、use-after-consume，以及先建立 alias 再 consume 都会
 静态拒绝。
 
-OCaml 5.3 的标准 effect surface 通过 `Effect.perform` 与 `Effect.Deep.match_with` 提供。当前 frontend
+OCaml 5.5 的标准 effect surface 通过 `Effect.perform` 与 `Effect.Deep.match_with` 提供。当前 frontend
 支持 nullary operation 和 canonical abortive handler：
 
 ```ocaml
@@ -621,11 +621,11 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 模块 | 职责 |
 |---|---|
 | `refined_ocaml.ir` | 不依赖 compiler-libs 的 source span、stable Core 与 VC semantics |
-| `Ocaml_5_3_attributes` | generic refinement 与 expression attribute payload parsing |
-| `Ocaml_5_3_lowering` | Typedtree/Types/Path/Ident/Shape 到 stable Core 的 lowering |
-| `Ocaml_5_3_theory` | structure/signature 中 logic、axiom、module/functor theory 的注册 |
-| `Ocaml_5_3_rmi` | `.rmi/.rpa` cache 的原子写入、结构校验与 import |
-| `Ocaml_5_3_frontend` | OCaml 5.3 version guard、lowering/theory/RMI 的薄 façade |
+| `Ocaml_5_5_attributes` | generic refinement 与 expression attribute payload parsing |
+| `Ocaml_5_5_lowering` | Typedtree/Types/Path/Ident/Shape 到 stable Core 的 lowering |
+| `Ocaml_5_5_theory` | structure/signature 中 logic、axiom、module/functor theory 的注册 |
+| `Ocaml_5_5_rmi` | `.rmi/.rpa` cache 的原子写入、结构校验与 import |
+| `Ocaml_5_5_frontend` | OCaml 5.5 version guard、lowering/theory/RMI 的薄 façade |
 | `Vc_logic` | logic elaboration、use-site monomorphization 与 theory slicing |
 | `Heap_model` | typed heap 的 select/store、alias consistency 与 frame rules |
 | `Ownership` | returned-reference traversal、权限检查与 affine region discipline |

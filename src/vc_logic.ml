@@ -557,7 +557,14 @@ let elaborate_formula ?(scope = []) ?(expected = Typed_core.S_bool) registry env
   let constructor_arguments argument =
     match argument with
     | None -> []
-    | Some { Parsetree.pexp_desc = Pexp_tuple expressions; _ } -> expressions
+    | Some { Parsetree.pexp_desc = Pexp_tuple expressions; pexp_loc; _ } ->
+        List.map
+          (function
+            | None, expression -> expression
+            | Some _, _ ->
+                typed_error ~loc:pexp_loc
+                  "labelled tuple constructor arguments are not supported")
+          expressions
     | Some expression -> [ expression ]
   in
   let rec elaborate ?expected expression =

@@ -97,7 +97,9 @@
   ../examples/recursive_ownership_alias_invalid.ml
   ../examples/recursive_ownership_bad_tail.ml
   ../examples/conditional_resume.ml
-  ../examples/multishot_unsupported.ml))
+  ../examples/multishot_unsupported.ml
+  ../examples/ocaml_5_5_labelled_tuple.ml
+  ../examples/ocaml_5_5_external_type.ml))
 
 (executable
  (name ppx_sample)

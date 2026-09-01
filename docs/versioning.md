@@ -5,11 +5,11 @@ binary representation are not stable across OCaml releases.
 
 ## Supported version
 
-The current frontend supports exactly OCaml 5.3.0. This is enforced in four places:
+The current frontend supports exactly OCaml 5.5.0. This is enforced in four places:
 
-- `refined_ocaml.opam` constrains the compiler to `= 5.3.0`;
+- `refined_ocaml.opam` constrains the compiler to `= 5.5.0`;
 - `refined_ocaml.opam.locked` records the tested direct dependencies;
-- `dev/setup-switch.sh` creates or selects a 5.3.0 switch;
+- `dev/setup-switch.sh` creates or selects a 5.5.0 switch;
 - the versioned frontend rejects a runtime compiler-version mismatch.
 
 An `.rmi` also records `Sys.ocaml_version` and the corresponding `.cmi` digest. A client rejects an `.rmi`

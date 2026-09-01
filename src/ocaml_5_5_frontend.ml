@@ -1,7 +1,7 @@
 open Refined_ir
 open Refined_common
 
-let supported_ocaml_version = "5.3.0"
+let supported_ocaml_version = "5.5.0"
 
 let ensure_supported_version () =
   if Sys.ocaml_version <> supported_ocaml_version then
@@ -9,8 +9,8 @@ let ensure_supported_version () =
       "refinedOCaml frontend supports OCaml %s, but is running under OCaml %s"
       supported_ocaml_version Sys.ocaml_version
 
-open Ocaml_5_3_lowering
-open Ocaml_5_3_theory
+open Ocaml_5_5_lowering
+open Ocaml_5_5_theory
 
 let typed_program_of_structure ?registry structure =
   let registry = Option.value registry ~default:(new_typed_registry ()) in
@@ -44,12 +44,12 @@ let typed_program_of_structure ?registry structure =
   Typed_core.{ registry; functions = functions structure }
 
 let write_rmi ~verify ~cmti ~output =
-  Ocaml_5_3_rmi.write_rmi ~ensure_supported_version
+  Ocaml_5_5_rmi.write_rmi ~ensure_supported_version
     ~new_registry:new_typed_registry
     ~register_signature_theories:typed_register_signature_theories ~verify ~cmti
     ~output
 
-let load_rmi_into = Ocaml_5_3_rmi.load_rmi_into
+let load_rmi_into = Ocaml_5_5_rmi.load_rmi_into
 
 let program_of_cmt ~theories filename =
   ensure_supported_version ();

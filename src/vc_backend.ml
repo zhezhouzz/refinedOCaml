@@ -101,7 +101,7 @@ let lemma_obligations registry lemmas =
     lemmas
 
 let obligations_of_cmt_with_theories ~theories filename =
-  let program = Ocaml_5_3_frontend.program_of_cmt ~theories filename in
+  let program = Ocaml_5_5_frontend.program_of_cmt ~theories filename in
   let analysis = Function_analysis.analyze program in
   List.concat_map
     (fun function_def ->

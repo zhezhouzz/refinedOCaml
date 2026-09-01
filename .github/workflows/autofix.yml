@@ -17,7 +17,7 @@ jobs:
 
       - uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: "5.3.0"
+          ocaml-compiler: "5.5.0"
           cache: true
 
       - name: Restore locked dependencies
@@ -27,9 +27,9 @@ jobs:
           path: |
             _opam
             ~/.opam/download-cache
-          key: opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.3.0-${{ hashFiles('refined_ocaml.opam.locked') }}
+          key: opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.5.0-${{ hashFiles('refined_ocaml.opam.locked') }}
           restore-keys: |
-            opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.3.0-
+            opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.5.0-
 
       - name: Install locked formatting dependencies
         run: opam install . --deps-only --with-test --locked --yes
