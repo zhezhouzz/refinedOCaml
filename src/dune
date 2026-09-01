@@ -22,8 +22,13 @@
  (modules
   refined_common
   proof_artifact_io
+  ocaml_5_3_rmi
   ocaml_5_3_frontend
   solver_backend
+  vc_logic
+  heap_model
+  ownership
   vc_backend
   refined_core)
+ (private_modules ocaml_5_3_rmi vc_logic heap_model ownership)
  (libraries refined_ir compiler-libs.common digestif unix))

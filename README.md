@@ -621,8 +621,12 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 模块 | 职责 |
 |---|---|
 | `refined_ocaml.ir` | 不依赖 compiler-libs 的 source span、stable Core 与 VC semantics |
-| `Ocaml_5_3_frontend` | 唯一接触 Typedtree/Types/Path/Ident/Shape/Cmt_format 的版本层 |
-| `Vc_backend` | Core/logic 到 SMT obligation 的编码与 use-site specialization |
+| `Ocaml_5_3_frontend` | Typedtree/Types/Path/Ident/Shape 到 stable Core 的版本层 |
+| `Ocaml_5_3_rmi` | `.rmi/.rpa` cache 的原子写入、结构校验与 import |
+| `Vc_logic` | logic elaboration、use-site monomorphization 与 theory slicing |
+| `Heap_model` | typed heap 的 select/store、alias consistency 与 frame rules |
+| `Ownership` | returned-reference traversal、权限检查与 affine region discipline |
+| `Vc_backend` | pure/relational Core 到最终 SMT obligation 的编排与编码 |
 | `Solver_backend` | 有 timeout 的 Z3 process 与 verdict 解释 |
 | `Refined_core` | 保持现有公共 API 的薄 façade |
 
