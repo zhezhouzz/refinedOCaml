@@ -24,7 +24,7 @@ let rec surface_list expression =
   | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> []
   | Pexp_construct
       ( { txt = Lident "::"; _ },
-        Some { pexp_desc = Pexp_tuple [ head; tail ]; _ } ) ->
+        Some { pexp_desc = Pexp_tuple [ (None, head); (None, tail) ]; _ } ) ->
       head :: surface_list tail
   | _ -> typed_error ~loc:expression.pexp_loc "expected an OCaml list literal"
 
@@ -137,7 +137,8 @@ let surface_refined_type ~loc ~generics expression =
 
 let surface_type_tuple ~loc ~generics expression =
   match expression.Parsetree.pexp_desc with
-  | Pexp_tuple [ base; sort; index; predicate ] ->
+  | Pexp_tuple [ (None, base); (None, sort); (None, index); (None, predicate) ]
+    ->
       let record =
         Ast_helper.Exp.record
           [
@@ -181,7 +182,7 @@ let generic_scheme_of_attribute attribute =
             surface_list generics_expression
             |> List.map (fun expression ->
                 match expression.pexp_desc with
-                | Pexp_tuple [ name; sort ] ->
+                | Pexp_tuple [ (None, name); (None, sort) ] ->
                     let name = string_constant name in
                     {
                       name;

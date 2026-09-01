@@ -22,11 +22,11 @@
  (modules
   refined_common
   proof_artifact_io
-  ocaml_5_3_attributes
-  ocaml_5_3_lowering
-  ocaml_5_3_theory
-  ocaml_5_3_rmi
-  ocaml_5_3_frontend
+  ocaml_5_5_attributes
+  ocaml_5_5_lowering
+  ocaml_5_5_theory
+  ocaml_5_5_rmi
+  ocaml_5_5_frontend
   solver_backend
   vc_logic
   heap_model
@@ -38,10 +38,10 @@
   vc_backend
   refined_core)
  (private_modules
-  ocaml_5_3_attributes
-  ocaml_5_3_lowering
-  ocaml_5_3_theory
-  ocaml_5_3_rmi
+  ocaml_5_5_attributes
+  ocaml_5_5_lowering
+  ocaml_5_5_theory
+  ocaml_5_5_rmi
   vc_logic
   heap_model
   ownership

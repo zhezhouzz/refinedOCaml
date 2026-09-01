@@ -2,7 +2,7 @@
 set -euo pipefail
 
 switch_name="${1:-.}"
-ocaml_package="ocaml-base-compiler.5.3.0"
+ocaml_package="ocaml-base-compiler.5.5.0"
 
 if ! command -v opam >/dev/null 2>&1; then
   echo "error: opam is required" >&2
@@ -22,8 +22,8 @@ fi
 
 eval "$(opam env --switch="${switch_name}" --set-switch)"
 
-if [ "$(ocamlc -version)" != "5.3.0" ]; then
-  echo "error: refinedOCaml requires OCaml 5.3.0; selected $(ocamlc -version)" >&2
+if [ "$(ocamlc -version)" != "5.5.0" ]; then
+  echo "error: refinedOCaml requires OCaml 5.5.0; selected $(ocamlc -version)" >&2
   exit 1
 fi
 

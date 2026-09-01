@@ -482,6 +482,10 @@ let integration_suite () =
     "typed_recursive_ownership_bad_tail";
   compile "../examples/conditional_resume.ml" "typed_conditional_resume";
   compile "../examples/multishot_unsupported.ml" "typed_multishot_unsupported";
+  compile "../examples/ocaml_5_5_labelled_tuple.ml"
+    "typed_ocaml_5_5_labelled_tuple";
+  compile "../examples/ocaml_5_5_external_type.ml"
+    "typed_ocaml_5_5_external_type";
   compile "../examples/outcome_coverage.ml" "typed_outcome_coverage";
   compile "../examples/outcome_coverage_invalid.ml"
     "typed_outcome_coverage_invalid";
@@ -836,6 +840,12 @@ let integration_suite () =
       require `Valid obligation);
   (match obligations_of_cmt "typed_multishot_unsupported.cmt" with
   | _ -> failwith "sequential multi-shot continuation was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_ocaml_5_5_labelled_tuple.cmt" with
+  | _ -> failwith "an unsupported OCaml 5.5 labelled tuple was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_ocaml_5_5_external_type.cmt" with
+  | _ -> failwith "an unsupported OCaml 5.5 external type was accepted"
   | exception Location.Error _ -> ());
   obligations_of_cmt "typed_recursive_bad_measure.cmt"
   |> List.iter (require `Invalid);

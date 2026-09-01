@@ -5,14 +5,14 @@ on:
   pull_request:
 
 jobs:
-  ocaml-5-3:
+  ocaml-5-5:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
       - uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: "5.3.0"
+          ocaml-compiler: "5.5.0"
           cache: true
 
       - name: Restore locked dependencies
@@ -22,9 +22,9 @@ jobs:
           path: |
             _opam
             ~/.opam/download-cache
-          key: opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.3.0-${{ hashFiles('refined_ocaml.opam.locked') }}
+          key: opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.5.0-${{ hashFiles('refined_ocaml.opam.locked') }}
           restore-keys: |
-            opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.3.0-
+            opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.5.0-
 
       - name: Install Z3
         run: |
@@ -44,7 +44,7 @@ jobs:
           key: ${{ steps.opam-deps-cache.outputs.cache-primary-key }}
 
       - name: Verify compiler boundary
-        run: test "$(opam exec -- ocamlc -version)" = "5.3.0"
+        run: test "$(opam exec -- ocamlc -version)" = "5.5.0"
 
       - name: Build and test
         run: opam exec -- dune build @all @install @refined

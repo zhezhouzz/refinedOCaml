@@ -2,8 +2,8 @@ open Refined_ir
 open Refined_common
 open Parsetree
 open Asttypes
-open Ocaml_5_3_attributes
-open Ocaml_5_3_lowering
+open Ocaml_5_5_attributes
+open Ocaml_5_5_lowering
 
 let attribute_named name attribute = attribute.Parsetree.attr_name.txt = name
 
@@ -56,7 +56,14 @@ let rec logic_sort_of_core_type registry scope core_type =
           | None -> S_app ({ key = name; display = name }, arguments)))
   | Ptyp_var name -> S_var ("a_" ^ smt_identifier name)
   | Ptyp_tuple elements ->
-      S_tuple (List.map (logic_sort_of_core_type registry scope) elements)
+      S_tuple
+        (List.map
+           (function
+             | None, element -> logic_sort_of_core_type registry scope element
+             | Some _, element ->
+                 typed_error ~loc:element.ptyp_loc
+                   "labelled tuples are not supported in theory sorts")
+           elements)
   | _ -> typed_error ~loc:core_type.ptyp_loc "unsupported sort in theory axiom"
 
 let logic_sort_of_string registry scope ~loc text =
@@ -70,7 +77,7 @@ let rec expression_list expression =
   | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> []
   | Pexp_construct
       ( { txt = Lident "::"; _ },
-        Some { pexp_desc = Pexp_tuple [ head; tail ]; _ } ) ->
+        Some { pexp_desc = Pexp_tuple [ (None, head); (None, tail) ]; _ } ) ->
       head :: expression_list tail
   | _ -> typed_error ~loc:expression.pexp_loc "expected an OCaml list literal"
 
@@ -106,7 +113,7 @@ let theory_statement_of_attribute ~attribute_name ~kind registry scope attribute
           expression_list (required "vars")
           |> List.map (fun expression ->
               match expression.pexp_desc with
-              | Pexp_tuple [ name; sort ] ->
+              | Pexp_tuple [ (None, name); (None, sort) ] ->
                   ( string_constant name,
                     logic_sort_of_string registry scope ~loc:sort.pexp_loc
                       (string_constant sort) )

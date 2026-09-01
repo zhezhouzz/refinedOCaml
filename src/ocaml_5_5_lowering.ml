@@ -2,7 +2,7 @@ open Refined_ir
 open Refined_common
 open Parsetree
 open Asttypes
-open Ocaml_5_3_attributes
+open Ocaml_5_5_attributes
 
 let symbol_of_ident ?display ident =
   let name = Ident.name ident in
@@ -45,7 +45,15 @@ let rec typed_sort_of_type type_expr =
           List.map typed_sort_of_type arguments )
   | Types.Tconstr (path, arguments, _) ->
       S_app (symbol_of_path path, List.map typed_sort_of_type arguments)
-  | Types.Ttuple elements -> S_tuple (List.map typed_sort_of_type elements)
+  | Types.Ttuple elements ->
+      S_tuple
+        (List.map
+           (function
+             | None, element -> typed_sort_of_type element
+             | Some _, _ ->
+                 typed_error ~loc:Location.none
+                   "labelled tuple types are not supported by the 5.5 frontend")
+           elements)
   | Types.Tvar name | Types.Tunivar name ->
       let suffix =
         match name with
@@ -55,7 +63,7 @@ let rec typed_sort_of_type type_expr =
       S_var ("a_" ^ suffix)
   | Types.Tpoly (body, _) -> typed_sort_of_type body
   | Types.Tlink body -> typed_sort_of_type body
-  | Types.Tarrow _ ->
+  | Types.Tarrow _ | Types.Tfunctor _ ->
       typed_error ~loc:Location.none
         "higher-order values are not part of the MVP logical sort language"
   | Types.Tobject _ | Types.Tfield _ | Types.Tnil | Types.Tsubst _
@@ -184,11 +192,14 @@ let typed_register_types registry structure =
           { owner; constructors = [ constructor ] }
           :: registry.datatype_templates
     | Ttype_abstract | Ttype_open -> ()
+    | Ttype_external _ ->
+        typed_error ~loc:declaration.typ_loc
+          "external type declarations are not supported by the 5.5 frontend"
   in
   visit_structure structure
 
 let typed_lookup_constructor registry ~loc
-    (description : Types.constructor_description) =
+    (description : Data_types.constructor_description) =
   match
     Hashtbl.find_opt registry.Typed_core.constructors_by_uid
       (uid_key description.cstr_uid)
@@ -209,7 +220,7 @@ let rec typed_pattern registry (pattern : Typedtree.pattern) =
   | Typedtree.Tpat_any -> Pat_any
   | Tpat_var (ident, name, _) ->
       Pat_var (symbol_of_ident ~display:name.txt ident)
-  | Tpat_alias (inner, ident, name, _) ->
+  | Tpat_alias (inner, ident, name, _, _) ->
       Pat_alias
         (typed_pattern registry inner, symbol_of_ident ~display:name.txt ident)
   | Tpat_constant (Const_int value) -> Pat_int value
@@ -238,7 +249,14 @@ let rec typed_pattern registry (pattern : Typedtree.pattern) =
   | Tpat_tuple patterns ->
       Pat_tuple
         ( typed_sort_of_type pattern.pat_type,
-          List.map (typed_pattern registry) patterns )
+          List.map
+            (function
+              | None, pattern -> typed_pattern registry pattern
+              | Some _, pattern ->
+                  typed_error ~loc:pattern.pat_loc
+                    "labelled tuple patterns are not supported by the 5.5 \
+                     frontend")
+            patterns )
   | _ -> typed_error ~loc:pattern.pat_loc "unsupported pattern in the MVP Core"
 
 let value_pattern_of_computation ~loc pattern =
@@ -247,17 +265,18 @@ let value_pattern_of_computation ~loc pattern =
   | _ ->
       typed_error ~loc "exception/effect patterns are not part of the MVP Core"
 
-let typed_field registry ~loc (description : Types.label_description) =
+let typed_field registry ~loc (description : Data_types.label_description) =
   match
     Hashtbl.find_opt registry.Typed_core.fields_by_uid
-      (uid_key description.Types.lbl_uid)
+      (uid_key description.Data_types.lbl_uid)
   with
   | Some (constructor, index) ->
       ( {
           constructor with
           arguments =
             Array.to_list description.lbl_all
-            |> List.map (fun label -> typed_sort_of_type label.Types.lbl_arg);
+            |> List.map (fun label ->
+                typed_sort_of_type label.Data_types.lbl_arg);
           result = typed_sort_of_type description.lbl_res;
         },
         index )
@@ -312,17 +331,28 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                result = typed_sort_of_type expression.exp_type;
              },
              arguments ))
-  | Texp_tuple expressions -> make (Tuple (List.map recurse expressions))
+  | Texp_tuple expressions ->
+      make
+        (Tuple
+           (List.map
+              (function
+                | None, expression -> recurse expression
+                | Some _, expression ->
+                    typed_error ~loc:expression.exp_loc
+                      "labelled tuple expressions are not supported by the 5.5 \
+                       frontend")
+              expressions))
   | Texp_apply
       ( { exp_desc = Texp_ident (path, _, _); _ },
         [
           ( Nolabel,
-            Some { exp_desc = Texp_construct (_, exception_, payloads); _ } );
+            Typedtree.Arg
+              { exp_desc = Texp_construct (_, exception_, payloads); _ } );
         ] )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | "raise" :: _ -> true
          | _ -> false -> (
-      match exception_.Types.cstr_tag with
+      match exception_.Data_types.cstr_tag with
       | Cstr_extension _ ->
           let payload =
             match payloads with
@@ -343,12 +373,13 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       ( { exp_desc = Texp_ident (path, _, _); _ },
         [
           ( Nolabel,
-            Some { exp_desc = Texp_construct (_, operation, payloads); _ } );
+            Typedtree.Arg
+              { exp_desc = Texp_construct (_, operation, payloads); _ } );
         ] )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | "perform" :: _ -> true
          | _ -> false -> (
-      match operation.Types.cstr_tag with
+      match operation.Data_types.cstr_tag with
       | Cstr_extension _ ->
           let payload =
             match payloads with
@@ -368,9 +399,9 @@ let rec typed_expression registry (expression : Typedtree.expression) =
   | Texp_apply
       ( { exp_desc = Texp_ident (path, _, _); _ },
         [
-          (Nolabel, Some thunk);
-          (Nolabel, Some _argument);
-          (Nolabel, Some handler);
+          (Nolabel, Typedtree.Arg thunk);
+          (Nolabel, Typedtree.Arg _argument);
+          (Nolabel, Typedtree.Arg handler);
         ] )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | "match_with" :: _ -> true
@@ -392,7 +423,7 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       let field name =
         Array.to_list fields
         |> List.find_map (fun (description, definition) ->
-            if description.Types.lbl_name <> name then None
+            if description.Data_types.lbl_name <> name then None
             else
               match definition with
               | Typedtree.Overridden (_, value) -> Some value
@@ -455,7 +486,7 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                             _;
                           };
                         ] ) ) -> (
-                    match operation.Types.cstr_tag with
+                    match operation.Data_types.cstr_tag with
                     | Cstr_extension _ ->
                         let payload_binder =
                           match payload_patterns with
@@ -471,8 +502,8 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                           | Texp_apply
                               ( { exp_desc = Texp_ident (path, _, _); _ },
                                 [
-                                  (Nolabel, Some _continuation);
-                                  (Nolabel, Some value);
+                                  (Nolabel, Typedtree.Arg _continuation);
+                                  (Nolabel, Typedtree.Arg value);
                                 ] )
                             when match
                                    List.rev
@@ -508,7 +539,8 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       make (Handle (recurse thunk_body, handlers))
   | Texp_apply
       ( { exp_desc = Texp_ident (path, _, _); _ },
-        [ (Nolabel, Some { exp_desc = Texp_ident (cell, _, _); _ }) ] )
+        [ (Nolabel, Typedtree.Arg { exp_desc = Texp_ident (cell, _, _); _ }) ]
+      )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | "!" :: _ -> true
          | _ -> false ->
@@ -516,15 +548,16 @@ let rec typed_expression registry (expression : Typedtree.expression) =
   | Texp_apply
       ( { exp_desc = Texp_ident (path, _, _); _ },
         [
-          (Nolabel, Some { exp_desc = Texp_ident (cell, _, _); _ });
-          (Nolabel, Some value);
+          (Nolabel, Typedtree.Arg { exp_desc = Texp_ident (cell, _, _); _ });
+          (Nolabel, Typedtree.Arg value);
         ] )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | ":=" :: _ -> true
          | _ -> false ->
       make (Assign (symbol_of_path cell, recurse value))
   | Texp_apply
-      ({ exp_desc = Texp_ident (path, _, _); _ }, [ (Nolabel, Some initial) ])
+      ( { exp_desc = Texp_ident (path, _, _); _ },
+        [ (Nolabel, Typedtree.Arg initial) ] )
     when match List.rev (String.split_on_char '.' (Path.name path)) with
          | "ref" :: _ -> true
          | _ -> false ->
@@ -534,11 +567,11 @@ let rec typed_expression registry (expression : Typedtree.expression) =
       let arguments =
         List.map
           (function
-            | Nolabel, Some argument -> recurse argument
-            | _, Some _ ->
+            | Nolabel, Typedtree.Arg argument -> recurse argument
+            | _, Typedtree.Arg _ ->
                 typed_error ~loc:expression.exp_loc
                   "labelled applications are not part of the MVP Core"
-            | _, None ->
+            | _, Typedtree.Omitted () ->
                 typed_error ~loc:expression.exp_loc
                   "partial labelled applications are not part of the MVP Core")
           arguments
@@ -562,7 +595,7 @@ let rec typed_expression registry (expression : Typedtree.expression) =
                 exp_desc =
                   Texp_apply
                     ( { exp_desc = Texp_ident (path, _, _); _ },
-                      [ (Nolabel, Some initial) ] );
+                      [ (Nolabel, Typedtree.Arg initial) ] );
                 _;
               };
             _;
@@ -613,7 +646,7 @@ let rec typed_expression registry (expression : Typedtree.expression) =
         match pattern.pat_desc with
         | Tpat_any -> Exn_any
         | Tpat_construct (_, description, payload_patterns, _) -> (
-            match description.Types.cstr_tag with
+            match description.Data_types.cstr_tag with
             | Cstr_extension _ ->
                 let payload_binder =
                   match payload_patterns with
@@ -745,7 +778,15 @@ let contract_ghost_sort registry ~loc text =
                 | [ sort ] -> sort
                 | [] -> typed_error ~loc "unknown ghost sort `%s`" text
                 | _ -> typed_error ~loc "ambiguous ghost sort `%s`" text)))
-    | Ptyp_tuple elements -> S_tuple (List.map convert elements)
+    | Ptyp_tuple elements ->
+        S_tuple
+          (List.map
+             (function
+               | None, element -> convert element
+               | Some _, element ->
+                   typed_error ~loc:element.ptyp_loc
+                     "labelled tuples are not supported in refinement sorts")
+             elements)
     | _ -> typed_error ~loc "unsupported ghost sort `%s`" text
   in
   let lexbuf = Lexing.from_string text in
@@ -1012,7 +1053,7 @@ let typed_bound_variable (pattern : Typedtree.pattern) =
       Some
         ( symbol_of_ident ~display:name.txt ident,
           typed_sort_of_type pattern.pat_type )
-  | Tpat_alias ({ pat_desc = Tpat_any; _ }, ident, name, _) ->
+  | Tpat_alias ({ pat_desc = Tpat_any; _ }, ident, name, _, _) ->
       Some
         ( symbol_of_ident ~display:name.txt ident,
           typed_sort_of_type pattern.pat_type )

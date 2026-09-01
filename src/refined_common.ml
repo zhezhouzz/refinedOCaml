@@ -55,9 +55,9 @@ let qualified_name scope name = String.concat "." (scope @ [ name ])
 
 let rec longident_name = function
   | Longident.Lident name -> name
-  | Ldot (prefix, name) -> longident_name prefix ^ "." ^ name
+  | Ldot (prefix, name) -> longident_name prefix.txt ^ "." ^ name.txt
   | Lapply (left, right) ->
-      longident_name left ^ "(" ^ longident_name right ^ ")"
+      longident_name left.txt ^ "(" ^ longident_name right.txt ^ ")"
 
 let string_constant expression =
   match expression.pexp_desc with
@@ -102,7 +102,9 @@ let contract_of_attribute attribute =
             | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> []
             | Pexp_construct
                 ( { txt = Lident "::"; _ },
-                  Some { pexp_desc = Pexp_tuple [ head; tail ]; _ } ) ->
+                  Some
+                    { pexp_desc = Pexp_tuple [ (None, head); (None, tail) ]; _ }
+                ) ->
                 head :: expression_list tail
             | _ ->
                 error ~loc:expression.pexp_loc
@@ -115,7 +117,7 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ parameter; witness ] ->
+                    | Pexp_tuple [ (None, parameter); (None, witness) ] ->
                         (string_constant parameter, string_constant witness)
                     | _ ->
                         error ~loc:expression.pexp_loc
@@ -150,7 +152,7 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ name; sort ] ->
+                    | Pexp_tuple [ (None, name); (None, sort) ] ->
                         let name = string_constant name in
                         let sort = string_constant sort in
                         (name, sort)
@@ -165,7 +167,7 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ exception_; predicate ] ->
+                    | Pexp_tuple [ (None, exception_); (None, predicate) ] ->
                         (string_constant exception_, string_constant predicate)
                     | _ ->
                         error ~loc:expression.pexp_loc
@@ -179,7 +181,7 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ cell; predicate ] ->
+                    | Pexp_tuple [ (None, cell); (None, predicate) ] ->
                         (string_constant cell, string_constant predicate)
                     | _ ->
                         error ~loc:expression.pexp_loc
@@ -198,7 +200,7 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ cell; predicate ] ->
+                    | Pexp_tuple [ (None, cell); (None, predicate) ] ->
                         (string_constant cell, string_constant predicate)
                     | _ ->
                         error ~loc:expression.pexp_loc
@@ -251,7 +253,7 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ operation; predicate ] ->
+                    | Pexp_tuple [ (None, operation); (None, predicate) ] ->
                         (string_constant operation, string_constant predicate)
                     | _ ->
                         error ~loc:expression.pexp_loc
@@ -262,7 +264,7 @@ let contract_of_attribute attribute =
             expression_list expression
             |> List.map (fun expression ->
                 match expression.pexp_desc with
-                | Pexp_tuple [ name; value ] ->
+                | Pexp_tuple [ (None, name); (None, value) ] ->
                     (string_constant name, string_constant value)
                 | _ ->
                     error ~loc:expression.pexp_loc
@@ -275,13 +277,26 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ kind; name; post; witnesses ] ->
+                    | Pexp_tuple
+                        [
+                          (None, kind);
+                          (None, name);
+                          (None, post);
+                          (None, witnesses);
+                        ] ->
                         ( string_constant kind,
                           string_constant name,
                           string_constant post,
                           string_pairs witnesses,
                           None )
-                    | Pexp_tuple [ kind; name; post; witnesses; relation ] ->
+                    | Pexp_tuple
+                        [
+                          (None, kind);
+                          (None, name);
+                          (None, post);
+                          (None, witnesses);
+                          (None, relation);
+                        ] ->
                         ( string_constant kind,
                           string_constant name,
                           string_constant post,
@@ -299,7 +314,13 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ kind; name; cell; predicate ] ->
+                    | Pexp_tuple
+                        [
+                          (None, kind);
+                          (None, name);
+                          (None, cell);
+                          (None, predicate);
+                        ] ->
                         ( string_constant kind,
                           string_constant name,
                           string_constant cell,
@@ -316,7 +337,7 @@ let contract_of_attribute attribute =
                 expression_list expression
                 |> List.map (fun expression ->
                     match expression.pexp_desc with
-                    | Pexp_tuple [ kind; name; cell ] ->
+                    | Pexp_tuple [ (None, kind); (None, name); (None, cell) ] ->
                         ( string_constant kind,
                           string_constant name,
                           string_constant cell )

@@ -6,7 +6,7 @@
 
 | 方向 | 目标 | 当前进展 | 状态 | 下一步 |
 |---|---|---|---|---|
-| A. 插入时机 | 在 OCaml normal typecheck 之后运行 refinement checker，并使用 Typedtree typing information | 已从 `.cmt/.cmti` 读取 Typedtree；PPX 只检查并保留 annotation；OCaml API 全部隔离在 `Ocaml_5_3_frontend` | 工程化完成 | 新 OCaml release 必须新增 versioned frontend 和 CI entry |
+| A. 插入时机 | 在 OCaml normal typecheck 之后运行 refinement checker，并使用 Typedtree typing information | 已从 `.cmt/.cmti` 读取 Typedtree；PPX 只检查并保留 annotation；OCaml API 全部隔离在 `Ocaml_5_5_frontend` | 工程化完成 | 新 OCaml release 必须新增 versioned frontend 和 CI entry |
 | A. 普通类型错误处理 | 只接受完整 typed implementation，拒绝 partial Typedtree | `obligations_of_cmt_with_theories` 只接受 `Implementation`，拒绝 `Partial_implementation` / `Partial_interface`；测试覆盖 ill-typed case | MVP 已完成 | 增加错误信息和 dune 集成 |
 | B. Module theory | 用 module/signature 管理 predicates 和 axioms | 支持 predicate/axiom/lemma、abstract sorts、alias chain，以及具名 applicative/unit-generative functor theory；应用会克隆 result theory 并连接参数 theory | Functor MVP 已完成 | parameterized abstract sorts、nested/first-class functor 与 destructive substitution |
 | B. Separate compilation | 防止 stale 或未导入的 refinement theory 被误用 | `.rmi` v6 为 OCaml cache；稳定 RPA1 sidecar 保存 unit/interface/proof records 并强制匹配 | Stable proof sidecar 完成 | theory cache 的非 Marshal 长期格式 |
@@ -19,7 +19,7 @@
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
 | OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 first-class `ref`、named recursive regions、borrow/transfer、affine consume、relational `match` | Region ownership + linear continuation MVP | region polymorphism/inference；显式 clone API 后再做 multi-shot |
 | Solver 工程 | 生成 SMT-LIB，调用 Z3，输出 model | 已支持 `--emit-smt`、Z3 `sat/unsat/unknown`、model 输出 | MVP 已完成 | 记录 solver version、timeout、enabled axioms；改进 `unknown` 诊断 |
-| 工程可复现性 | 让项目能在干净环境中稳定构建和测试 | 已有本机 OCaml 5.3.0 switch、direct-dependency lock、setup script、GitHub Actions、format gate、autofix.ci、deterministic property fuzzing 和版本升级规约 | 已完成 | CI 通过后保护主分支；新增 frontend 时扩展版本矩阵 |
+| 工程可复现性 | 让项目能在干净环境中稳定构建和测试 | 已有本机 OCaml 5.5.0 switch、direct-dependency lock、setup script、GitHub Actions、format gate、autofix.ci、deterministic property fuzzing 和版本升级规约 | 已完成 | CI 通过后保护主分支；新增 frontend 时扩展版本矩阵 |
 
 ## 阅读计划
 
@@ -83,11 +83,11 @@ target-totality 和 pointwise-soundness obligations，避免把“存在某个�
 
 ### 5. 工程可复现基线已经建立
 
-仓库现在固定 OCaml 5.3.0，提交 `refined_ocaml.opam.locked`，提供 `dev/setup-switch.sh`，并由 GitHub
+仓库现在固定 OCaml 5.5.0，提交 `refined_ocaml.opam.locked`，提供 `dev/setup-switch.sh`，并由 GitHub
 Actions 运行 `@all/@install/@refined/@fmt/@fuzz`，autofix.ci 自动提交 `dune fmt` 修复。测试由 Alcotest
 分组；fuzz job 用 QCheck2 固定 seed 跑 20,000 个 evar/Hindley/Horn/function-SCC/theory-slice cases，失败时
 缩减 case seed，并用图闭包作 oracle。CLI 使用 Cmdliner 子命令。`refined_ocaml.ir`
-不依赖 compiler-libs；所有版本敏感 API 集中在 `Ocaml_5_3_frontend`。升级流程记录在
+不依赖 compiler-libs；所有版本敏感 API 集中在 `Ocaml_5_5_frontend`。升级流程记录在
 `docs/versioning.md`。
 
 Generic Refinement Types 的 Hindley/Horn surface、result propagation 与 mutually-recursive symbolic
