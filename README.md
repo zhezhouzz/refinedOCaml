@@ -23,6 +23,16 @@ dune build @refined
 Z3，并运行 build、install、完整 refinement tests 和 formatting gate。compiler-libs 升级规则见
 `docs/versioning.md`。
 
+Property fuzz tests：
+
+```sh
+dune build @fuzz
+REFINED_FUZZ_CASES=20000 REFINED_FUZZ_SEED=1592594470 dune build @fuzz --force
+```
+
+Fuzzer 默认使用固定 seed 跑 5,000 cases；CI 跑 20,000 cases。失败信息包含 seed 和 case index，
+可以原样重放。
+
 `autofix.ci` workflow 会在 pull request 和 `main` push 上运行 `dune fmt`，并把格式修复提交回来源
 分支。仓库管理员需要先为该仓库安装 [autofix.ci GitHub App](https://autofix.ci/setup)；workflow
 自身只申请 `contents: read`，上传修复时使用固定 commit 的官方 action。
@@ -175,6 +185,7 @@ well-founded measure、checked lemma 或有限展开显式引入。
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | mutation、exception、algebraic effects | 明确拒绝 | 需要 relational outcome semantics |
 | GADT、object、polymorphic variant | 明确拒绝 | 需要 feature-specific theory |
+| Evar/Hindley property fuzzing | 支持 | deterministic `@fuzz` + CI replay seed |
 
 未支持的 Typedtree node 会报错。
 

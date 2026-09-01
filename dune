@@ -3,4 +3,5 @@
  (deps
   (alias_rec runtest)
   test/ppx_sample.exe
-  test/ppx_theory_sample.exe))
+  test/ppx_theory_sample.exe
+  test/fuzz_runner.exe))

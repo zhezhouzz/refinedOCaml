@@ -19,7 +19,7 @@
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 的 type variable 可按 obligation 实例化；普通多态函数可 first-order inlining | 部分完成 | 用户参数化 ADT 的 monomorphisation；处理 polymorphic recursion 的拒绝/抽象机制 |
 | OCaml 语法覆盖 | 支持实用 OCaml 子集，并明确拒绝未建模特性 | 支持 int/bool、算术、if、简单 let、tuple、单态 ADT/record、exhaustive match；拒绝高阶、递归、mutation、exception、effect 等 | MVP 已完成 | 按优先级扩展 match/records/modules，再考虑 effectful core |
 | Solver 工程 | 生成 SMT-LIB，调用 Z3，输出 model | 已支持 `--emit-smt`、Z3 `sat/unsat/unknown`、model 输出 | MVP 已完成 | 记录 solver version、timeout、enabled axioms；改进 `unknown` 诊断 |
-| 工程可复现性 | 让项目能在干净环境中稳定构建和测试 | 已有本机 OCaml 5.3.0 switch、direct-dependency lock、setup script、GitHub Actions、format gate、autofix.ci 和版本升级规约 | 已完成 | CI 通过后保护主分支；新增 frontend 时扩展版本矩阵 |
+| 工程可复现性 | 让项目能在干净环境中稳定构建和测试 | 已有本机 OCaml 5.3.0 switch、direct-dependency lock、setup script、GitHub Actions、format gate、autofix.ci、deterministic property fuzzing 和版本升级规约 | 已完成 | CI 通过后保护主分支；新增 frontend 时扩展版本矩阵 |
 
 ## 阅读计划
 
@@ -82,7 +82,8 @@ forall result. post(result) => exists input. pre(input) /\ result = f(input)
 ### 5. 工程可复现基线已经建立
 
 仓库现在固定 OCaml 5.3.0，提交 `refined_ocaml.opam.locked`，提供 `dev/setup-switch.sh`，并由 GitHub
-Actions 运行 `@all/@install/@refined/@fmt`，autofix.ci 自动提交 `dune fmt` 修复。`refined_ocaml.ir` 不依赖 compiler-libs；所有版本敏感 API
+Actions 运行 `@all/@install/@refined/@fmt/@fuzz`，autofix.ci 自动提交 `dune fmt` 修复。fuzz job 固定
+seed 跑 20,000 个 evar/Hindley elaboration cases。`refined_ocaml.ir` 不依赖 compiler-libs；所有版本敏感 API
 集中在 `Ocaml_5_3_frontend`。升级流程记录在 `docs/versioning.md`。
 
 Generic Refinement Types 的 Hindley IR 阶段已经落实。roadmap 的下一实现步骤切换为 module theory
