@@ -621,8 +621,19 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 模块 | 职责 |
 |---|---|
 | `refined_ocaml.ir` | 不依赖 compiler-libs 的 source span、stable Core 与 VC semantics |
-| `Ocaml_5_3_frontend` | 唯一接触 Typedtree/Types/Path/Ident/Shape/Cmt_format 的版本层 |
-| `Vc_backend` | Core/logic 到 SMT obligation 的编码与 use-site specialization |
+| `Ocaml_5_3_attributes` | generic refinement 与 expression attribute payload parsing |
+| `Ocaml_5_3_lowering` | Typedtree/Types/Path/Ident/Shape 到 stable Core 的 lowering |
+| `Ocaml_5_3_theory` | structure/signature 中 logic、axiom、module/functor theory 的注册 |
+| `Ocaml_5_3_rmi` | `.rmi/.rpa` cache 的原子写入、结构校验与 import |
+| `Ocaml_5_3_frontend` | OCaml 5.3 version guard、lowering/theory/RMI 的薄 façade |
+| `Vc_logic` | logic elaboration、use-site monomorphization 与 theory slicing |
+| `Heap_model` | typed heap 的 select/store、alias consistency 与 frame rules |
+| `Ownership` | returned-reference traversal、权限检查与 affine region discipline |
+| `Vc_encoding` | 各类 VC 共用的 expression、constraint、datatype 与 relational SMT 编码 |
+| `Pure_vc` | 普通 over-approximate pure VC 生成 |
+| `Outcome_vc` | exception/relational outcome safety VC 生成 |
+| `Coverage_vc` | under-approximate outcome coverage VC 生成 |
+| `Vc_backend` | lemma obligation 与三类 VC generator 的薄编排层 |
 | `Solver_backend` | 有 timeout 的 Z3 process 与 verdict 解释 |
 | `Refined_core` | 保持现有公共 API 的薄 façade |
 

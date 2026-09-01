@@ -60,8 +60,9 @@ Together these pieces correspond to the paper's FA-hdl and ≡inst rules.
 
 ## Current boundary
 
-Higher-sorted Hindley schemes are now exposed through `[@@refined.hindley]` in `.mli` files and serialized in
-`.rmi` version 2. Call arguments carry their current type through `[@refined.type]`. The versioned frontend parses
+Higher-sorted Hindley schemes are now exposed through `[@@refined.hindley]` in `.mli` files and were introduced in
+`.rmi` version 2; the current cache format is version 6. Call arguments carry their current type through
+`[@refined.type]`. The versioned frontend parses
 both attributes, and the VC backend runs elaboration for the resolved OCaml `Path`, emits an uninterpreted runtime
 summary and checks elaborated side conditions. Ghost instantiations are retained in diagnostics.
 
