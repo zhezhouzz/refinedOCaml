@@ -7,6 +7,7 @@ let obligations_of_cmt_with_theories =
   Vc_backend.obligations_of_cmt_with_theories
 
 let proof_digest = Proof_artifact_io.sha256
+let solver_timeout_seconds = Solver_backend.timeout_seconds
 
 let write_rmi ~cmti ~output =
   let verify registry lemmas =

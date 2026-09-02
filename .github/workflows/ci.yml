@@ -47,6 +47,8 @@ jobs:
         run: test "$(opam exec -- ocamlc -version)" = "5.5.0"
 
       - name: Build and test
+        env:
+          REFINED_SOLVER_TIMEOUT_SECONDS: 60
         run: opam exec -- dune build @all @install @refined
 
       - name: Property fuzz tests

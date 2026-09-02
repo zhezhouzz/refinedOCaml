@@ -975,7 +975,7 @@ let integration_suite () =
             failwith "verification artifact does not contain its replay VC";
           if not (contains first.solver "Z3") then
             failwith "verification artifact has no solver identity";
-          if first.timeout_seconds <> 10 then
+          if first.timeout_seconds <> solver_timeout_seconds then
             failwith "verification artifact has the wrong timeout";
           if first.trusted_axioms <> [ "Lemma_theory.p_implies_q" ] then
             failwith "verification artifact lost trusted dependencies";

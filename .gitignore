@@ -34,8 +34,8 @@ setup.log
 # Dune generated files
 *.install
 
-# Local OPAM switch
-_opam/
+# Local OPAM switch (directory or link to an external switch)
+_opam
 
 # refinedOCaml generated verification artifacts
 /work/

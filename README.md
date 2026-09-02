@@ -30,6 +30,13 @@ dune build @fuzz
 REFINED_FUZZ_CASES=20000 REFINED_FUZZ_SEED=1592594470 dune build @fuzz --force
 ```
 
+SMT queries time out after 10 seconds by default. Set a larger positive value
+for slower machines or larger verification suites:
+
+```sh
+REFINED_SOLVER_TIMEOUT_SECONDS=60 dune build @refined
+```
+
 Fuzzer 由 QCheck2 驱动，默认使用固定 master seed 跑 5,000 cases；CI 跑 20,000 cases。每个 case 使用
 独立 seed，失败时 QCheck2 会缩减该 seed，并输出可重放的最小失败 seed。
 
