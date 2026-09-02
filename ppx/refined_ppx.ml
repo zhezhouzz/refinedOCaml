@@ -1,9 +1,5 @@
 open Ppxlib
 
-let rec longident_last = function
-  | Longident.Lident name | Ldot (_, name) -> name
-  | Lapply (_, right) -> longident_last right
-
 let is_refined attribute =
   match attribute.attr_name.txt with
   | "refined.over" | "refined.under" | "refined.coverage" | "refined.measure" ->
@@ -23,7 +19,7 @@ let validate_contract attribute =
             };
           ] ->
           let names =
-            List.map (fun ({ txt; _ }, _) -> longident_last txt) fields
+            List.map (fun ({ txt; _ }, _) -> Longident.last_exn txt) fields
           in
           if not (List.mem "pre" names && List.mem "post" names) then
             Location.raise_errorf ~loc:attribute.attr_loc

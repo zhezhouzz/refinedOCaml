@@ -17,11 +17,7 @@ let symbol_of_path path =
   | Path.Pident ident -> symbol_of_ident ident
   | _ ->
       let key = Path.name path in
-      let display =
-        match List.rev (String.split_on_char '.' key) with
-        | name :: _ -> name
-        | [] -> key
-      in
+      let display = Path.last path in
       Typed_core.{ key; display }
 
 let symbol_of_uid ~name uid =
@@ -902,13 +898,8 @@ let typed_measure attributes arguments =
 
 let typed_normalize expression =
   let open Typed_core in
-  let counter = ref 0 in
   let fresh sort refinement loc =
-    let index = !counter in
-    incr counter;
-    let symbol =
-      { key = "refined_anf_" ^ string_of_int index; display = "_anf" }
-    in
+    let symbol = symbol_of_ident (Ident.create_local "_anf") in
     (symbol, { desc = Var symbol; sort; refinement; loc })
   in
   let rec atoms expressions continuation =
