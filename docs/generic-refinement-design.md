@@ -26,26 +26,27 @@ explicit ghost arguments before the soundness translation.
 
 ## refinedOCaml interfaces
 
-The compiler-independent `refined_ocaml.ir` library now contains three layers.
+The compiler-independent `refined_ocaml.ir` library keeps the reusable generic-refinement algorithms and the
+stable typed Core. It does not expose speculative interfaces for alternative VC representations.
 
-### Refinement domain
+### Ablated VC abstractions
 
-`Refinement_domain.S` abstracts predicates, constraints, boolean composition, quantification, equality and
-rendering. `Refinement_domain.Smt` is the current SMT-LIB string implementation. A future symbolic AST or Horn
-domain can implement the same interface without changing the typing skeleton.
+An earlier implementation split root VC construction across `Refinement_domain.S`, `Typing_judgment.Make`, and
+`Vc_semantics`. An ablation found that the domain had one implementation (SMT-LIB strings), production created a
+single leaf judgment and immediately extracted its formula, and the semantics interface only dispatched on the
+two constructors of `mode`. No expression traversal or constraint accumulation used the generic judgment.
 
-### Compositional typing judgment
-
-`Typing_judgment.Make` is parameterized by a refinement domain and denotation. It supports syntax-directed
-synthesis, branch composition, checking and explicit subsumption constraints. The two current denotations are:
+Those layers were removed. `Pure_vc` now constructs the two formulas directly:
 
 ```text
 Safety:   assumptions ∧ actual ⇒ expected
 Coverage: expected ⇒ assumptions ∧ actual
 ```
 
-`Vc_semantics` uses these judgments in the production verification path. It is no longer responsible for
-hard-coding the direction of refinement implication.
+SMT boolean and quantifier formatting remains shared as ordinary functions. This keeps the semantically
+important direction visible at the call site without claiming an unexercised extension point. The generated SMT
+is byte-for-byte unchanged for the safety/coverage comparison fixture, and the full verification matrix remains
+the behavioral guard.
 
 ### Hindley schemes and evar context
 
@@ -55,7 +56,7 @@ applications, `Hindley`/`Horn` generic modes, refined function schemes, well-for
 application elaboration. Hindley applications create evars, unify them from value-dependent input indices,
 require a complete context, emit ghost instantiations, substitute the result, and beta-reduce before returning it.
 
-`Vc_backend` also uses the generic evar context for obligation-local polymorphic predicate/axiom instantiation.
+`Vc_logic` also uses the generic evar context for obligation-local polymorphic predicate/axiom instantiation.
 Together these pieces correspond to the paper's FA-hdl and ≡inst rules.
 
 ## Current boundary
@@ -210,8 +211,8 @@ certificate.
 
 The next implementation slice is an incremental verification cache keyed by VC and theory digests.
 
-Coverage remains a distinct denotation. Sharing the syntax-directed skeleton does not justify silently reversing
-all typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
+Coverage remains a distinct VC interpretation. Sharing Core traversal does not justify silently reversing all
+typing rules: witness scope, nondeterministic choice, recursion and effects still need mode-specific laws.
 
 ## Property fuzzing
 

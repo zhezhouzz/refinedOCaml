@@ -571,17 +571,13 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   let choices_declarations =
     List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices
   in
-  let exists_choices formula =
-    Refinement_domain.Smt.exists choices_declarations formula
-  in
+  let exists_choices formula = smt_exists choices_declarations formula in
   let ghost_declarations =
     List.map
       (fun (_name, term, sort) -> (term, typed_smt_sort sort))
       coverage_ghosts
   in
-  let exists_ghosts formula =
-    Refinement_domain.Smt.exists ghost_declarations formula
-  in
+  let exists_ghosts formula = smt_exists ghost_declarations formula in
   let ordinary_input_declarations =
     List.map (fun (_, key, sort) -> (key, typed_smt_sort sort)) formals
   in
@@ -591,13 +587,9 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   let input_declarations =
     ordinary_input_declarations @ reference_input_declarations
   in
-  let exists_inputs formula =
-    Refinement_domain.Smt.exists input_declarations formula
-  in
+  let exists_inputs formula = smt_exists input_declarations formula in
   let forall_inputs_and_ghosts formula =
-    Refinement_domain.Smt.forall
-      (ghost_declarations @ input_declarations)
-      formula
+    smt_forall (ghost_declarations @ input_declarations) formula
   in
   let let_arguments target_env witnesses formula =
     let bindings =
@@ -826,7 +818,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         let reachable =
           match normal_witnesses with
           | Some witnesses ->
-              Refinement_domain.Smt.exists reference_input_declarations
+              smt_exists reference_input_declarations
                 (let_arguments normal_witness_env witnesses reachable)
           | None -> exists_inputs reachable
         in
@@ -954,7 +946,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             let reachable =
               if witnesses = [] then exists_inputs reachable
               else
-                Refinement_domain.Smt.exists reference_input_declarations
+                smt_exists reference_input_declarations
                   (let_arguments witness_env witnesses reachable)
             in
             app "=>" [ target_condition; exists_ghosts reachable ])

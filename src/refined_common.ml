@@ -602,6 +602,21 @@ let and_ terms =
 let or_ terms =
   match terms with [] -> "false" | [ term ] -> term | _ -> app "or" terms
 
+let smt_binders declarations =
+  "("
+  ^ String.concat " "
+      (List.map
+         (fun (name, sort) -> Printf.sprintf "(%s %s)" name sort)
+         declarations)
+  ^ ")"
+
+let smt_quantify quantifier declarations formula =
+  if declarations = [] then formula
+  else app quantifier [ smt_binders declarations; formula ]
+
+let smt_forall declarations formula = smt_quantify "forall" declarations formula
+let smt_exists declarations formula = smt_quantify "exists" declarations formula
+
 let binary_operator = function
   | "+" -> Some "+"
   | "-" -> Some "-"

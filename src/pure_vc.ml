@@ -163,24 +163,66 @@ let typed_obligation (program : Typed_core.program) analysis
            (String.concat " " arguments)
            result))
     generic_calls.runtime_declarations;
-  Vc_semantics.encode contract.mode
-    {
-      buffer;
-      arguments =
-        List.map
-          (fun (symbol, sort) ->
-            (smt_identifier symbol.Typed_core.key, typed_smt_sort sort))
-          function_def.arguments;
-      choices =
-        List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices;
-      result_sort = typed_smt_sort function_def.result;
-      body = body.term;
-      pre;
-      post;
-      assumptions = List.rev generic_calls.summary_assumptions;
-      side_conditions = List.rev generic_calls.side_conditions;
-      argument_witnesses;
-    };
+  let arguments =
+    List.map
+      (fun (symbol, sort) ->
+        (smt_identifier symbol.Typed_core.key, typed_smt_sort sort))
+      function_def.arguments
+  in
+  let choices =
+    List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices
+  in
+  let assumptions = List.rev generic_calls.summary_assumptions in
+  let side_conditions = List.rev generic_calls.side_conditions in
+  let declare (name, sort) =
+    Buffer.add_string buffer
+      (Printf.sprintf "(declare-const %s %s)\n" name sort)
+  in
+  let add_side_conditions obligation =
+    match side_conditions with
+    | [] -> obligation
+    | _ -> and_ [ app "=>" [ pre; and_ side_conditions ]; obligation ]
+  in
+  (match contract.mode with
+  | Over ->
+      List.iter declare arguments;
+      List.iter declare choices;
+      let actual = app "=" [ "result"; body.term ] in
+      let obligation =
+        app "=>" [ and_ ((pre :: assumptions) @ [ actual ]); post ]
+        |> add_side_conditions
+      in
+      Buffer.add_string buffer
+        (Printf.sprintf "(assert (not (let ((result %s)) %s)))\n" body.term
+           obligation)
+  | Under ->
+      let missing = "missing_result" in
+      let body_formula =
+        and_ (pre :: app "=" [ missing; body.term ] :: assumptions)
+      in
+      let actual =
+        match argument_witnesses with
+        | [] -> smt_exists (arguments @ choices) body_formula
+        | bindings ->
+            let bindings =
+              "("
+              ^ String.concat " "
+                  (List.map
+                     (fun (name, term) -> Printf.sprintf "(%s %s)" name term)
+                     bindings)
+              ^ ")"
+            in
+            smt_exists choices
+              (Printf.sprintf "(let %s %s)" bindings body_formula)
+      in
+      let obligation = app "=>" [ post; actual ] |> add_side_conditions in
+      if side_conditions <> [] then (
+        List.iter declare arguments;
+        List.iter declare choices);
+      Buffer.add_string buffer
+        (Printf.sprintf "(declare-const %s %s)\n" missing
+           (typed_smt_sort function_def.result));
+      Buffer.add_string buffer (Printf.sprintf "(assert (not %s))\n" obligation));
   Buffer.add_string buffer "(check-sat)\n(get-model)\n";
   {
     name = function_def.symbol.display;
