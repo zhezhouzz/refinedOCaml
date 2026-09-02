@@ -15,7 +15,7 @@ coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/basic/duplicat
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/basic/sortedlist_simpl.ml	benchmarks/coveragetype/adapted.ml	adapted-verified
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/BankersQueue.ml	benchmarks/coveragetype/adapted.ml	adapted-verified
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/BatchedQueue.ml	benchmarks/coveragetype/adapted.ml	adapted-verified
-coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/LeftistHeap.ml	benchmarks/coveragetype/adapted.ml	adapted-verified
+coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/LeftistHeap.ml	benchmarks/coveragetype/leftist_heap.ml	semantic-verified
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/UnbalanceSet.ml	benchmarks/coveragetype/adapted.ml	adapted-verified
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/UniqueList.ml	benchmarks/coveragetype/adapted.ml	adapted-verified
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/stream.ml	benchmarks/coveragetype/adapted.ml	adapted-verified

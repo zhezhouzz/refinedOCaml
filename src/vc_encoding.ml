@@ -3616,9 +3616,6 @@ let typed_datatype_prelude program function_def =
     line "; %s: %s" provenance axiom.axiom_name;
     line "(assert %s)" assertion
   in
-  List.rev program.registry.axioms |> List.iter (emit_statement "trusted axiom");
-  List.rev program.registry.checked_lemmas
-  |> List.iter (emit_statement "checked lemma");
   List.iter
     (fun (datatype : Typed_core.datatype) ->
       let result = typed_smt_sort datatype.Typed_core.owner in
@@ -3712,4 +3709,7 @@ let typed_datatype_prelude program function_def =
             rebuilt)
         datatype.constructors)
     program.registry.datatypes;
+  List.rev program.registry.axioms |> List.iter (emit_statement "trusted axiom");
+  List.rev program.registry.checked_lemmas
+  |> List.iter (emit_statement "checked lemma");
   Buffer.contents buffer

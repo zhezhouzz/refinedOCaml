@@ -28,7 +28,6 @@ let[@refined.predicate] bankers_queue (_value : int list * int list) : bool =
 let[@refined.predicate] batched_queue (_value : int list * int list) : bool =
   false
 
-let[@refined.predicate] leftist_heap (_value : heap) : bool = false
 let[@refined.predicate] unbalanced_set (_value : set) : bool = false
 let[@refined.predicate] unique_list (_value : int list) : bool = false
 let[@refined.predicate] finite_stream (_value : stream) : bool = false
@@ -79,11 +78,6 @@ let[@refined.coverage
           int list | batched_queue v}";
      }] batched_queue_port (target : int list * int list) : int list * int list
     =
-  target
-
-let[@refined.coverage
-     { type_ = "target:{v:heap | leftist_heap v} -> {v:heap | leftist_heap v}" }] leftist_heap_port
-    (target : heap) : heap =
   target
 
 let[@refined.coverage

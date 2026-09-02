@@ -177,8 +177,9 @@ let typed_specialize_program (program : Typed_core.program)
         match List.assoc_opt name env with
         | Some sort -> sort
         | None ->
-            typed_error ~loc:expression.pexp_loc "unknown logical variable `%s`"
-              name)
+            typed_error ~loc:expression.pexp_loc
+              "unknown logical variable `%s` (in scope: %s)" name
+              (String.concat ", " (List.map fst env)))
     | Pexp_constant { pconst_desc = Pconst_integer _; _ } -> Typed_core.S_int
     | Pexp_construct ({ txt = Lident ("true" | "false"); _ }, None) -> S_bool
     | Pexp_construct ({ txt; _ }, _) -> (
@@ -610,7 +611,10 @@ let elaborate_formula ?(scope = []) ?(expected = Typed_core.S_bool) registry env
                     desc = Application (Logic logic_symbol, []);
                     sort = logic_symbol.result;
                   }
-            | _ -> typed_error ~loc "unknown logical variable `%s`" name))
+            | _ ->
+                typed_error ~loc "unknown logical variable `%s` (in scope: %s)"
+                  name
+                  (String.concat ", " (List.map fst env))))
     | Pexp_constant { pconst_desc = Pconst_integer (value, _); _ } ->
         finish ?expected ~loc
           { desc = Integer (int_of_string value); sort = Typed_core.S_int }

@@ -29,6 +29,20 @@ let lookup_abstract_sort registry scope name =
       Hashtbl.find_opt registry.Typed_core.abstract_sorts_by_name candidate)
     names
 
+let lookup_concrete_sort registry scope name =
+  let rec candidates scope =
+    match scope with
+    | [] -> [ name ]
+    | _ ->
+        qualified_name scope name
+        :: candidates (List.rev (List.tl (List.rev scope)))
+  in
+  let names = if String.contains name '.' then [ name ] else candidates scope in
+  List.find_map
+    (fun candidate ->
+      Hashtbl.find_opt registry.Typed_core.concrete_sorts_by_name candidate)
+    names
+
 let rec logic_sort_of_core_type registry scope core_type =
   let open Typed_core in
   match core_type.Parsetree.ptyp_desc with
@@ -53,7 +67,15 @@ let rec logic_sort_of_core_type registry scope core_type =
           | Some _ ->
               typed_error ~loc:core_type.ptyp_loc
                 "abstract sort `%s` has the wrong number of parameters" name
-          | None -> S_app ({ key = name; display = name }, arguments)))
+          | None -> (
+              match lookup_concrete_sort registry scope name with
+              | Some (S_app (symbol, parameters))
+                when List.length parameters = List.length arguments ->
+                  S_app (symbol, arguments)
+              | Some _ ->
+                  typed_error ~loc:core_type.ptyp_loc
+                    "concrete sort `%s` has the wrong number of parameters" name
+              | None -> S_app ({ key = name; display = name }, arguments))))
   | Ptyp_var name -> S_var ("a_" ^ smt_identifier name)
   | Ptyp_tuple elements ->
       S_tuple
@@ -191,12 +213,15 @@ let rec normalize_abstract_sort registry scope sort =
   | (S_int | S_bool | S_unit | S_var _) as sort -> sort
 
 let register_logic_symbol registry scope binding =
-  if
-    not
-      (List.exists
-         (attribute_named "refined.predicate")
-         binding.Typedtree.vb_attributes)
-  then ()
+  let is_predicate =
+    List.exists
+      (attribute_named "refined.predicate")
+      binding.Typedtree.vb_attributes
+  in
+  let is_logic =
+    List.exists (attribute_named "refined.logic") binding.vb_attributes
+  in
+  if not (is_predicate || is_logic) then ()
   else
     let name, ident =
       match binding.vb_pat.pat_desc with
@@ -210,7 +235,7 @@ let register_logic_symbol registry scope binding =
       List.map (normalize_abstract_sort registry scope) arguments
     in
     let result = normalize_abstract_sort registry scope result in
-    if result <> Typed_core.S_bool then
+    if is_predicate && result <> Typed_core.S_bool then
       typed_error ~loc:binding.vb_loc "logical predicate `%s` must return bool"
         name;
     let full_name = qualified_name scope name in
@@ -229,12 +254,13 @@ let register_logic_symbol registry scope binding =
 
 let register_logic_value registry scope
     (description : Typedtree.value_description) =
-  if
-    not
-      (List.exists
-         (attribute_named "refined.predicate")
-         description.val_attributes)
-  then ()
+  let is_predicate =
+    List.exists (attribute_named "refined.predicate") description.val_attributes
+  in
+  let is_logic =
+    List.exists (attribute_named "refined.logic") description.val_attributes
+  in
+  if not (is_predicate || is_logic) then ()
   else
     let name = description.val_name.txt in
     let arguments, result = arrow_sorts description.val_val.Types.val_type in
@@ -242,7 +268,7 @@ let register_logic_value registry scope
       List.map (normalize_abstract_sort registry scope) arguments
     in
     let result = normalize_abstract_sort registry scope result in
-    if result <> Typed_core.S_bool then
+    if is_predicate && result <> Typed_core.S_bool then
       typed_error ~loc:description.val_loc
         "logical predicate `%s` must return bool" name;
     let full_name = qualified_name scope name in

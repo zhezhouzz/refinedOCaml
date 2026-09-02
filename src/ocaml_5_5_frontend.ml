@@ -16,6 +16,7 @@ let typed_program_of_structure ?registry structure =
   let registry = Option.value registry ~default:(new_typed_registry ()) in
   typed_register_types registry structure;
   typed_register_theories registry structure;
+  typed_register_choices registry structure;
   let rec module_structure = function
     | { Typedtree.mod_desc = Typedtree.Tmod_structure structure; _ } ->
         Some structure

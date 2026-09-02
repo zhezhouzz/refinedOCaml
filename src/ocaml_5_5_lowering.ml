@@ -87,6 +87,8 @@ let new_typed_registry () =
       fields_by_name = Hashtbl.create 32;
       logic_by_name = Hashtbl.create 32;
       abstract_sorts_by_name = Hashtbl.create 16;
+      concrete_sorts_by_name = Hashtbl.create 16;
+      choose_symbols = Hashtbl.create 8;
       module_aliases = Hashtbl.create 16;
       functor_theories = Hashtbl.create 8;
       generic_schemes_by_name = Hashtbl.create 16;
@@ -112,22 +114,32 @@ let typed_register_types registry structure =
         module_structure inner
     | _ -> None
   in
-  let rec visit_structure structure =
+  let rec visit_structure scope structure =
     List.iter
       (fun item ->
         match item.Typedtree.str_desc with
         | Typedtree.Tstr_type (_, declarations) ->
-            List.iter register declarations
+            List.iter (register scope) declarations
         | Tstr_module binding ->
-            Option.iter visit_structure (module_structure binding.mb_expr)
+            Option.iter
+              (fun name ->
+                Option.iter
+                  (visit_structure (scope @ [ name ]))
+                  (module_structure binding.mb_expr))
+              binding.mb_name.txt
         | Tstr_recmodule bindings ->
             List.iter
               (fun (binding : Typedtree.module_binding) ->
-                Option.iter visit_structure (module_structure binding.mb_expr))
+                Option.iter
+                  (fun name ->
+                    Option.iter
+                      (visit_structure (scope @ [ name ]))
+                      (module_structure binding.mb_expr))
+                  binding.mb_name.txt)
               bindings
         | _ -> ())
       structure.Typedtree.str_items
-  and register declaration =
+  and register scope declaration =
     let owner_symbol =
       symbol_of_ident ~display:declaration.typ_name.txt declaration.typ_id
     in
@@ -137,6 +149,12 @@ let typed_register_types registry structure =
         declaration.Typedtree.typ_params
     in
     let owner = S_app (owner_symbol, parameters) in
+    let qualified = qualified_name scope declaration.typ_name.txt in
+    Hashtbl.replace registry.concrete_sorts_by_name qualified owner;
+    if
+      not (Hashtbl.mem registry.concrete_sorts_by_name declaration.typ_name.txt)
+    then
+      Hashtbl.add registry.concrete_sorts_by_name declaration.typ_name.txt owner;
     match declaration.typ_kind with
     | Typedtree.Ttype_variant declarations ->
         let constructors =
@@ -203,7 +221,7 @@ let typed_register_types registry structure =
         typed_error ~loc:declaration.typ_loc
           "external type declarations are not supported by the 5.5 frontend"
   in
-  visit_structure structure
+  visit_structure [] structure
 
 let typed_lookup_constructor registry ~loc
     (description : Data_types.constructor_description) =
@@ -595,13 +613,18 @@ let rec typed_expression registry (expression : Typedtree.expression) =
         | _ -> None
       in
       if
-        Option.exists
-          (fun description ->
-            List.exists
-              (fun attribute ->
-                attribute.Parsetree.attr_name.txt = "refined.choose")
-              description.Types.val_attributes)
-          description
+        (match callee.exp_desc with
+          | Texp_ident (path, _, _) ->
+              Hashtbl.mem registry.Typed_core.choose_symbols
+                (symbol_of_path path).key
+          | _ -> false)
+        || Option.exists
+             (fun description ->
+               List.exists
+                 (fun attribute ->
+                   attribute.Parsetree.attr_name.txt = "refined.choose")
+                 description.Types.val_attributes)
+             description
       then make (Choose arguments)
       else
         match callee.exp_desc with
@@ -1183,6 +1206,48 @@ let typed_bound_variable (pattern : Typedtree.pattern) =
         ( symbol_of_ident ~display:name.txt ident,
           typed_sort_of_type pattern.pat_type )
   | _ -> None
+
+let typed_register_choices registry structure =
+  let rec module_structure = function
+    | { Typedtree.mod_desc = Typedtree.Tmod_structure structure; _ } ->
+        Some structure
+    | { mod_desc = Tmod_constraint (inner, _, _, _); _ } ->
+        module_structure inner
+    | _ -> None
+  in
+  let rec visit structure =
+    List.iter
+      (fun item ->
+        match item.Typedtree.str_desc with
+        | Typedtree.Tstr_value (_, bindings) ->
+            List.iter
+              (fun binding ->
+                if
+                  List.exists
+                    (fun attribute ->
+                      attribute.Parsetree.attr_name.txt = "refined.choose")
+                    binding.Typedtree.vb_attributes
+                then
+                  match binding.vb_pat.pat_desc with
+                  | Typedtree.Tpat_var (ident, name, _) ->
+                      let symbol = symbol_of_ident ~display:name.txt ident in
+                      Hashtbl.replace registry.Typed_core.choose_symbols
+                        symbol.key ()
+                  | _ ->
+                      typed_error ~loc:binding.vb_pat.pat_loc
+                        "a choice primitive binding must have a simple name")
+              bindings
+        | Tstr_module binding ->
+            Option.iter visit (module_structure binding.mb_expr)
+        | Tstr_recmodule bindings ->
+            List.iter
+              (fun (binding : Typedtree.module_binding) ->
+                Option.iter visit (module_structure binding.mb_expr))
+              bindings
+        | _ -> ())
+      structure.Typedtree.str_items
+  in
+  visit structure
 
 let typed_function registry binding =
   let open Typed_core in

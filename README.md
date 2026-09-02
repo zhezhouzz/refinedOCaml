@@ -169,7 +169,8 @@ let[@refined.over
 ```
 
 如果实现改成恒定返回 `0`，safety 仍成立，但 coverage 会报告 `missing_result = 1`。
-`choose` alternatives 可以包含 heap writes、raise 或 perform。Frontend 保留两个 computation，不会按
+`choose` 既可以像上例一样由 signature 声明，也可以写成带 `[@refined.choose]` 的普通可执行
+binding；验证时两者都表示 nondeterministic choice。它的 alternatives 可以包含 heap writes、raise 或 perform。Frontend 保留两个 computation，不会按
 OCaml 普通函数实参规则预先顺序求值；Safety 将 path union 解释为 demonic choice，Coverage 将其解释为
 angelic reachability。
 
@@ -189,6 +190,10 @@ val hd : 'a list -> 'a -> bool [@@refined.predicate]
     body = "implies (hd l x) (mem l x)";
   }]
 ```
+
+返回 `bool` 的逻辑符号使用 `[@refined.predicate]`。需要在公式中返回其他一阶 sort 时使用
+`[@refined.logic]`，例如 `heap_depth : heap -> int`。这些 binding 的 OCaml body 仍可用于运行时测试；
+验证器把逻辑符号视为 uninterpreted，并只通过显式 axiom 使用其逻辑语义。
 
 `quantifiers` 按顺序保存任意交错的 `forall`/`exists` binder。下面的 statement 表示
 `forall x. exists y. forall z. y = x && witnessed x && z = z`：
