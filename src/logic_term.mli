@@ -13,3 +13,4 @@ and desc =
   | Application of head * t list
 
 val theory_symbols : t -> string list
+val datatype_symbols : t -> string list

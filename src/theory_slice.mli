@@ -1,6 +1,8 @@
 type statement = {
   name : string;
   symbols : string list;
+  triggers : string list;
+  propagates : string list;
   requires : string list;
 }
 

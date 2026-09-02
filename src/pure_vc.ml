@@ -4,70 +4,15 @@ open Refined_common
 open Vc_logic
 open Vc_encoding
 
-let eta_expand_function_result (function_def : Typed_core.function_def)
-    (contract : Typed_core.contract) =
-  match Typed_core.contract_result contract with
-  | Typed_core.Refined_base _ -> (function_def, contract)
-  | Refined_arrow _ when contract.mode = Under ->
-      typed_error_at contract.loc
-        "function-valued results in coverage contracts are not supported"
-  | result_type ->
-      let rec arguments index bindings expressions = function
-        | Typed_core.Refined_base result ->
-            (List.rev bindings, List.rev expressions, result)
-        | Refined_arrow { parameter; domain; codomain } ->
-            let sort = Typed_core.refined_sort domain in
-            let symbol =
-              Typed_core.
-                {
-                  key =
-                    function_def.symbol.key ^ ".returned_argument."
-                    ^ string_of_int index;
-                  display = parameter;
-                }
-            in
-            let expression =
-              Typed_core.
-                {
-                  desc = Var symbol;
-                  sort;
-                  refinement = None;
-                  loc = contract.loc;
-                }
-            in
-            arguments (index + 1)
-              ((symbol, sort) :: bindings)
-              (expression :: expressions)
-              codomain
-      in
-      let returned_arguments, applications, result =
-        arguments 0 [] [] result_type
-      in
-      let body =
-        Typed_core.
-          {
-            desc = Apply_value (function_def.body, applications);
-            sort = result.base_sort;
-            refinement = None;
-            loc = function_def.body.loc;
-          }
-      in
-      ( {
-          function_def with
-          arguments = function_def.arguments @ returned_arguments;
-          result = result.base_sort;
-          body;
-        },
-        {
-          contract with
-          function_arity =
-            contract.function_arity + List.length returned_arguments;
-        } )
-
 let typed_obligation (program : Typed_core.program) analysis
     (function_def : Typed_core.function_def) (contract : Typed_core.contract) =
-  let function_def, contract =
+  let original_arity = List.length function_def.arguments in
+  let function_def, contract, coverage_observation_arity =
     eta_expand_function_result function_def contract
+  in
+  let is_universal index ((symbol : Typed_core.symbol), _) =
+    contract.mode = Under
+    && (index >= original_arity || List.mem symbol.display contract.universals)
   in
   let env = contract_argument_env function_def contract in
   let formula_env =
@@ -76,17 +21,36 @@ let typed_obligation (program : Typed_core.program) analysis
         (symbol.Typed_core.display, (value.term, sort)))
       function_def.arguments env
   in
+  let universal_formula_env =
+    List.filteri
+      (fun index _ ->
+        is_universal index (List.nth function_def.arguments index))
+      formula_env
+  in
   let pre_expressions, post_expression = contract_expressions contract in
+  let existential_pre_expressions, universal_pre_expressions =
+    contract_domain_expressions contract
+    |> List.partition (fun (index, _) ->
+        not (is_universal index (List.nth function_def.arguments index)))
+    |> fun (existential, universal) ->
+    (List.map snd existential, List.map snd universal)
+  in
   let witness_expressions =
     match contract.witnesses with
     | [] -> []
     | witnesses ->
         if contract.mode <> Under then assert false;
         let names = List.map fst witnesses in
+        let existential_parameters =
+          List.filteri
+            (fun index argument ->
+              index < original_arity && not (is_universal index argument))
+            function_def.arguments
+        in
         let expected =
           List.map
             (fun ((symbol : Typed_core.symbol), _) -> symbol.display)
-            function_def.arguments
+            existential_parameters
         in
         if
           List.sort String.compare names <> List.sort String.compare expected
@@ -104,7 +68,7 @@ let typed_obligation (program : Typed_core.program) analysis
                 text
             in
             (symbol, sort, expression))
-          function_def.arguments
+          existential_parameters
   in
   let program =
     typed_specialize_program program function_def pre_expressions
@@ -126,21 +90,27 @@ let typed_obligation (program : Typed_core.program) analysis
     @ List.concat_map
         (fun (_, sort, expression) ->
           formula_theory_symbols ~expected:sort program.registry
-            [ ("result", ("missing_result", function_def.result)) ]
+            (("result", ("missing_result", function_def.result))
+            :: universal_formula_env)
             expression)
         witness_expressions
     |> List.sort_uniq String.compare
   in
   let program, _enabled_symbols = slice_program_theory program ~roots in
-  let pre =
-    and_ (List.map (typed_formula program.registry formula_env) pre_expressions)
+  let typed_pre expressions =
+    and_ (List.map (typed_formula program.registry formula_env) expressions)
   in
+  let existential_pre = typed_pre existential_pre_expressions in
+  let universal_pre = typed_pre universal_pre_expressions in
+  let pre = and_ [ existential_pre; universal_pre ] in
   let result_name =
     match contract.mode with Over -> "result" | Under -> "missing_result"
   in
   let post_env =
     let result = ("result", (result_name, function_def.result)) in
-    if witness_expressions = [] then result :: formula_env else [ result ]
+    match contract.mode with
+    | Over -> result :: formula_env
+    | Under -> result :: universal_formula_env
   in
   let post = typed_formula program.registry post_env post_expression in
   let argument_witnesses =
@@ -148,7 +118,8 @@ let typed_obligation (program : Typed_core.program) analysis
       (fun (symbol, sort, expression) ->
         ( smt_identifier symbol.Typed_core.key,
           typed_formula ~expected:sort program.registry
-            [ ("result", (result_name, function_def.result)) ]
+            (("result", (result_name, function_def.result))
+            :: universal_formula_env)
             expression ))
       witness_expressions
   in
@@ -169,6 +140,21 @@ let typed_obligation (program : Typed_core.program) analysis
         (smt_identifier symbol.Typed_core.key, typed_smt_sort sort))
       function_def.arguments
   in
+  let witness_arguments, universal_arguments =
+    List.mapi
+      (fun index argument ->
+        (is_universal index (List.nth function_def.arguments index), argument))
+      arguments
+    |> List.partition (fun (universal, _) -> not universal)
+    |> fun (existential, universal) ->
+    (List.map snd existential, List.map snd universal)
+  in
+  if
+    contract.mode = Under
+    && List.length
+         (List.filteri (fun index _ -> index >= original_arity) arguments)
+       <> coverage_observation_arity
+  then invalid_arg "coverage function-result observation arity mismatch";
   let choices =
     List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices
   in
@@ -196,13 +182,14 @@ let typed_obligation (program : Typed_core.program) analysis
         (Printf.sprintf "(assert (not (let ((result %s)) %s)))\n" body.term
            obligation)
   | Under ->
+      List.iter declare universal_arguments;
       let missing = "missing_result" in
       let body_formula =
         and_ (pre :: app "=" [ missing; body.term ] :: assumptions)
       in
       let actual =
         match argument_witnesses with
-        | [] -> smt_exists (arguments @ choices) body_formula
+        | [] -> smt_exists (witness_arguments @ choices) body_formula
         | bindings ->
             let bindings =
               "("
@@ -215,9 +202,11 @@ let typed_obligation (program : Typed_core.program) analysis
             smt_exists choices
               (Printf.sprintf "(let %s %s)" bindings body_formula)
       in
-      let obligation = app "=>" [ post; actual ] |> add_side_conditions in
+      let obligation =
+        app "=>" [ and_ [ universal_pre; post ]; actual ] |> add_side_conditions
+      in
       if side_conditions <> [] then (
-        List.iter declare arguments;
+        List.iter declare witness_arguments;
         List.iter declare choices);
       Buffer.add_string buffer
         (Printf.sprintf "(declare-const %s %s)\n" missing

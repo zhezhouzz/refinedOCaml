@@ -9,6 +9,28 @@ open Vc_encoding
 let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     (function_def : Typed_core.function_def) (contract : Typed_core.contract) =
   let module R = Relational_outcome in
+  let original_arity = List.length function_def.arguments in
+  let function_def, contract, coverage_observation_arity =
+    eta_expand_function_result function_def contract
+  in
+  let is_universal index ((symbol : Typed_core.symbol), _) =
+    index >= original_arity || List.mem symbol.display contract.universals
+  in
+  let existential_arguments, universal_arguments =
+    List.mapi
+      (fun index argument -> (is_universal index argument, argument))
+      function_def.arguments
+    |> List.partition (fun (universal, _) -> not universal)
+    |> fun (existential, universal) ->
+    (List.map snd existential, List.map snd universal)
+  in
+  if
+    List.length
+      (List.filteri
+         (fun index _ -> index >= original_arity)
+         function_def.arguments)
+    <> coverage_observation_arity
+  then invalid_arg "coverage function-result observation arity mismatch";
   let env = contract_argument_env function_def contract in
   let formula_env =
     List.map2
@@ -16,12 +38,25 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         (symbol.Typed_core.display, (value.term, sort)))
       function_def.arguments env
   in
+  let universal_formula_env =
+    List.filteri
+      (fun index _ ->
+        is_universal index (List.nth function_def.arguments index))
+      formula_env
+  in
   let parse text =
     parse_formula ~filename:contract.loc.file
       ~loc:(location_of_span contract.loc)
       text
   in
   let pre_expressions, post_expression = contract_expressions contract in
+  let existential_pre_expressions, universal_pre_expressions =
+    contract_domain_expressions contract
+    |> List.partition (fun (index, _) ->
+        not (is_universal index (List.nth function_def.arguments index)))
+    |> fun (existential, universal) ->
+    (List.map snd existential, List.map snd universal)
+  in
   let result_reference_sort = reference_content_sort function_def.result in
   let result_state_expression = Option.map parse contract.result_state in
   (match
@@ -104,9 +139,6 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   if owned_paths <> [] then
     use_returned_reference_theory generic_calls program.registry
       function_def.result;
-  if generic_calls.side_conditions <> [] then
-    typed_error_at contract.loc
-      "outcome coverage calls require constructive callee summaries";
   let required_region_expressions =
     contract.requires_regions
     |> List.concat_map (fun (name, region) ->
@@ -132,7 +164,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
         match reference_content_sort sort with
         | Some _ -> None
         | None -> Some (symbol.display, symbol.key, sort))
-      function_def.arguments
+      existential_arguments
   in
   let validate_witnesses witnesses =
     let expected = List.map (fun (name, _, _) -> name) formals in
@@ -157,6 +189,11 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   in
   let normal_witness_relation = Option.map parse contract.witness_relation in
   let reference_cells = typed_reference_arguments function_def in
+  let existential_reference_cells, _universal_reference_cells =
+    List.partition
+      (fun (name, _, _) -> not (List.mem name contract.universals))
+      reference_cells
+  in
   let ghost_names = List.map fst contract.ghosts in
   let reserved_ghost_names =
     [ "result"; "payload"; "value"; "old" ]
@@ -391,7 +428,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     :: Option.fold ~none:[]
          ~some:(fun (sort, target, _) -> [ ("result_value", (target, sort)) ])
          result_state_target
-    @ owned_result_env @ state_target_env
+    @ owned_result_env @ state_target_env @ universal_formula_env
   in
   let roots =
     generic_calls.used_theory_symbols
@@ -452,7 +489,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             List.map
               (fun (name, _, sort, target, _) -> (name, (target, sort)))
               outcome_state
-            @ payload_env
+            @ payload_env @ universal_formula_env
           in
           let witness_env = ghost_env @ target_env in
           formula_theory_symbols program.registry target_env post
@@ -544,9 +581,14 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
           ])
       required_region_expressions
   in
+  let typed_pre expressions =
+    List.map (typed_formula program.registry formula_env) expressions
+  in
+  let universal_pre = and_ (typed_pre universal_pre_expressions) in
   let pre =
     and_
-      (List.map (typed_formula program.registry formula_env) pre_expressions
+      (typed_pre existential_pre_expressions
+      @ typed_pre universal_pre_expressions
       @ required_state_posts @ required_region_posts)
   in
   let heap_declarations =
@@ -566,7 +608,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     List.map
       (fun (_name, identity, sort) ->
         (identity, typed_smt_sort (reference_sort sort)))
-      reference_cells
+      existential_reference_cells
   in
   let choices_declarations =
     List.map (fun (name, sort) -> (name, typed_smt_sort sort)) choices
@@ -742,11 +784,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     |> or_
   in
   let normal_witness_env = ghost_env @ result_target_env in
-  let normal_post_env =
-    match (normal_witness_relation, normal_witnesses) with
-    | Some _, _ | None, Some _ -> result_target_env
-    | None, None -> result_target_env @ formula_env
-  in
+  let normal_post_env = result_target_env in
   let obligations =
     let state_posts =
       List.map
@@ -781,7 +819,8 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
     in
     let target =
       and_
-        (typed_formula program.registry normal_post_env post_expression
+        (universal_pre
+         :: typed_formula program.registry normal_post_env post_expression
          :: state_posts
         @ result_posts @ owned_result_posts)
     in
@@ -842,7 +881,7 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
           List.map
             (fun (name, _, sort, target, _) -> (name, (target, sort)))
             outcome_state
-          @ payload_env
+          @ payload_env @ universal_formula_env
         in
         let witness_env = ghost_env @ target_env in
         let matching =
@@ -906,7 +945,12 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             outcome_state
         in
         let target_condition =
-          and_ (typed_formula program.registry target_env post :: state_posts)
+          and_
+            (universal_pre
+            :: typed_formula program.registry
+                 (target_env @ universal_formula_env)
+                 post
+            :: state_posts)
         in
         match witness_relation with
         | Some relation ->
@@ -952,11 +996,35 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
             app "=>" [ target_condition; exists_ghosts reachable ])
       outcomes
   in
-  let obligation = and_ (obligations @ outcome_obligations) in
+  let safety_obligations =
+    match generic_calls.side_conditions with
+    | [] -> []
+    | conditions ->
+        [
+          smt_forall
+            (ghost_declarations @ input_declarations @ choices_declarations)
+            (app "=>" [ pre; and_ (List.rev conditions) ]);
+        ]
+  in
+  let obligation =
+    and_ (safety_obligations @ obligations @ outcome_obligations)
+  in
   let buffer = Buffer.create 4096 in
   Buffer.add_string buffer
     "(set-option :produce-models true)\n(set-logic ALL)\n";
   Buffer.add_string buffer (typed_datatype_prelude program function_def);
+  List.iter
+    (fun ((symbol : Typed_core.symbol), sort) ->
+      let sort =
+        match reference_content_sort sort with
+        | Some content -> typed_smt_sort (reference_sort content)
+        | None -> typed_smt_sort sort
+      in
+      Buffer.add_string buffer
+        (Printf.sprintf "(declare-const %s %s)\n"
+           (smt_identifier symbol.key)
+           sort))
+    universal_arguments;
   Buffer.add_string buffer
     (Printf.sprintf "(declare-const missing_result %s)\n"
        (typed_smt_sort function_def.result));

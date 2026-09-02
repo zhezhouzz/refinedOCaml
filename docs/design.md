@@ -26,8 +26,8 @@ Under(P, e, Q) = ∀σ' r. Q(σ',r) ⇒ ∃σ. P(σ) ∧ Eval(e,σ,r,σ')
 over-partial   over-total   under-may   under-must
 ```
 
-当前 MVP 实现 `over-partial` 的一阶片段；递归 safety 通过 independently checked summary 和
-well-founded `int` measure 处理。确定性或有限 `choose` 纯函数支持 whole-image `under-may`；完整的
+当前实现 `over-partial` 的一阶和高阶 closure 片段；递归 safety 通过 independently checked summary
+和 well-founded `int` measure 处理。确定性或有限 `choose` 函数支持 whole-image `under-may`；完整的
 result-indexed inverse witnesses 可形成 compositional under-summary，并在 measure 下支持递归。
 
 ## 3. 合约表面语法
@@ -104,8 +104,17 @@ datatype axiom。existential type arguments skolemise，离开 branch 时不能�
 
 ### Higher-order functions
 
-函数值使用 apply relation 和 contract closure；常用直接调用保持 first-order defunctionalisation。
-under 合约需要可构造的 closure witness，不能只靠 over-style universal summary。
+函数值使用 typed contract closure；直接调用尽量保持 first-order defunctionalisation。具名函数、
+偏应用、局部/匿名函数共享语义 arrow subtyping：domain 逆变、codomain 协变，base refinement 用逻辑
+蕴含判断。
+
+under 合约区分两类 polarity。顶层函数参数是存在性的 closure witness，其 arrow specification 是
+全称的调用安全边界；抽象闭包只对程序实际进行的有限次调用引入结果 witness，并加入同一 closure
+在相等实参上的 congruence。函数值结果则逐点 eta-expand：原生成器参数仍为存在量，新增 observation
+参数为全称量，并由其 domain refinement 守卫 codomain coverage。CoverageType 风格的 indexed
+generator 还可用 `universals` 将选定的原参数标为全称 over-index，形成
+`∀ index,target. post ⇒ ∃ witness. Eval` 的 mixed-polarity VC。关系 VC 对 effectful callback 使用同一
+分层，同时排除 domain 内的异常/未处理 effect 路径。
 
 ### Objects、polymorphic variants、lazy、并发
 

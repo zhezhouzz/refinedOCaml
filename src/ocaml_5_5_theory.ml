@@ -125,8 +125,8 @@ let theory_statement_of_attribute ~attribute_name ~kind registry scope attribute
         List.iter
           (fun ({ txt; loc }, _) ->
             let name = longident_last txt in
-            if not (List.mem name [ "name"; "quantifiers"; "body" ]) then
-              typed_error ~loc "unknown %s field `%s`" kind name)
+            if not (List.mem name [ "name"; "quantifiers"; "roots"; "body" ])
+            then typed_error ~loc "unknown %s field `%s`" kind name)
           fields;
         let required name =
           match find name with
@@ -137,6 +137,12 @@ let theory_statement_of_attribute ~attribute_name ~kind registry scope attribute
         in
         let name = string_constant (required "name") in
         let body = string_constant (required "body") in
+        let slice_roots =
+          Option.map
+            (fun expression ->
+              expression_list expression |> List.map string_constant)
+            (find "roots")
+        in
         let typed_binders expression =
           expression_list expression
           |> List.map (fun expression ->
@@ -175,6 +181,7 @@ let theory_statement_of_attribute ~attribute_name ~kind registry scope attribute
               axiom_name = qualified_name scope name;
               scope;
               binders;
+              slice_roots;
               body;
               loc = span_of_location attribute.attr_loc;
             }

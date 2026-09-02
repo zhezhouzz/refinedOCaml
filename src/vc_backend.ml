@@ -38,7 +38,7 @@ let lemma_obligations registry lemmas =
               loc = lemma.loc;
             };
           contracts = [];
-          measure = None;
+          measure = [];
         }
     in
     let formula =

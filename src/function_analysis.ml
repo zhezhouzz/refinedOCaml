@@ -13,6 +13,7 @@ let calls expression =
         accumulator
     | Raise (_, Some payload) | Perform (_, Some payload) ->
         collect accumulator payload
+    | Lambda (_, body) -> collect accumulator body
     | Ref (_, initial) -> collect accumulator initial
     | Tuple expressions
     | Choose expressions

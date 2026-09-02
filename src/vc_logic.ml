@@ -89,10 +89,13 @@ let reference_content_sort = function
   | _ -> None
 
 let typed_constructor_name (constructor : Typed_core.constructor) =
-  "C_"
-  ^ smt_identifier constructor.Typed_core.symbol.key
-  ^ "__"
-  ^ smt_identifier (typed_smt_sort constructor.result)
+  match (constructor.result, constructor.arguments) with
+  | Typed_core.S_unit, [] -> "unit"
+  | _ ->
+      "C_"
+      ^ smt_identifier constructor.Typed_core.symbol.key
+      ^ "__"
+      ^ smt_identifier (typed_smt_sort constructor.result)
 
 let typed_recognizer (constructor : Typed_core.constructor) =
   "is_" ^ typed_constructor_name constructor
@@ -109,14 +112,40 @@ let typed_logic_name (logic_symbol : Typed_core.logic_symbol) =
   "L_" ^ smt_identifier logic_symbol.logic_name.key
 
 let typed_lookup_logic registry scope name =
-  let rec candidates scope =
+  let strip_unique_suffix name =
+    let strip_at index = String.sub name 0 index in
+    match String.index_opt name '/' with
+    | Some index -> strip_at index
+    | None -> (
+        match String.rindex_opt name '_' with
+        | Some index
+          when index + 1 < String.length name
+               && String.for_all
+                    (function '0' .. '9' -> true | _ -> false)
+                    (String.sub name (index + 1)
+                       (String.length name - index - 1)) ->
+            strip_at index
+        | _ -> name)
+  in
+  let short_name name =
+    name |> String.split_on_char '.' |> List.rev |> List.hd
+    |> strip_unique_suffix
+  in
+  let base_names =
+    [ name; strip_unique_suffix name; short_name name ]
+    |> List.sort_uniq String.compare
+  in
+  let rec candidates_for name scope =
     match scope with
     | [] -> [ name ]
     | _ ->
         qualified_name scope name
-        :: candidates (List.rev (List.tl (List.rev scope)))
+        :: candidates_for name (List.rev (List.tl (List.rev scope)))
   in
-  let names = candidates scope in
+  let names =
+    List.concat_map (fun name -> candidates_for name scope) base_names
+    |> List.sort_uniq String.compare
+  in
   let rec expand_alias visited name =
     if List.mem name visited then name
     else
@@ -202,6 +231,15 @@ let typed_specialize_program (program : Typed_core.program)
         | None ->
             typed_error ~loc:expression.pexp_loc "unknown constructor `%s`" name
         )
+    | Pexp_tuple elements ->
+        S_tuple
+          (List.map
+             (function
+               | None, element -> recurse element
+               | Some _, _ ->
+                   typed_error ~loc:expression.pexp_loc
+                     "labelled tuples are not supported in refinement formulas")
+             elements)
     | Pexp_apply
         ( { pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ },
           [ (Nolabel, argument) ] ) ->
@@ -276,6 +314,7 @@ let typed_specialize_program (program : Typed_core.program)
     | Apply_value (callee, arguments) ->
         recurse callee;
         List.iter recurse arguments
+    | Lambda (_, body) -> recurse body
     | Tuple expressions | Choose expressions -> List.iter recurse expressions
     | Construct (_, expressions) | Record (_, expressions) ->
         List.iter recurse expressions
@@ -432,6 +471,9 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
     | Apply_value (callee, expressions) ->
         collect_expression callee;
         List.iter collect_expression expressions
+    | Lambda (parameters, body) ->
+        List.iter (fun (_, sort) -> collect sort) parameters;
+        collect_expression body
     | If (condition, if_true, if_false) ->
         List.iter collect_expression [ condition; if_true; if_false ]
     | Let (_, value, body) -> List.iter collect_expression [ value; body ]
@@ -476,6 +518,16 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
       List.iter (fun (_, sort) -> collect sort) contract.ghosts)
     function_def.contracts;
   collect_expression function_def.body;
+  let collect_closed sort = if closed sort then collect sort in
+  Hashtbl.iter
+    (fun _ (logic_symbol : Typed_core.logic_symbol) ->
+      List.iter collect_closed logic_symbol.arguments;
+      collect_closed logic_symbol.result)
+    program.registry.logic_by_name;
+  List.iter
+    (fun (axiom : Typed_core.axiom) ->
+      List.iter (fun (_, _, sort) -> collect_closed sort) axiom.binders)
+    (program.registry.axioms @ program.registry.checked_lemmas);
   (match !open_instance with
   | Some sort ->
       typed_error_at function_def.body.loc
@@ -492,6 +544,7 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
     let substitute = Sort_evars.substitute substitutions in
     {
       Typed_core.owner = concrete;
+      native_smt = template.native_smt;
       constructors =
         List.map
           (fun (constructor : Typed_core.constructor) ->
@@ -665,6 +718,36 @@ let elaborate_formula ?(scope = []) ?(expected = Typed_core.S_bool) registry env
             desc = Application (Constructor constructor, arguments);
             sort = constructor.result;
           }
+    | Pexp_tuple elements ->
+        let expressions =
+          List.map
+            (function
+              | None, element -> element
+              | Some _, _ ->
+                  typed_error ~loc
+                    "labelled tuples are not supported in refinement formulas")
+            elements
+        in
+        let elements =
+          match expected with
+          | Some (Typed_core.S_tuple sorts)
+            when List.length sorts = List.length expressions ->
+              List.map2
+                (fun sort expression -> elaborate ~expected:sort expression)
+                sorts expressions
+          | Some (Typed_core.S_tuple _) ->
+              typed_error ~loc "refinement tuple has the wrong arity"
+          | Some _ -> raise (Logic_needs_expected (loc, "tuple expression"))
+          | None -> List.map elaborate expressions
+        in
+        let sort =
+          Typed_core.S_tuple (List.map (fun term -> term.sort) elements)
+        in
+        finish ?expected ~loc
+          {
+            desc = Application (Builtin (typed_tuple_constructor sort), elements);
+            sort;
+          }
     | Pexp_apply
         ( { pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ },
           [ (Nolabel, argument) ] ) ->
@@ -801,11 +884,26 @@ let typed_formula ?scope ?expected registry env expression =
   elaborate_formula ?scope ?expected registry env expression |> logic_term_smt
 
 let formula_theory_symbols ?scope ?expected registry env expression =
-  elaborate_formula ?scope ?expected registry env expression
-  |> Logic_term.theory_symbols
+  let term = elaborate_formula ?scope ?expected registry env expression in
+  Logic_term.theory_symbols term @ Logic_term.datatype_symbols term
 
 let slice_program_theory (program : Typed_core.program) ~roots =
   let registry = program.registry in
+  let constructor_keys = Hashtbl.create 32 in
+  List.iter
+    (fun (datatype : Typed_core.datatype) ->
+      List.iter
+        (fun (constructor : Typed_core.constructor) ->
+          Hashtbl.replace constructor_keys constructor.symbol.key ())
+        datatype.constructors)
+    registry.datatypes;
+  let constructor_roots =
+    List.filter (fun root -> Hashtbl.mem constructor_keys root) roots
+  in
+  let roots =
+    List.filter (fun root -> not (Hashtbl.mem constructor_keys root)) roots
+  in
+  let statement_datatype_symbols = Hashtbl.create 16 in
   let artifacts_by_name = Hashtbl.create 16 in
   List.iter
     (fun (artifact : Refined_types.proof_artifact) ->
@@ -822,10 +920,14 @@ let slice_program_theory (program : Typed_core.program) ~roots =
         (fun (name, sort) -> (name, (smt_identifier name, sort)))
         (List.map (fun (_, name, sort) -> (name, sort)) axiom.binders)
     in
-    let symbols =
-      formula_theory_symbols ~scope:axiom.scope registry env formula
-      |> List.sort_uniq String.compare
+    let elaborated =
+      elaborate_formula ~scope:axiom.scope registry env formula
     in
+    let symbols =
+      Logic_term.theory_symbols elaborated |> List.sort_uniq String.compare
+    in
+    Hashtbl.replace statement_datatype_symbols axiom.axiom_name
+      (Logic_term.datatype_symbols elaborated);
     let requires =
       match kind with
       | `Axiom -> []
@@ -835,7 +937,25 @@ let slice_program_theory (program : Typed_core.program) ~roots =
               artifact.trusted_axioms @ artifact.checked_dependencies
           | None -> [])
     in
-    Theory_slice.{ name = axiom.axiom_name; symbols; requires }
+    let triggers, propagates =
+      match axiom.slice_roots with
+      | None -> (symbols, symbols)
+      | Some roots ->
+          let triggers =
+            List.map
+              (fun root ->
+                match typed_lookup_logic registry axiom.scope root with
+                | Some logic_symbol -> logic_symbol.logic_name.key
+                | None ->
+                    typed_error_at axiom.loc
+                      "unknown theory slice root `%s` in `%s`" root
+                      axiom.axiom_name)
+              roots
+          in
+          (triggers, [])
+    in
+    Theory_slice.
+      { name = axiom.axiom_name; symbols; triggers; propagates; requires }
   in
   let axioms = List.rev registry.axioms in
   let lemmas = List.rev registry.checked_lemmas in
@@ -845,6 +965,15 @@ let slice_program_theory (program : Typed_core.program) ~roots =
   let slice = Theory_slice.close ~roots statements in
   let selected_name name = List.mem name slice.statement_names in
   let selected_symbol symbol = List.mem symbol slice.symbols in
+  let selected_datatype_symbols =
+    List.fold_left
+      (fun symbols name ->
+        match Hashtbl.find_opt statement_datatype_symbols name with
+        | None -> symbols
+        | Some statement_symbols -> statement_symbols @ symbols)
+      constructor_roots slice.statement_names
+    |> List.sort_uniq String.compare
+  in
   let axioms =
     List.filter (fun axiom -> selected_name axiom.Typed_core.axiom_name) axioms
   in
@@ -861,15 +990,6 @@ let slice_program_theory (program : Typed_core.program) ~roots =
       if selected_symbol logic_symbol.logic_name.key then
         Hashtbl.replace logic_by_name name logic_symbol)
     registry.logic_by_name;
-  let datatypes =
-    List.filter
-      (fun (datatype : Typed_core.datatype) ->
-        List.exists
-          (fun (constructor : Typed_core.constructor) ->
-            selected_symbol constructor.symbol.key)
-          datatype.constructors)
-      registry.datatypes
-  in
   let registry =
     {
       registry with
@@ -877,7 +997,15 @@ let slice_program_theory (program : Typed_core.program) ~roots =
       axioms = List.rev axioms;
       checked_lemmas = List.rev checked_lemmas;
       proof_artifacts = List.rev proof_artifacts;
-      datatypes;
+      datatypes =
+        List.filter
+          (fun (datatype : Typed_core.datatype) ->
+            datatype.native_smt
+            || List.exists
+                 (fun (constructor : Typed_core.constructor) ->
+                   List.mem constructor.symbol.key selected_datatype_symbols)
+                 datatype.constructors)
+          registry.datatypes;
     }
   in
   ({ program with registry }, slice.symbols)

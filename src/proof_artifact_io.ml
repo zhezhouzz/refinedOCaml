@@ -51,6 +51,12 @@ let canonical_statement (axiom : Typed_core.axiom) =
       field name;
       sort variable_sort)
     axiom.binders;
+  (match axiom.slice_roots with
+  | None -> field "default-roots"
+  | Some roots ->
+      field "explicit-roots";
+      field (string_of_int (List.length roots));
+      List.iter field roots);
   field axiom.body;
   Buffer.contents buffer
 

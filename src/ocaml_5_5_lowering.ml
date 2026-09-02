@@ -79,26 +79,92 @@ let rec typed_sort_of_type type_expr =
         "unsupported OCaml type in the MVP logical sort language"
 
 let new_typed_registry () =
-  Typed_core.
-    {
-      constructors_by_uid = Hashtbl.create 32;
-      constructors_by_name = Hashtbl.create 32;
-      fields_by_uid = Hashtbl.create 32;
-      fields_by_name = Hashtbl.create 32;
-      logic_by_name = Hashtbl.create 32;
-      abstract_sorts_by_name = Hashtbl.create 16;
-      concrete_sorts_by_name = Hashtbl.create 16;
-      choose_symbols = Hashtbl.create 8;
-      module_aliases = Hashtbl.create 16;
-      functor_theories = Hashtbl.create 8;
-      generic_schemes_by_name = Hashtbl.create 16;
-      axioms = [];
-      lemmas = [];
-      checked_lemmas = [];
-      proof_artifacts = [];
-      datatype_templates = [];
-      datatypes = [];
-    }
+  let registry =
+    Typed_core.
+      {
+        constructors_by_uid = Hashtbl.create 32;
+        constructors_by_name = Hashtbl.create 32;
+        fields_by_uid = Hashtbl.create 32;
+        fields_by_name = Hashtbl.create 32;
+        logic_by_name = Hashtbl.create 32;
+        abstract_sorts_by_name = Hashtbl.create 16;
+        concrete_sorts_by_name = Hashtbl.create 16;
+        choose_symbols = Hashtbl.create 8;
+        module_aliases = Hashtbl.create 16;
+        functor_theories = Hashtbl.create 8;
+        generic_schemes_by_name = Hashtbl.create 16;
+        axioms = [];
+        lemmas = [];
+        checked_lemmas = [];
+        proof_artifacts = [];
+        datatype_templates = [];
+        datatypes = [];
+      }
+  in
+  let parameter = Typed_core.S_var "predef_a" in
+  let unit =
+    Typed_core.
+      {
+        symbol = { key = "predef.unit"; display = "()" };
+        arguments = [];
+        result = S_unit;
+      }
+  in
+  let list_owner =
+    Typed_core.S_app ({ key = "list"; display = "list" }, [ parameter ])
+  in
+  let nil =
+    Typed_core.
+      {
+        symbol = { key = "predef.list.nil"; display = "[]" };
+        arguments = [];
+        result = list_owner;
+      }
+  in
+  let cons =
+    Typed_core.
+      {
+        symbol = { key = "predef.list.cons"; display = "::" };
+        arguments = [ parameter; list_owner ];
+        result = list_owner;
+      }
+  in
+  let option_owner =
+    Typed_core.S_app ({ key = "option"; display = "option" }, [ parameter ])
+  in
+  let none =
+    Typed_core.
+      {
+        symbol = { key = "predef.option.none"; display = "None" };
+        arguments = [];
+        result = option_owner;
+      }
+  in
+  let some =
+    Typed_core.
+      {
+        symbol = { key = "predef.option.some"; display = "Some" };
+        arguments = [ parameter ];
+        result = option_owner;
+      }
+  in
+  List.iter
+    (fun (constructor : Typed_core.constructor) ->
+      Hashtbl.add registry.constructors_by_name constructor.symbol.display
+        constructor)
+    [ unit; nil; cons; none; some ];
+  registry.datatype_templates <-
+    [
+      Typed_core.
+        { owner = list_owner; constructors = [ nil; cons ]; native_smt = true };
+      Typed_core.
+        {
+          owner = option_owner;
+          constructors = [ none; some ];
+          native_smt = true;
+        };
+    ];
+  registry
 
 let typed_register_constructor registry constructor uid name =
   Hashtbl.replace registry.Typed_core.constructors_by_uid (uid_key uid)
@@ -140,6 +206,12 @@ let typed_register_types registry structure =
         | _ -> ())
       structure.Typedtree.str_items
   and register scope declaration =
+    let native_smt =
+      List.exists
+        (fun attribute ->
+          attribute.Parsetree.attr_name.txt = "refined.native_datatype")
+        declaration.Typedtree.typ_attributes
+    in
     let owner_symbol =
       symbol_of_ident ~display:declaration.typ_name.txt declaration.typ_id
     in
@@ -188,7 +260,7 @@ let typed_register_types registry structure =
             declarations
         in
         registry.datatype_templates <-
-          { owner; constructors } :: registry.datatype_templates
+          { owner; constructors; native_smt } :: registry.datatype_templates
     | Ttype_record labels ->
         let arguments =
           List.map
@@ -214,7 +286,7 @@ let typed_register_types registry structure =
               (constructor, index))
           labels;
         registry.datatype_templates <-
-          { owner; constructors = [ constructor ] }
+          { owner; constructors = [ constructor ]; native_smt }
           :: registry.datatype_templates
     | Ttype_abstract | Ttype_open -> ()
     | Ttype_external _ ->
@@ -235,9 +307,27 @@ let typed_lookup_constructor registry ~loc
         arguments = List.map typed_sort_of_type description.cstr_args;
         result = typed_sort_of_type description.cstr_res;
       }
-  | None ->
-      typed_error ~loc "constructor `%s` is outside the supported datatype set"
-        description.cstr_name
+  | None -> (
+      match
+        Hashtbl.find_opt registry.Typed_core.constructors_by_name
+          description.cstr_name
+      with
+      | Some constructor ->
+          let constructor =
+            {
+              constructor with
+              arguments = List.map typed_sort_of_type description.cstr_args;
+              result = typed_sort_of_type description.cstr_res;
+            }
+          in
+          Hashtbl.replace registry.constructors_by_uid
+            (uid_key description.cstr_uid)
+            constructor;
+          constructor
+      | None ->
+          typed_error ~loc
+            "constructor `%s` is outside the supported datatype set"
+            description.cstr_name)
 
 let rec typed_pattern registry (pattern : Typedtree.pattern) =
   let open Typed_core in
@@ -603,6 +693,32 @@ let rec typed_expression registry (expression : Typedtree.expression) =
          | "ref" :: _ -> true
          | _ -> false ->
       make (Ref (typed_sort_of_type initial.exp_type, recurse initial))
+  | Texp_function (parameters, Tfunction_body body) ->
+      let parameters =
+        List.map
+          (fun (parameter : Typedtree.function_param) ->
+            match parameter.fp_kind with
+            | Tparam_pat { pat_desc = Tpat_var (ident, name, _); pat_type; _ }
+              ->
+                ( symbol_of_ident ~display:name.txt ident,
+                  typed_sort_of_type pat_type
+                  |> normalize_registered_sort registry )
+            | Tparam_pat
+                {
+                  pat_desc =
+                    Tpat_alias ({ pat_desc = Tpat_any; _ }, ident, name, _, _);
+                  pat_type;
+                  _;
+                } ->
+                ( symbol_of_ident ~display:name.txt ident,
+                  typed_sort_of_type pat_type
+                  |> normalize_registered_sort registry )
+            | _ ->
+                typed_error ~loc:parameter.fp_loc
+                  "anonymous function parameters must be simple variables")
+          parameters
+      in
+      make (Lambda (parameters, recurse body))
   | Texp_apply (callee, raw_arguments) -> (
       let arguments =
         application_arguments ~loc:expression.exp_loc raw_arguments
@@ -958,6 +1074,7 @@ let typed_contracts registry ~arguments ~result attributes =
             result_region,
             requires_regions,
             consumes_regions,
+            universals,
             witnesses,
             witness_relation,
             ghosts,
@@ -970,6 +1087,18 @@ let typed_contracts registry ~arguments ~result attributes =
             outcomes,
             outcome_state,
             outcome_modifies ) ->
+          List.iter
+            (fun name ->
+              if
+                not
+                  (List.exists
+                     (fun ((symbol : Typed_core.symbol), _) ->
+                       symbol.display = name)
+                     arguments)
+              then
+                typed_error ~loc:attribute.attr_loc
+                  "coverage universal `%s` is not a function parameter" name)
+            universals;
           Some
             Typed_core.
               {
@@ -987,6 +1116,7 @@ let typed_contracts registry ~arguments ~result attributes =
                 result_region;
                 requires_regions;
                 consumes_regions;
+                universals;
                 witnesses;
                 witness_relation;
                 ghosts =
@@ -1014,7 +1144,7 @@ let typed_contracts registry ~arguments ~result attributes =
               })
     attributes
 
-let typed_measure attributes arguments =
+let typed_measure registry attributes arguments =
   let measures =
     List.filter_map
       (fun attribute ->
@@ -1025,24 +1155,57 @@ let typed_measure attributes arguments =
               Some (attribute, string_constant expression)
           | _ ->
               typed_error ~loc:attribute.attr_loc
-                "expected [@refined.measure \"integer_parameter\"]")
+                "expected [@refined.measure \"parameter[, parameter ...]\"]")
       attributes
   in
   match measures with
-  | [] -> None
-  | [ (attribute, name) ] -> (
-      match
-        List.find_opt
-          (fun ((symbol : Typed_core.symbol), _) -> symbol.display = name)
-          arguments
-      with
-      | Some (symbol, Typed_core.S_int) -> Some symbol
-      | Some _ ->
-          typed_error ~loc:attribute.attr_loc
-            "termination measure `%s` must name an int parameter" name
-      | None ->
-          typed_error ~loc:attribute.attr_loc
-            "termination measure `%s` is not a function parameter" name)
+  | [] -> []
+  | [ (attribute, text) ] ->
+      let names =
+        String.split_on_char ',' text
+        |> List.map String.trim
+        |> List.filter (fun name -> name <> "")
+      in
+      if names = [] then
+        typed_error ~loc:attribute.attr_loc
+          "termination measure must name at least one parameter";
+      if List.length names <> List.length (List.sort_uniq String.compare names)
+      then
+        typed_error ~loc:attribute.attr_loc
+          "termination measure parameters must be distinct";
+      List.map
+        (fun name ->
+          match
+            List.find_opt
+              (fun ((symbol : Typed_core.symbol), _) -> symbol.display = name)
+              arguments
+          with
+          | Some (symbol, Typed_core.S_int) -> symbol
+          | Some (symbol, sort) ->
+              let native_datatype =
+                List.exists
+                  (fun (datatype : Typed_core.datatype) ->
+                    datatype.native_smt
+                    &&
+                    match (datatype.owner, sort) with
+                    | ( Typed_core.S_app (owner, owner_arguments),
+                        Typed_core.S_app (actual, actual_arguments) ) ->
+                        owner.key = actual.key
+                        && List.length owner_arguments
+                           = List.length actual_arguments
+                    | owner, actual -> owner = actual)
+                  registry.Typed_core.datatype_templates
+              in
+              if native_datatype then symbol
+              else
+                typed_error ~loc:attribute.attr_loc
+                  "termination measure `%s` must name an int parameter or a \
+                   [@@refined.native_datatype] parameter"
+                  name
+          | None ->
+              typed_error ~loc:attribute.attr_loc
+                "termination measure `%s` is not a function parameter" name)
+        names
   | (attribute, _) :: _ ->
       typed_error ~loc:attribute.attr_loc
         "a function can have only one termination measure"
@@ -1074,6 +1237,9 @@ let typed_normalize expression =
   and anf expression continuation =
     match expression.desc with
     | Var _ | Int _ | Bool _ -> continuation expression
+    | Lambda (parameters, body) ->
+        continuation
+          { expression with desc = Lambda (parameters, anf body Fun.id) }
     | Raise (exception_, payload) ->
         let payload = Option.map (fun payload -> anf payload Fun.id) payload in
         { expression with desc = Raise (exception_, payload) }
@@ -1317,7 +1483,7 @@ let typed_function registry binding =
           result;
           body = typed_normalize (typed_expression registry body);
           contracts;
-          measure = typed_measure binding.vb_attributes arguments;
+          measure = typed_measure registry binding.vb_attributes arguments;
         }
   | _ ->
       if not has_contract then None
