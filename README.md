@@ -101,8 +101,9 @@ base type 会与 Typedtree 推断出的参数和结果类型逐一核对。
 函数参数也可以携带完整 refinement type。例如
 `f:(x:{v:int | v >= 0} -> {v:int | v > x}) -> ...`。Checker 将这种参数
 解释为带合约的符号闭包：每次调用分阶段检查 domain，并把 codomain 作为调用结果假设。
-把具名函数或偏应用闭包传入时，目前要求它公开一个 alpha-equivalent 的 safety contract；不匹配时
-fail closed。
+具名函数、偏应用闭包和局部/匿名函数都使用同一套 closure typing。函数子类型按语义检查：参数
+逆变、结果协变，base refinement 由 SMT 证明蕴含；依赖 arrow 的 binder environment 会随参数阶段
+延伸。偏应用会保存删去已供参数后的残余 refinement type，而不是只在某个调用点做文本展开。
 
 ## 两种 refinement
 
@@ -125,6 +126,25 @@ let[@refined.coverage
     successor x =
   x + 1
 ```
+
+### 高阶 coverage 的极性
+
+高阶 under-approximation 使用下面的量词分层，而不是把 safety arrow 原样当成 coverage arrow：
+
+- 顶层生成器参数是存在性 witness。函数类型的生成器参数因此是“存在一个闭包”；该闭包的 arrow
+  refinement 是调用安全条件，而不是要求枚举所有函数。
+- CoverageType 风格的 indexed generator 可用 `universals = ["size"; ...]` 把指定顶层参数提升为
+  全称 over-index；未列出的顶层参数仍为存在性 witness。`post` 和 functional witness 可以引用这些
+  universal binders。
+- 对闭包的每个实际调用，实参必须满足 domain；调用结果作为存在性观测值并受 codomain 约束。
+  同一闭包在逻辑相等的实参上必须给出相等结果，VC 会为有限观测加入 congruence 约束。
+- 当 coverage 函数返回函数时，结果 arrow 会 eta-expand。新增的参数是全称 observation，不是生成器
+  witness；coverage 只在 observation 满足 arrow domain 时逐点要求 codomain image。
+- 局部/匿名闭包作为 callback 时，其 safety refinement 对 domain 中的符号输入检查。若闭包含
+  exception/effect，关系 VC 同时要求所有 domain 内执行正常返回并满足 codomain。
+
+因此普通 coverage `post` 不得依赖顶层存在性生成器参数；函数值结果的 codomain 可以依赖其全称
+observation binder。
 
 此时 checker 验证更强的 judgment：
 
@@ -631,9 +651,10 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
 | safety 函数 summary、直接/互递归 | 支持 | call-graph SCC + `int` measure |
 | 递归 coverage | 有条件支持 | complete witnesses + SCC measure |
-| safety 高阶参数、函数值结果与偏应用 | 支持 | refinement-typed symbolic/residual closure + result eta-expansion |
-| coverage 高阶参数 | 明确拒绝 | 需要 nested polarity/coverage semantics |
-| 函数值逃逸到一阶公式、coverage 函数值结果 | 明确拒绝 | 需要 higher-order coverage semantics |
+| safety 高阶参数、局部/匿名函数、函数值结果与偏应用 | 支持 | semantic arrow subtyping + refinement-typed symbolic/residual closure |
+| coverage 高阶参数 / mixed over-under index | 支持 | `universals` + existential closure witness + universal safety domain + finite extensional observations |
+| coverage 函数值结果 | 支持 | pointwise eta-expansion + universal domain-guarded observations |
+| 函数值逃逸到一阶公式 | 明确拒绝 | closure 不冒充 first-order SMT term |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
 | local refs / lexical alias / final-state safety | 支持 | per-sort SMT heap + fresh identity |

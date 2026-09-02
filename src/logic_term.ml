@@ -22,9 +22,23 @@ let theory_symbols term =
         let symbols =
           match head with
           | Logic symbol -> Strings.add symbol.Typed_core.logic_name.key symbols
+          | Constructor _ | Selector _ -> symbols
+          | Builtin _ -> symbols
+        in
+        List.fold_left collect symbols arguments
+  in
+  collect Strings.empty term |> Strings.elements
+
+let datatype_symbols term =
+  let rec collect symbols term =
+    match term.desc with
+    | Variable _ | Integer _ | Boolean _ -> symbols
+    | Application (head, arguments) ->
+        let symbols =
+          match head with
           | Constructor constructor | Selector (constructor, _) ->
               Strings.add constructor.Typed_core.symbol.key symbols
-          | Builtin _ -> symbols
+          | Logic _ | Builtin _ -> symbols
         in
         List.fold_left collect symbols arguments
   in

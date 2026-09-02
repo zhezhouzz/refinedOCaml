@@ -627,6 +627,9 @@ let validate_region_contracts (program : Typed_core.program)
         in
         List.iter (fun (_, _, handler) -> action state handler) handlers;
         (binding, state)
+    | Lambda (_, body) ->
+        ignore (analyze state body);
+        (None, state)
     | Deref _ | Int _ | Bool _ -> (None, state)
   in
   ignore

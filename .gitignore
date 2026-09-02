@@ -49,3 +49,5 @@ _coverage/
 *.swp
 *~
 .DS_Store
+
+*.exe

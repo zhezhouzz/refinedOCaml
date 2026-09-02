@@ -10,7 +10,12 @@ type sort =
   | S_arrow of sort * sort
 
 type constructor = { symbol : symbol; arguments : sort list; result : sort }
-type datatype = { owner : sort; constructors : constructor list }
+
+type datatype = {
+  owner : sort;
+  constructors : constructor list;
+  native_smt : bool;
+}
 
 type logic_symbol = {
   logic_name : symbol;
@@ -24,6 +29,7 @@ type axiom = {
   axiom_name : string;
   scope : string list;
   binders : (quantifier * string * sort) list;
+  slice_roots : string list option;
   body : string;
   loc : Source_span.t;
 }
@@ -65,6 +71,7 @@ and expr_desc =
   | Choose of expr list
   | Apply of symbol * expr list
   | Apply_value of expr * expr list
+  | Lambda of (symbol * sort) list * expr
   | If of expr * expr * expr
   | Let of symbol * expr * expr
   | Match of expr * (pattern * expr) list
@@ -114,6 +121,7 @@ type contract = {
   result_region : string option;
   requires_regions : (string * string) list;
   consumes_regions : string list;
+  universals : string list;
   witnesses : (string * string) list;
   witness_relation : string option;
   ghosts : (string * sort) list;
@@ -148,7 +156,7 @@ type function_def = {
   result : sort;
   body : expr;
   contracts : contract list;
-  measure : symbol option;
+  measure : symbol list;
 }
 
 type registry = {

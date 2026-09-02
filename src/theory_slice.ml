@@ -3,6 +3,8 @@ module Strings = Set.Make (String)
 type statement = {
   name : string;
   symbols : string list;
+  triggers : string list;
+  propagates : string list;
   requires : string list;
 }
 
@@ -17,14 +19,14 @@ let close ~roots statements =
             Strings.mem statement.name names
             || List.exists
                  (fun symbol -> Strings.mem symbol symbols)
-                 statement.symbols
+                 statement.triggers
           in
           if not selected then (symbols, names, changed)
           else
             let symbols' =
               List.fold_left
                 (fun symbols symbol -> Strings.add symbol symbols)
-                symbols statement.symbols
+                symbols statement.propagates
             in
             let names' =
               List.fold_left
@@ -54,5 +56,14 @@ let close ~roots statements =
         (fun statement ->
           if Strings.mem statement.name names then Some statement.name else None)
         statements;
-    symbols = Strings.elements symbols;
+    symbols =
+      List.fold_left
+        (fun enabled statement ->
+          if Strings.mem statement.name names then
+            List.fold_left
+              (fun enabled symbol -> Strings.add symbol enabled)
+              enabled statement.symbols
+          else enabled)
+        symbols statements
+      |> Strings.elements;
   }

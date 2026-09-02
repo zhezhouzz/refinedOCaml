@@ -16,8 +16,12 @@ let require expected obligation =
   | `Valid, Valid | `Invalid, Invalid _ -> ()
   | `Valid, (Invalid _ | Unknown _) ->
       Alcotest.failf "%s should be valid" obligation.name
-  | `Invalid, (Valid | Unknown _) ->
-      Alcotest.failf "%s should be invalid" obligation.name
+  | `Invalid, Valid ->
+      Alcotest.failf "%s should be invalid (got valid)\n%s" obligation.name
+        obligation.smt
+  | `Invalid, Unknown reason ->
+      Alcotest.failf "%s should be invalid (got unknown: %s)" obligation.name
+        reason
 
 let test_sha256 () =
   Alcotest.check Alcotest.string "SHA-256 abc vector"
@@ -364,11 +368,19 @@ let integration_suite () =
   compile "../examples/liquid_scope_invalid.ml" "typed_liquid_scope_invalid";
   compile "../examples/liquid_type_invalid.ml" "typed_liquid_type_invalid";
   compile "../examples/partial_stage_invalid.ml" "typed_partial_stage_invalid";
+  compile "../examples/residual_subtyping.ml" "typed_residual_subtyping";
   compile "../examples/higher_order.ml" "typed_higher_order";
+  compile "../examples/higher_order_subtyping.ml" "typed_higher_order_subtyping";
   compile "../examples/higher_order_mismatch.ml" "typed_higher_order_mismatch";
   compile "../examples/higher_order_coverage_unsupported.ml"
     "typed_higher_order_coverage_unsupported";
+  compile "../examples/higher_order_coverage.ml" "typed_higher_order_coverage";
+  compile "../examples/higher_order_coverage_effect.ml"
+    "typed_higher_order_coverage_effect";
+  compile "../examples/indexed_coverage.ml" "typed_indexed_coverage";
   compile "../examples/function_result.ml" "typed_function_result";
+  compile "../examples/local_functions.ml" "typed_local_functions";
+  compile "../examples/local_function_effect.ml" "typed_local_function_effect";
   compile "../examples/effect_partial.ml" "typed_effect_partial";
   compile "../examples/effect_partial_stage_invalid.ml"
     "typed_effect_partial_stage_invalid";
@@ -482,6 +494,12 @@ let integration_suite () =
       | "add_nonnegative" -> require `Valid obligation
       | "bad_partial_stage" -> require `Invalid obligation
       | name -> failwith ("unexpected staged partial obligation " ^ name));
+  obligations_of_cmt "typed_residual_subtyping.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "add" | "apply_add_two" | "use_residual" -> require `Valid obligation
+      | "use_wrong_residual" -> require `Invalid obligation
+      | name -> failwith ("unexpected residual-subtyping obligation " ^ name));
   obligations_of_cmt "typed_higher_order.cmt"
   |> List.iter (fun obligation ->
       match obligation.name with
@@ -492,18 +510,73 @@ let integration_suite () =
       | "bad_apply_positive" -> require `Invalid obligation
       | "increment" | "use_increment" -> require `Valid obligation
       | name -> failwith ("unexpected higher-order obligation " ^ name));
-  (match obligations_of_cmt "typed_higher_order_mismatch.cmt" with
-  | _ -> failwith "a callback with the wrong refinement was accepted"
-  | exception Location.Error _ -> ());
-  (match obligations_of_cmt "typed_higher_order_coverage_unsupported.cmt" with
-  | _ -> failwith "a higher-order coverage contract was accepted unsoundly"
-  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_higher_order_subtyping.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "add_two" | "apply_positive" | "use_add_two" ->
+          require `Valid obligation
+      | "positive_only" -> require `Valid obligation
+      | "use_positive_only" -> require `Invalid obligation
+      | name -> failwith ("unexpected semantic-subtyping obligation " ^ name));
+  obligations_of_cmt "typed_higher_order_mismatch.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "identity" | "apply_positive" -> require `Valid obligation
+      | "use_bad_callback" -> require `Invalid obligation
+      | name -> failwith ("unexpected callback-subtyping obligation " ^ name));
+  obligations_of_cmt "typed_higher_order_coverage_unsupported.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "apply_identity" -> require `Valid obligation
+      | name -> failwith ("unexpected higher-order coverage obligation " ^ name));
+  obligations_of_cmt "typed_higher_order_coverage.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "apply_identity" | "same_input_is_stable" | "equal_inputs_are_stable"
+      | "make_identity" ->
+          require `Valid obligation
+      | "bad_apply_identity" | "bad_same_input_is_stable"
+      | "bad_equal_inputs_are_stable" | "bad_make_identity" ->
+          require `Invalid obligation
+      | name -> failwith ("unexpected coverage-arrow obligation " ^ name));
+  obligations_of_cmt "typed_higher_order_coverage_effect.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "apply_positive" | "effectful_callback" | "make_effectful_identity"
+      | "make_bounded_effectful_identity" ->
+          require `Valid obligation
+      | "bad_effectful_callback" | "bad_make_effectful_identity"
+      | "bad_make_bounded_effectful_identity" ->
+          require `Invalid obligation
+      | name ->
+          failwith ("unexpected effectful coverage-arrow obligation " ^ name));
+  obligations_of_cmt "typed_indexed_coverage.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "indexed_generator" | "any_int" -> require `Valid obligation
+      | "bad_indexed_generator" | "bad_any_int_safety" ->
+          require `Invalid obligation
+      | name -> failwith ("unexpected indexed coverage obligation " ^ name));
   obligations_of_cmt "typed_function_result.cmt"
   |> List.iter (fun obligation ->
       match obligation.name with
       | "add" | "make_adder" | "use_adder" -> require `Valid obligation
       | "bad_make_adder" -> require `Invalid obligation
       | name -> failwith ("unexpected function-result obligation " ^ name));
+  obligations_of_cmt "typed_local_functions.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "apply_positive" | "use_local" | "use_anonymous" | "make_local_adder"
+      | "apply_returned_local" ->
+          require `Valid obligation
+      | "bad_local" -> require `Invalid obligation
+      | name -> failwith ("unexpected local-function obligation " ^ name));
+  obligations_of_cmt "typed_local_function_effect.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "safe_local" -> require `Valid obligation
+      | "unsafe_local" -> require `Invalid obligation
+      | name -> failwith ("unexpected local-effect obligation " ^ name));
   obligations_of_cmt "typed_effect_partial.cmt"
   |> List.iter (fun obligation ->
       if

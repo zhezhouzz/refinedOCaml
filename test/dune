@@ -6,10 +6,17 @@
   ../examples/liquid_scope_invalid.ml
   ../examples/liquid_type_invalid.ml
   ../examples/partial_stage_invalid.ml
+  ../examples/residual_subtyping.ml
   ../examples/higher_order.ml
+  ../examples/higher_order_subtyping.ml
   ../examples/higher_order_mismatch.ml
   ../examples/higher_order_coverage_unsupported.ml
+  ../examples/higher_order_coverage.ml
+  ../examples/higher_order_coverage_effect.ml
+  ../examples/indexed_coverage.ml
   ../examples/function_result.ml
+  ../examples/local_functions.ml
+  ../examples/local_function_effect.ml
   ../examples/effect_partial.ml
   ../examples/effect_partial_stage_invalid.ml
   ../examples/invalid.ml

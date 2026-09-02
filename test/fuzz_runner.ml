@@ -376,7 +376,7 @@ let fuzz_function_scc random case =
              result = body.sort;
              body;
              contracts = [];
-             measure = None;
+             measure = [];
            })
          symbols)
   in
@@ -471,7 +471,13 @@ let fuzz_theory_slice random case =
               if required then Some names.(dependency) else None)
         in
         Refined_ir.Theory_slice.
-          { name = names.(statement); symbols = used_symbols; requires })
+          {
+            name = names.(statement);
+            symbols = used_symbols;
+            triggers = used_symbols;
+            propagates = used_symbols;
+            requires;
+          })
   in
   let active_symbols =
     Array.init symbol_count (fun _ -> Random.State.int random 4 = 0)

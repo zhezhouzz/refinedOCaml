@@ -252,6 +252,7 @@ let contract_of_attribute attribute =
               "result_region";
               "requires_regions";
               "consumes_regions";
+              "universals";
               "outcome_state";
               "outcome_modifies";
             ]
@@ -410,6 +411,12 @@ let contract_of_attribute attribute =
             | Some expression ->
                 List.map string_constant (expression_list expression)
           in
+          let universals =
+            match find_expression "universals" with
+            | None -> []
+            | Some expression ->
+                List.map string_constant (expression_list expression)
+          in
           let requires_state = state_pairs "requires_state" in
           let state_witnesses = state_pairs "state_witnesses" in
           let performs =
@@ -515,6 +522,15 @@ let contract_of_attribute attribute =
           if mode = Over && witnesses <> [] then
             error ~loc:attribute.attr_loc
               "safety contracts cannot declare coverage witnesses";
+          if mode = Over && universals <> [] then
+            error ~loc:attribute.attr_loc
+              "safety contracts cannot declare coverage universals";
+          if
+            List.length universals
+            <> List.length (List.sort_uniq String.compare universals)
+          then
+            error ~loc:attribute.attr_loc
+              "coverage universals must not contain duplicate parameters";
           if mode = Over && witness_relation <> None then
             error ~loc:attribute.attr_loc
               "safety contracts cannot declare witness_relation";
@@ -577,6 +593,7 @@ let contract_of_attribute attribute =
               result_region,
               requires_regions,
               consumes_regions,
+              universals,
               witnesses,
               witness_relation,
               ghosts,
