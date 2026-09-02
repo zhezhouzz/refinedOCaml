@@ -1,0 +1,4 @@
+(test
+ (name benchmark_runner)
+ (libraries refined_core)
+ (deps liquidhaskell/classics.ml coveragetype/adapted.ml manifest.tsv))

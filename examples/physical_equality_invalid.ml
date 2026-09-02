@@ -1,3 +1,3 @@
-let[@refined.over { pre = "true"; post = "true" }] physical_int (left : int)
-    (right : int) : bool =
+let[@refined.over { type_ = "left:int -> right:int -> bool" }] physical_int
+    (left : int) (right : int) : bool =
   left == right

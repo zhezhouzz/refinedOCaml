@@ -8,6 +8,6 @@ let horn_identity value = value
 [@@@refined.axiom
 {
   name = "private_mem_hd";
-  vars = [ ("l", "'a list"); ("x", "'a") ];
+  quantifiers = [ ("forall", "l", "'a list"); ("forall", "x", "'a") ];
   body = "implies (mem l x) (hd l x)";
 }]

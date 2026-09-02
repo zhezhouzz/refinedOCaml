@@ -394,6 +394,17 @@ let integration_suite () =
     if Sys.command command <> 0 then failwith ("failed to compile " ^ source)
   in
   compile "../examples/valid.ml" "typed_valid";
+  compile "../examples/liquid_scope_invalid.ml" "typed_liquid_scope_invalid";
+  compile "../examples/liquid_type_invalid.ml" "typed_liquid_type_invalid";
+  compile "../examples/partial_stage_invalid.ml" "typed_partial_stage_invalid";
+  compile "../examples/higher_order.ml" "typed_higher_order";
+  compile "../examples/higher_order_mismatch.ml" "typed_higher_order_mismatch";
+  compile "../examples/higher_order_coverage_unsupported.ml"
+    "typed_higher_order_coverage_unsupported";
+  compile "../examples/function_result.ml" "typed_function_result";
+  compile "../examples/effect_partial.ml" "typed_effect_partial";
+  compile "../examples/effect_partial_stage_invalid.ml"
+    "typed_effect_partial_stage_invalid";
   compile "../examples/invalid.ml" "typed_invalid";
   compile "../examples/theory.ml" "typed_theory";
   compile "../examples/theory_missing.ml" "typed_theory_missing";
@@ -492,11 +503,69 @@ let integration_suite () =
   compile "../examples/outcome_coverage_incomplete.ml"
     "typed_outcome_coverage_incomplete";
   obligations_of_cmt "typed_valid.cmt" |> List.iter (require `Valid);
+  (match obligations_of_cmt "typed_liquid_scope_invalid.cmt" with
+  | _ -> failwith "a Liquid refinement referenced a later parameter"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_liquid_type_invalid.cmt" with
+  | _ -> failwith "a Liquid base type disagreed with Typedtree"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_partial_stage_invalid.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "add_nonnegative" -> require `Valid obligation
+      | "bad_partial_stage" -> require `Invalid obligation
+      | name -> failwith ("unexpected staged partial obligation " ^ name));
+  obligations_of_cmt "typed_higher_order.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "apply_positive" ->
+          if not (contains obligation.smt "abstract_result_") then
+            failwith "higher-order parameter did not use its refinement";
+          require `Valid obligation
+      | "bad_apply_positive" -> require `Invalid obligation
+      | "increment" | "use_increment" -> require `Valid obligation
+      | name -> failwith ("unexpected higher-order obligation " ^ name));
+  (match obligations_of_cmt "typed_higher_order_mismatch.cmt" with
+  | _ -> failwith "a callback with the wrong refinement was accepted"
+  | exception Location.Error _ -> ());
+  (match obligations_of_cmt "typed_higher_order_coverage_unsupported.cmt" with
+  | _ -> failwith "a higher-order coverage contract was accepted unsoundly"
+  | exception Location.Error _ -> ());
+  obligations_of_cmt "typed_function_result.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "add" | "make_adder" | "use_adder" -> require `Valid obligation
+      | "bad_make_adder" -> require `Invalid obligation
+      | name -> failwith ("unexpected function-result obligation " ^ name));
+  obligations_of_cmt "typed_effect_partial.cmt"
+  |> List.iter (fun obligation ->
+      if
+        obligation.name = "use_effect_partial"
+        && not (contains obligation.smt "call_state_")
+      then failwith "effectful residual closure lost its state summary";
+      require `Valid obligation);
+  obligations_of_cmt "typed_effect_partial_stage_invalid.cmt"
+  |> List.iter (fun obligation ->
+      match obligation.name with
+      | "constrained_bump_add" -> require `Valid obligation
+      | "bad_effect_partial_stage" -> require `Invalid obligation
+      | name -> failwith ("unexpected effect-partial obligation " ^ name));
   obligations_of_cmt "typed_invalid.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_theory.cmt"
   |> List.iter (fun obligation ->
-      if obligation.trusted_axioms <> [ "ListTheory.hd_mem" ] then
-        failwith "local module axiom provenance was not preserved";
+      (match obligation.name with
+      | "head_is_member" ->
+          if obligation.trusted_axioms <> [ "ListTheory.hd_mem" ] then
+            failwith "local module axiom provenance was not preserved"
+      | "witness_exists" ->
+          if obligation.trusted_axioms <> [ "ListTheory.has_witness" ] then
+            failwith "existential axiom provenance was not preserved";
+          if
+            not
+              (contains obligation.smt
+                 "(forall ((x Int)) (exists ((y Int)) (forall ((z Int))")
+          then failwith "axiom quantifier order was not preserved"
+      | name -> failwith ("unexpected theory obligation " ^ name));
       require `Valid obligation);
   obligations_of_cmt "typed_theory_missing.cmt" |> List.iter (require `Invalid);
   obligations_of_cmt "typed_choice.cmt" |> List.iter (require `Valid);

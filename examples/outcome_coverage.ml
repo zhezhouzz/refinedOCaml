@@ -4,8 +4,7 @@ type _ Effect.t += Send : int -> int Effect.t
 
 let[@refined.coverage
      {
-       pre = "true";
-       post = "result > 0";
+       type_ = "x:int -> {result:int | result > 0}";
        witnesses = [ ("x", "result") ];
        outcomes =
          [
@@ -17,8 +16,7 @@ let[@refined.coverage
 
 let[@refined.coverage
      {
-       pre = "true";
-       post = "result > 1";
+       type_ = "x:int -> {result:int | result > 1}";
        witnesses = [ ("x", "result - 1") ];
        outcomes =
          [

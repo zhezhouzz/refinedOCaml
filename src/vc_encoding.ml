@@ -5,16 +5,75 @@ open Vc_logic
 open Heap_model
 open Ownership
 
-type smt_value = { term : string; refinement : Generic_refinement.type_ option }
+type smt_value = {
+  term : string;
+  refinement : Generic_refinement.type_ option;
+  closure : closure option;
+}
+
+and closure =
+  | Direct_closure of {
+      symbol : Typed_core.symbol;
+      captured : (smt_value * Typed_core.sort) list;
+    }
+  | Choice_closure of {
+      condition : string;
+      if_true : closure;
+      if_false : closure;
+    }
+  | Abstract_closure of {
+      specification : Typed_core.refined_type;
+      environment : (string * (string * Typed_core.sort)) list;
+    }
+
+let value_term ~loc value =
+  match value.closure with
+  | None -> value.term
+  | Some _ ->
+      typed_error_at loc
+        "a function value escaped into the first-order logical term language"
+
+let contract_argument_env (function_def : Typed_core.function_def)
+    (contract : Typed_core.contract) =
+  let rec build formula_env env arguments domains =
+    match (arguments, domains) with
+    | [], [] -> List.rev env
+    | ( ((symbol : Typed_core.symbol), sort) :: arguments,
+        (parameter, domain) :: domains ) ->
+        let term = smt_identifier symbol.key in
+        let closure =
+          match domain with
+          | Typed_core.Refined_base _ -> None
+          | Refined_arrow _ ->
+              if contract.mode = Under then
+                typed_error_at contract.loc
+                  "higher-order parameters in coverage contracts are not \
+                   supported";
+              Some
+                (Abstract_closure
+                   { specification = domain; environment = formula_env })
+        in
+        let value = { term; refinement = None; closure } in
+        build
+          ((parameter, (term, sort)) :: formula_env)
+          ((symbol.key, value) :: env)
+          arguments domains
+    | _ -> invalid_arg "contract argument arity mismatch"
+  in
+  build [] [] function_def.arguments (Typed_core.contract_domains contract)
 
 let typed_pattern_smt env scrutinee pattern =
   let rec translate env scrutinee = function
     | Typed_core.Pat_any -> ("true", env)
     | Pat_var symbol ->
-        ("true", (symbol.key, { term = scrutinee; refinement = None }) :: env)
+        ( "true",
+          (symbol.key, { term = scrutinee; refinement = None; closure = None })
+          :: env )
     | Pat_alias (inner, symbol) ->
         let guard, env = translate env scrutinee inner in
-        (guard, (symbol.key, { term = scrutinee; refinement = None }) :: env)
+        ( guard,
+          (symbol.key, { term = scrutinee; refinement = None; closure = None })
+          :: env )
     | Pat_int value -> (app "=" [ scrutinee; string_of_int value ], env)
     | Pat_bool value -> (app "=" [ scrutinee; string_of_bool value ], env)
     | Pat_tuple (sort, patterns) ->
@@ -143,8 +202,39 @@ let generic_constraint_smt ~loc (constraint_ : Generic_refinement.constraint_) =
 let under_path path condition =
   match path with [] -> condition | _ -> app "=>" [ and_ path; condition ]
 
-let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
-    arguments result_sort =
+let contract_expressions (contract : Typed_core.contract) =
+  let parse text =
+    parse_formula ~filename:contract.loc.file
+      ~loc:(location_of_span contract.loc)
+      text
+  in
+  let domains =
+    Typed_core.contract_domains contract
+    |> List.filter_map (fun (parameter, domain) ->
+        match domain with
+        | Typed_core.Refined_base domain ->
+            Some
+              (Typed_core.rename_identifier ~from:domain.value_name
+                 ~into:parameter domain.predicate
+              |> parse)
+        | Refined_arrow _ -> None)
+  in
+  let result =
+    match Typed_core.contract_result contract with
+    | Typed_core.Refined_base result -> result
+    | Refined_arrow _ ->
+        typed_error_at contract.loc
+          "function-valued contract results are not supported by this VC"
+  in
+  let post =
+    Typed_core.rename_identifier ~from:result.value_name ~into:"result"
+      result.predicate
+    |> parse
+  in
+  (domains, post)
+
+let instantiate_function_at_call_sorts ~loc
+    (function_def : Typed_core.function_def) argument_sorts result_sort =
   let open Typed_core in
   let substitutions = Sort_evars.create () in
   let unify formal actual =
@@ -158,8 +248,8 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
           (typed_smt_sort formal) (typed_smt_sort actual)
   in
   List.iter2
-    (fun (_, formal) (actual : Typed_core.expr) -> unify formal actual.sort)
-    function_def.arguments arguments;
+    (fun (_, formal) actual -> unify formal actual)
+    function_def.arguments argument_sorts;
   unify function_def.result result_sort;
   let substitute = Sort_evars.substitute substitutions in
   let constructor (constructor : Typed_core.constructor) =
@@ -215,6 +305,9 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
       | Choose expressions -> Choose (List.map map_expression expressions)
       | Apply (symbol, expressions) ->
           Apply (symbol, List.map map_expression expressions)
+      | Apply_value (callee, expressions) ->
+          Apply_value
+            (map_expression callee, List.map map_expression expressions)
       | If (condition, if_true, if_false) ->
           If
             ( map_expression condition,
@@ -285,8 +378,20 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
     contracts =
       List.map
         (fun (contract : Typed_core.contract) ->
+          let rec refined_type = function
+            | Typed_core.Refined_base base ->
+                Refined_base { base with base_sort = substitute base.base_sort }
+            | Refined_arrow { parameter; domain; codomain } ->
+                Refined_arrow
+                  {
+                    parameter;
+                    domain = refined_type domain;
+                    codomain = refined_type codomain;
+                  }
+          in
           {
             contract with
+            refined_type = refined_type contract.refined_type;
             ghosts =
               List.map
                 (fun (name, sort) -> (name, substitute sort))
@@ -294,6 +399,85 @@ let instantiate_function_at_call ~loc (function_def : Typed_core.function_def)
           })
         function_def.contracts;
   }
+
+let instantiate_function_at_call ~loc function_def arguments result_sort =
+  instantiate_function_at_call_sorts ~loc function_def
+    (List.map (fun (argument : Typed_core.expr) -> argument.sort) arguments)
+    result_sort
+
+let refinement_text_equal left right =
+  let compact text =
+    String.to_seq text
+    |> Seq.filter (fun character -> character > ' ')
+    |> String.of_seq
+  in
+  compact left = compact right
+
+let refined_type_equal actual expected =
+  let rename renamings text =
+    List.fold_left
+      (fun text (from, into) -> Typed_core.rename_identifier ~from ~into text)
+      text renamings
+  in
+  let rec equal depth renamings actual expected =
+    match (actual, expected) with
+    | Typed_core.Refined_base actual, Typed_core.Refined_base expected ->
+        actual.base_sort = expected.base_sort
+        && refinement_text_equal
+             (rename
+                ((actual.value_name, "__value_" ^ string_of_int depth)
+                :: renamings)
+                actual.predicate)
+             (Typed_core.rename_identifier ~from:expected.value_name
+                ~into:("__value_" ^ string_of_int depth)
+                expected.predicate)
+    | Typed_core.Refined_arrow actual, Typed_core.Refined_arrow expected ->
+        equal (depth + 1) renamings actual.domain expected.domain
+        && equal (depth + 1)
+             ((actual.parameter, expected.parameter) :: renamings)
+             actual.codomain expected.codomain
+    | Typed_core.Refined_base _, Typed_core.Refined_arrow _
+    | Typed_core.Refined_arrow _, Typed_core.Refined_base _ ->
+        false
+  in
+  equal 0 [] actual expected
+
+let rec drop_refined_arguments count type_ =
+  if count = 0 then type_
+  else
+    match type_ with
+    | Typed_core.Refined_arrow { codomain; _ } ->
+        drop_refined_arguments (count - 1) codomain
+    | Typed_core.Refined_base _ ->
+        invalid_arg "captured closure exceeds contract arity"
+
+let rec closure_satisfies program expected = function
+  | Abstract_closure { specification; _ } ->
+      refined_type_equal specification expected
+  | Choice_closure { if_true; if_false; _ } ->
+      closure_satisfies program expected if_true
+      && closure_satisfies program expected if_false
+  | Direct_closure { symbol; captured } -> (
+      match
+        List.find_opt
+          (fun (function_def : Typed_core.function_def) ->
+            function_def.symbol.key = symbol.key)
+          program.Typed_core.functions
+      with
+      | None -> false
+      | Some function_def -> (
+          match
+            List.filter
+              (fun (contract : Typed_core.contract) -> contract.mode = Over)
+              function_def.contracts
+          with
+          | [ contract ] ->
+              let remaining =
+                drop_refined_arguments (List.length captured)
+                  contract.refined_type
+              in
+              refined_type_equal remaining expected
+          | [] | _ :: _ :: _ -> false))
 
 let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
     current_function path call_stack choices generic_calls env expression =
@@ -304,9 +488,133 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
       call_stack choices generic_calls env
   in
   let make ?(refinement = expression.Typed_core.refinement) term =
-    { term; refinement }
+    { term; refinement; closure = None }
   in
-  let recurse_term expression = (recurse expression).term in
+  let recurse_term (expression : Typed_core.expr) =
+    value_term ~loc:expression.loc (recurse expression)
+  in
+  let rec apply_closure arguments path = function
+    | Direct_closure { symbol; captured } ->
+        typed_inline_call program analysis mode current_function path call_stack
+          choices generic_calls env expression ~captured symbol arguments
+    | Choice_closure { condition; if_true; if_false } -> (
+        let left = apply_closure arguments (condition :: path) if_true in
+        let right =
+          apply_closure arguments (app "not" [ condition ] :: path) if_false
+        in
+        match (left.closure, right.closure) with
+        | None, None ->
+            make
+              (app "ite"
+                 [
+                   condition;
+                   value_term ~loc:expression.loc left;
+                   value_term ~loc:expression.loc right;
+                 ])
+        | Some if_true, Some if_false ->
+            {
+              term = "";
+              refinement = expression.refinement;
+              closure = Some (Choice_closure { condition; if_true; if_false });
+            }
+        | _ ->
+            typed_error_at expression.loc
+              "function branches disagree on whether application is partial")
+    | Abstract_closure { specification; environment } ->
+        let rec apply environment specification = function
+          | [] ->
+              {
+                term = "";
+                refinement = expression.refinement;
+                closure = Some (Abstract_closure { specification; environment });
+              }
+          | argument :: arguments -> (
+              match specification with
+              | Typed_core.Refined_base _ ->
+                  typed_error_at expression.loc
+                    "abstract function received too many arguments"
+              | Refined_arrow { parameter; domain; codomain } -> (
+                  let argument_value = recurse argument in
+                  let argument_sort = Typed_core.refined_sort domain in
+                  let environment =
+                    match domain with
+                    | Refined_base base ->
+                        let argument_term =
+                          value_term ~loc:argument.Typed_core.loc argument_value
+                        in
+                        if String.trim base.predicate <> "true" then (
+                          let predicate =
+                            Typed_core.rename_identifier ~from:base.value_name
+                              ~into:parameter base.predicate
+                            |> parse_formula ~filename:expression.loc.file
+                                 ~loc:(location_of_span expression.loc)
+                          in
+                          let predicate_env =
+                            (parameter, (argument_term, argument_sort))
+                            :: environment
+                          in
+                          formula_theory_symbols program.registry predicate_env
+                            predicate
+                          |> List.iter (use_theory_symbol generic_calls);
+                          generic_calls.side_conditions <-
+                            under_path path
+                              (typed_formula program.registry predicate_env
+                                 predicate)
+                            :: generic_calls.side_conditions);
+                        (parameter, (argument_term, argument_sort))
+                        :: environment
+                    | Refined_arrow _ ->
+                        if Option.is_none argument_value.closure then
+                          typed_error_at argument.loc
+                            "higher-order argument `%s` is not a function value"
+                            parameter;
+                        environment
+                  in
+                  if arguments <> [] then apply environment codomain arguments
+                  else
+                    match codomain with
+                    | Refined_arrow _ ->
+                        {
+                          term = "";
+                          refinement = expression.refinement;
+                          closure =
+                            Some
+                              (Abstract_closure
+                                 { specification = codomain; environment });
+                        }
+                    | Refined_base result ->
+                        let result_name =
+                          "abstract_result_"
+                          ^ string_of_int (List.length !choices)
+                        in
+                        choices := (result_name, result.base_sort) :: !choices;
+                        if String.trim result.predicate <> "true" then (
+                          let predicate =
+                            Typed_core.rename_identifier ~from:result.value_name
+                              ~into:"result" result.predicate
+                            |> parse_formula ~filename:expression.loc.file
+                                 ~loc:(location_of_span expression.loc)
+                          in
+                          let predicate_env =
+                            ("result", (result_name, result.base_sort))
+                            :: environment
+                          in
+                          formula_theory_symbols program.registry predicate_env
+                            predicate
+                          |> List.iter (use_theory_symbol generic_calls);
+                          generic_calls.summary_assumptions <-
+                            under_path path
+                              (typed_formula program.registry predicate_env
+                                 predicate)
+                            :: generic_calls.summary_assumptions);
+                        {
+                          term = result_name;
+                          refinement = expression.refinement;
+                          closure = None;
+                        }))
+        in
+        apply environment specification arguments
+  in
   match expression.Typed_core.desc with
   | Var symbol -> (
       match List.assoc_opt symbol.key env with
@@ -314,9 +622,22 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
           match expression.refinement with
           | Some refinement -> { value with refinement = Some refinement }
           | None -> value)
-      | None ->
-          typed_error_at expression.loc "unsupported global value `%s`"
-            symbol.display)
+      | None -> (
+          match
+            List.find_opt
+              (fun (function_def : Typed_core.function_def) ->
+                function_def.symbol.key = symbol.key)
+              program.functions
+          with
+          | Some _ ->
+              {
+                term = "";
+                refinement = expression.refinement;
+                closure = Some (Direct_closure { symbol; captured = [] });
+              }
+          | None ->
+              typed_error_at expression.loc "unsupported global value `%s`"
+                symbol.display))
   | Int value -> make (string_of_int value)
   | Bool value -> make (string_of_bool value)
   | Construct (constructor, arguments) | Record (constructor, arguments) ->
@@ -411,10 +732,14 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
                   (app
                      (typed_logic_name logic_symbol)
                      [ recurse_term left; recurse_term right ])
-            | None ->
-                typed_inline_call program analysis mode current_function path
-                  call_stack choices generic_calls env expression symbol
-                  [ left; right ]))
+            | None -> (
+                match List.assoc_opt symbol.key env with
+                | Some { closure = Some closure; _ } ->
+                    apply_closure [ left; right ] path closure
+                | _ ->
+                    typed_inline_call program analysis mode current_function
+                      path call_stack choices generic_calls env expression
+                      ~captured:[] symbol [ left; right ])))
   | Apply (symbol, [ argument ]) when symbol.display = "not" ->
       make (app "not" [ recurse_term argument ])
   | Apply (symbol, _) -> (
@@ -434,23 +759,56 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
             (app
                (typed_logic_name logic_symbol)
                (List.map recurse_term arguments))
+      | None -> (
+          match List.assoc_opt symbol.key env with
+          | Some { closure = Some closure; _ } ->
+              apply_closure arguments path closure
+          | _ ->
+              typed_inline_call program analysis mode current_function path
+                call_stack choices generic_calls env expression ~captured:[]
+                symbol arguments))
+  | Apply_value (callee, arguments) -> (
+      let callee = recurse callee in
+      match callee.closure with
+      | Some closure -> apply_closure arguments path closure
       | None ->
-          typed_inline_call program analysis mode current_function path
-            call_stack choices generic_calls env expression symbol arguments)
-  | If (condition, if_true, if_false) ->
+          typed_error_at expression.loc
+            "application head is not a function value")
+  | If (condition, if_true, if_false) -> (
       let condition = recurse condition in
+      let condition_term = value_term ~loc:expression.loc condition in
       let branch branch_path branch =
         typed_expr_smt_with_choices program analysis mode current_function
           (branch_path :: path) call_stack choices generic_calls env branch
       in
-      let if_true = branch condition.term if_true in
-      let if_false = branch (app "not" [ condition.term ]) if_false in
+      let if_true = branch condition_term if_true in
+      let if_false = branch (app "not" [ condition_term ]) if_false in
       let refinement =
         if if_true.refinement = if_false.refinement then if_true.refinement
         else expression.refinement
       in
-      make ~refinement
-        (app "ite" [ condition.term; if_true.term; if_false.term ])
+      match (if_true.closure, if_false.closure) with
+      | None, None ->
+          make ~refinement
+            (app "ite"
+               [
+                 condition_term;
+                 value_term ~loc:expression.loc if_true;
+                 value_term ~loc:expression.loc if_false;
+               ])
+      | Some if_true, Some if_false ->
+          {
+            term = "";
+            refinement;
+            closure =
+              Some
+                (Choice_closure
+                   { condition = condition_term; if_true; if_false });
+          }
+      | _ ->
+          typed_error_at expression.loc
+            "conditional branches disagree on whether their result is a \
+             function")
   | Let (symbol, value, body) ->
       let value = recurse value in
       typed_expr_smt_with_choices program analysis mode current_function path
@@ -494,10 +852,29 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
       in
       let rec tree = function
         | [] -> typed_error_at expression.loc "empty match"
-        | [ (_, body) ] -> body.term
-        | (guard, body) :: rest -> app "ite" [ guard; body.term; tree rest ]
+        | [ (_, body) ] -> value_term ~loc:expression.loc body
+        | (guard, body) :: rest ->
+            app "ite" [ guard; value_term ~loc:expression.loc body; tree rest ]
       in
-      make ~refinement (tree translated)
+      let closures =
+        List.map (fun (guard, value) -> (guard, value.closure)) translated
+      in
+      if List.for_all (fun (_, closure) -> Option.is_none closure) closures then
+        make ~refinement (tree translated)
+      else if List.for_all (fun (_, closure) -> Option.is_some closure) closures
+      then
+        let rec closure_tree = function
+          | [] -> typed_error_at expression.loc "empty function-valued match"
+          | [ (_, Some closure) ] -> closure
+          | (guard, Some if_true) :: rest ->
+              Choice_closure
+                { condition = guard; if_true; if_false = closure_tree rest }
+          | _ -> assert false
+        in
+        { term = ""; refinement; closure = Some (closure_tree closures) }
+      else
+        typed_error_at expression.loc
+          "match branches disagree on whether their result is a function"
   | Field (constructor, index, record) ->
       use_theory_symbol generic_calls constructor.symbol.key;
       make (app (typed_selector constructor index) [ recurse_term record ])
@@ -512,7 +889,7 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
         "exception outcome escaped the relational translator"
 
 and typed_inline_call program analysis mode current_function path call_stack
-    choices generic_calls env expression symbol arguments =
+    choices generic_calls env expression ~captured symbol arguments =
   let function_def =
     List.find_opt
       (fun (function_def : Typed_core.function_def) ->
@@ -524,263 +901,369 @@ and typed_inline_call program analysis mode current_function path call_stack
       typed_error_at expression.Typed_core.loc
         "call to `%s` needs a refinement summary" symbol.display
   | Some function_def ->
-      if List.length arguments <> List.length function_def.arguments then
-        typed_error_at expression.loc
-          "call to `%s` has unsupported partial arity" symbol.display;
-      let function_def =
-        instantiate_function_at_call ~loc:expression.loc function_def arguments
-          expression.sort
-      in
-      let call_program = typed_monomorphize_datatypes program function_def in
-      List.iter
-        (fun (datatype : Typed_core.datatype) ->
-          if
-            not
-              (List.exists
-                 (fun (existing : Typed_core.datatype) ->
-                   existing.owner = datatype.owner)
-                 program.registry.datatypes)
-          then
-            program.registry.datatypes <- datatype :: program.registry.datatypes)
-        call_program.registry.datatypes;
-      let values =
+      let previous_arity = List.length captured in
+      let supplied =
         List.map
-          (typed_expr_smt_with_choices program analysis mode current_function
-             path call_stack choices generic_calls env)
+          (fun (argument : Typed_core.expr) ->
+            ( typed_expr_smt_with_choices program analysis mode current_function
+                path call_stack choices generic_calls env argument,
+              argument.sort ))
           arguments
       in
-      let terms = List.map (fun value -> value.term) values in
-      let recursive =
-        Function_analysis.is_recursive_edge analysis
-          ~caller:current_function.Typed_core.symbol.key ~callee:symbol.key
-      in
+      let captured = captured @ supplied in
+      if List.length captured > List.length function_def.arguments then
+        typed_error_at expression.loc "call to `%s` supplies too many arguments"
+          symbol.display;
       let over_contracts =
         List.filter
           (fun (contract : Typed_core.contract) -> contract.mode = Over)
           function_def.contracts
       in
-      let constructive_under_contracts =
-        List.filter
-          (fun (contract : Typed_core.contract) ->
-            contract.mode = Under
-            && (contract.witnesses <> [] || contract.witness_relation <> None))
-          function_def.contracts
+      let over_summary =
+        match over_contracts with
+        | [] -> None
+        | [ summary ] -> Some summary
+        | _ ->
+            typed_error_at expression.loc
+              "call to `%s` has ambiguous safety summaries" symbol.display
       in
-      if mode = Over && over_contracts <> [] then (
-        let summary =
-          match over_contracts with
-          | [ summary ] -> summary
-          | _ ->
-              typed_error_at expression.loc
-                "call to `%s` has ambiguous safety summaries" symbol.display
-        in
-        let result = "call_result_" ^ string_of_int (List.length !choices) in
-        choices := (result, function_def.result) :: !choices;
-        let formula_env =
-          List.map2
-            (fun ((argument : Typed_core.symbol), sort) term ->
-              (argument.display, (term, sort)))
-            function_def.arguments terms
-        in
-        let translate formula =
-          let formula =
-            parse_formula ~filename:summary.loc.file
-              ~loc:(location_of_span summary.loc)
-              formula
-          in
-          formula_theory_symbols program.registry formula_env formula
-          |> List.iter (use_theory_symbol generic_calls);
-          typed_formula program.registry formula_env formula
-        in
-        let pre = translate summary.pre in
-        let post =
-          let formula =
-            parse_formula ~filename:summary.loc.file
-              ~loc:(location_of_span summary.loc)
-              summary.post
-          in
-          formula_theory_symbols program.registry
-            (("result", (result, function_def.result)) :: formula_env)
-            formula
-          |> List.iter (use_theory_symbol generic_calls);
-          typed_formula program.registry
-            (("result", (result, function_def.result)) :: formula_env)
-            formula
-        in
-        generic_calls.side_conditions <-
-          under_path path pre :: generic_calls.side_conditions;
-        generic_calls.summary_assumptions <-
-          under_path path post :: generic_calls.summary_assumptions;
-        (if recursive then
-           let callee_measure =
-             match function_def.measure with
-             | Some measure -> measure
-             | None ->
-                 typed_error_at expression.loc
-                   "recursive callee `%s` needs [@refined.measure]"
-                   symbol.display
-           in
-           let caller_measure =
-             match current_function.Typed_core.measure with
-             | Some measure -> measure
-             | None ->
-                 typed_error_at expression.loc
-                   "recursive caller `%s` needs [@refined.measure]"
-                   current_function.symbol.display
-           in
-           let callee_measure_term =
-             List.find_map
-               (fun (((argument : Typed_core.symbol), _), term) ->
-                 if argument.key = callee_measure.key then Some term else None)
-               (List.combine function_def.arguments terms)
-             |> Option.get
-           in
-           let caller_measure_term =
-             match List.assoc_opt caller_measure.key env with
-             | Some value -> value.term
-             | None -> assert false
-           in
-           generic_calls.side_conditions <-
-             under_path path
-               (and_
-                  [
-                    app ">=" [ caller_measure_term; "0" ];
-                    app "<" [ callee_measure_term; caller_measure_term ];
-                  ])
-             :: generic_calls.side_conditions);
-        { term = result; refinement = expression.refinement })
-      else if mode = Under && constructive_under_contracts <> [] then (
-        let summary =
-          match constructive_under_contracts with
-          | [ summary ] -> summary
-          | _ ->
-              typed_error_at expression.loc
-                "call to `%s` has ambiguous constructive coverage summaries"
-                symbol.display
-        in
-        let formal_names =
-          List.map
-            (fun ((argument : Typed_core.symbol), _) -> argument.display)
-            function_def.arguments
-        in
-        if
-          summary.witnesses <> []
-          && List.sort String.compare (List.map fst summary.witnesses)
-             <> List.sort String.compare formal_names
-        then
-          typed_error_at expression.loc
-            "coverage summary for `%s` has incomplete witnesses" symbol.display;
-        let result = "call_result_" ^ string_of_int (List.length !choices) in
-        choices := (result, function_def.result) :: !choices;
-        let result_env = [ ("result", (result, function_def.result)) ] in
-        let ghost_env =
-          List.map
-            (fun (name, sort) ->
-              let term =
-                "call_ghost_" ^ smt_identifier name ^ "_"
-                ^ string_of_int (List.length !choices)
-              in
-              choices := (term, sort) :: !choices;
-              (name, (term, sort)))
-            summary.ghosts
-        in
-        let witness_env = ghost_env @ result_env in
-        let formula_env =
-          List.map2
-            (fun ((formal : Typed_core.symbol), sort) term ->
-              (formal.display, (term, sort)))
-            function_def.arguments terms
-        in
-        let parse text =
-          parse_formula ~filename:summary.loc.file
-            ~loc:(location_of_span summary.loc)
-            text
-        in
-        let post_formula = parse summary.post in
-        formula_theory_symbols program.registry result_env post_formula
-        |> List.iter (use_theory_symbol generic_calls);
-        let constraints =
-          typed_formula program.registry result_env post_formula
-          ::
-          (if summary.witnesses = [] then []
-           else
-             List.map2
-               (fun ((formal : Typed_core.symbol), sort) actual ->
-                 let witness =
-                   parse (List.assoc formal.display summary.witnesses)
-                 in
-                 formula_theory_symbols ~expected:sort program.registry
-                   witness_env witness
-                 |> List.iter (use_theory_symbol generic_calls);
-                 app "="
-                   [
-                     actual;
-                     typed_formula ~expected:sort program.registry witness_env
-                       witness;
-                   ])
-               function_def.arguments terms)
-        in
-        let constraints =
-          match summary.witness_relation with
-          | None -> constraints
-          | Some relation ->
-              let relation = parse relation in
-              let relation_env = witness_env @ formula_env in
-              formula_theory_symbols program.registry relation_env relation
-              |> List.iter (use_theory_symbol generic_calls);
-              typed_formula program.registry relation_env relation
-              :: constraints
-        in
-        generic_calls.summary_assumptions <-
-          List.rev_append
-            (List.map (under_path path) constraints)
-            generic_calls.summary_assumptions;
-        (if recursive then
-           let callee_measure =
-             match function_def.measure with
-             | Some measure -> measure
-             | None ->
-                 typed_error_at expression.loc
-                   "recursive coverage callee `%s` needs [@refined.measure]"
-                   symbol.display
-           in
-           let caller_measure =
-             match current_function.Typed_core.measure with
-             | Some measure -> measure
-             | None ->
-                 typed_error_at expression.loc
-                   "recursive coverage caller `%s` needs [@refined.measure]"
-                   current_function.symbol.display
-           in
-           let callee =
-             List.find_map
-               (fun (((argument : Typed_core.symbol), _), term) ->
-                 if argument.key = callee_measure.key then Some term else None)
-               (List.combine function_def.arguments terms)
-             |> Option.get
-           in
-           let caller = (List.assoc caller_measure.key env).term in
-           generic_calls.summary_assumptions <-
-             under_path path
-               (and_ [ app ">=" [ caller; "0" ]; app "<" [ callee; caller ] ])
-             :: generic_calls.summary_assumptions);
-        { term = result; refinement = expression.refinement })
-      else if recursive then
+      if
+        mode = Under
+        && List.exists
+             (fun supplied_index ->
+               let index = previous_arity + supplied_index in
+               List.exists
+                 (fun (summary : Typed_core.contract) ->
+                   match
+                     List.nth (Typed_core.contract_domains summary) index
+                   with
+                   | _, Typed_core.Refined_arrow _ -> true
+                   | _, Refined_base _ -> false)
+                 function_def.contracts)
+             (List.init (List.length supplied) Fun.id)
+      then
         typed_error_at expression.loc
-          (if mode = Under then
-             "recursive coverage call to `%s` needs a compositional \
-              under-summary"
-           else "recursive call to `%s` needs one safety summary")
-          symbol.display
+          "higher-order calls in coverage VCs are not supported";
+      (match (mode, over_summary) with
+      | Over, Some summary ->
+          let domains = Typed_core.contract_domains summary in
+          List.iteri
+            (fun supplied_index _ ->
+              let index = previous_arity + supplied_index in
+              let parameter, domain = List.nth domains index in
+              match domain with
+              | Typed_core.Refined_arrow _ -> (
+                  let value, _ = List.nth captured index in
+                  match value.closure with
+                  | Some closure when closure_satisfies program domain closure
+                    ->
+                      ()
+                  | Some _ ->
+                      typed_error_at expression.loc
+                        "function argument `%s` does not satisfy its \
+                         higher-order refinement"
+                        parameter
+                  | None ->
+                      typed_error_at expression.loc
+                        "higher-order argument `%s` is not a function value"
+                        parameter)
+              | Refined_base domain ->
+                  if String.trim domain.predicate <> "true" then (
+                    let formula_env =
+                      List.filter_mapi
+                        (fun current (value, _) ->
+                          if current > index then None
+                          else
+                            let formal, sort =
+                              List.nth function_def.arguments current
+                            in
+                            Some (formal.Typed_core.display, (value.term, sort)))
+                        captured
+                    in
+                    let predicate =
+                      Typed_core.rename_identifier ~from:domain.value_name
+                        ~into:parameter domain.predicate
+                      |> parse_formula ~filename:summary.loc.file
+                           ~loc:(location_of_span summary.loc)
+                    in
+                    formula_theory_symbols program.registry formula_env
+                      predicate
+                    |> List.iter (use_theory_symbol generic_calls);
+                    generic_calls.side_conditions <-
+                      under_path path
+                        (typed_formula program.registry formula_env predicate)
+                      :: generic_calls.side_conditions))
+            supplied
+      | Under, _ | Over, None -> ());
+      if List.length captured < List.length function_def.arguments then
+        {
+          term = "";
+          refinement = expression.refinement;
+          closure = Some (Direct_closure { symbol; captured });
+        }
       else
-        let call_env =
-          List.map2
-            (fun (argument, _) term -> (argument.Typed_core.key, term))
-            function_def.arguments values
+        let function_def =
+          instantiate_function_at_call_sorts ~loc:expression.loc function_def
+            (List.map snd captured) expression.sort
         in
-        typed_expr_smt_with_choices program analysis mode function_def path
-          (symbol.key :: call_stack) choices generic_calls call_env
-          function_def.body
+        let call_program = typed_monomorphize_datatypes program function_def in
+        List.iter
+          (fun (datatype : Typed_core.datatype) ->
+            if
+              not
+                (List.exists
+                   (fun (existing : Typed_core.datatype) ->
+                     existing.owner = datatype.owner)
+                   program.registry.datatypes)
+            then
+              program.registry.datatypes <-
+                datatype :: program.registry.datatypes)
+          call_program.registry.datatypes;
+        let values = List.map fst captured in
+        let terms =
+          List.map2
+            (fun value (_, sort) ->
+              match sort with
+              | Typed_core.S_arrow _ ->
+                  let name =
+                    "closure_argument_" ^ string_of_int (List.length !choices)
+                  in
+                  choices := (name, sort) :: !choices;
+                  name
+              | _ -> value_term ~loc:expression.Typed_core.loc value)
+            values function_def.arguments
+        in
+        let recursive =
+          Function_analysis.is_recursive_edge analysis
+            ~caller:current_function.Typed_core.symbol.key ~callee:symbol.key
+        in
+        let constructive_under_contracts =
+          List.filter
+            (fun (contract : Typed_core.contract) ->
+              contract.mode = Under
+              && (contract.witnesses <> [] || contract.witness_relation <> None))
+            function_def.contracts
+        in
+        if mode = Over && over_contracts <> [] then (
+          let summary =
+            match over_contracts with
+            | [ summary ] -> summary
+            | _ ->
+                typed_error_at expression.loc
+                  "call to `%s` has ambiguous safety summaries" symbol.display
+          in
+          let formula_env =
+            List.map2
+              (fun ((argument : Typed_core.symbol), sort) term ->
+                (argument.display, (term, sort)))
+              function_def.arguments terms
+          in
+          let add_termination_condition () =
+            if recursive then
+              let callee_measure =
+                match function_def.measure with
+                | Some measure -> measure
+                | None ->
+                    typed_error_at expression.loc
+                      "recursive callee `%s` needs [@refined.measure]"
+                      symbol.display
+              in
+              let caller_measure =
+                match current_function.Typed_core.measure with
+                | Some measure -> measure
+                | None ->
+                    typed_error_at expression.loc
+                      "recursive caller `%s` needs [@refined.measure]"
+                      current_function.symbol.display
+              in
+              let callee_measure_term =
+                List.find_map
+                  (fun (((argument : Typed_core.symbol), _), term) ->
+                    if argument.key = callee_measure.key then Some term
+                    else None)
+                  (List.combine function_def.arguments terms)
+                |> Option.get
+              in
+              let caller_measure_term =
+                match List.assoc_opt caller_measure.key env with
+                | Some value -> value.term
+                | None -> assert false
+              in
+              generic_calls.side_conditions <-
+                under_path path
+                  (and_
+                     [
+                       app ">=" [ caller_measure_term; "0" ];
+                       app "<" [ callee_measure_term; caller_measure_term ];
+                     ])
+                :: generic_calls.side_conditions
+          in
+          add_termination_condition ();
+          match Typed_core.contract_result summary with
+          | Refined_arrow _ as specification ->
+              {
+                term = "";
+                refinement = expression.refinement;
+                closure =
+                  Some
+                    (Abstract_closure
+                       { specification; environment = formula_env });
+              }
+          | Refined_base _ ->
+              let result =
+                "call_result_" ^ string_of_int (List.length !choices)
+              in
+              choices := (result, function_def.result) :: !choices;
+              let post =
+                let _, formula = contract_expressions summary in
+                formula_theory_symbols program.registry
+                  (("result", (result, function_def.result)) :: formula_env)
+                  formula
+                |> List.iter (use_theory_symbol generic_calls);
+                typed_formula program.registry
+                  (("result", (result, function_def.result)) :: formula_env)
+                  formula
+              in
+              generic_calls.summary_assumptions <-
+                under_path path post :: generic_calls.summary_assumptions;
+              {
+                term = result;
+                refinement = expression.refinement;
+                closure = None;
+              })
+        else if mode = Under && constructive_under_contracts <> [] then (
+          let summary =
+            match constructive_under_contracts with
+            | [ summary ] -> summary
+            | _ ->
+                typed_error_at expression.loc
+                  "call to `%s` has ambiguous constructive coverage summaries"
+                  symbol.display
+          in
+          let formal_names =
+            List.map
+              (fun ((argument : Typed_core.symbol), _) -> argument.display)
+              function_def.arguments
+          in
+          if
+            summary.witnesses <> []
+            && List.sort String.compare (List.map fst summary.witnesses)
+               <> List.sort String.compare formal_names
+          then
+            typed_error_at expression.loc
+              "coverage summary for `%s` has incomplete witnesses"
+              symbol.display;
+          let result = "call_result_" ^ string_of_int (List.length !choices) in
+          choices := (result, function_def.result) :: !choices;
+          let result_env = [ ("result", (result, function_def.result)) ] in
+          let ghost_env =
+            List.map
+              (fun (name, sort) ->
+                let term =
+                  "call_ghost_" ^ smt_identifier name ^ "_"
+                  ^ string_of_int (List.length !choices)
+                in
+                choices := (term, sort) :: !choices;
+                (name, (term, sort)))
+              summary.ghosts
+          in
+          let witness_env = ghost_env @ result_env in
+          let formula_env =
+            List.map2
+              (fun ((formal : Typed_core.symbol), sort) term ->
+                (formal.display, (term, sort)))
+              function_def.arguments terms
+          in
+          let parse text =
+            parse_formula ~filename:summary.loc.file
+              ~loc:(location_of_span summary.loc)
+              text
+          in
+          let _, post_formula = contract_expressions summary in
+          formula_theory_symbols program.registry result_env post_formula
+          |> List.iter (use_theory_symbol generic_calls);
+          let constraints =
+            typed_formula program.registry result_env post_formula
+            ::
+            (if summary.witnesses = [] then []
+             else
+               List.map2
+                 (fun ((formal : Typed_core.symbol), sort) actual ->
+                   let witness =
+                     parse (List.assoc formal.display summary.witnesses)
+                   in
+                   formula_theory_symbols ~expected:sort program.registry
+                     witness_env witness
+                   |> List.iter (use_theory_symbol generic_calls);
+                   app "="
+                     [
+                       actual;
+                       typed_formula ~expected:sort program.registry witness_env
+                         witness;
+                     ])
+                 function_def.arguments terms)
+          in
+          let constraints =
+            match summary.witness_relation with
+            | None -> constraints
+            | Some relation ->
+                let relation = parse relation in
+                let relation_env = witness_env @ formula_env in
+                formula_theory_symbols program.registry relation_env relation
+                |> List.iter (use_theory_symbol generic_calls);
+                typed_formula program.registry relation_env relation
+                :: constraints
+          in
+          generic_calls.summary_assumptions <-
+            List.rev_append
+              (List.map (under_path path) constraints)
+              generic_calls.summary_assumptions;
+          (if recursive then
+             let callee_measure =
+               match function_def.measure with
+               | Some measure -> measure
+               | None ->
+                   typed_error_at expression.loc
+                     "recursive coverage callee `%s` needs [@refined.measure]"
+                     symbol.display
+             in
+             let caller_measure =
+               match current_function.Typed_core.measure with
+               | Some measure -> measure
+               | None ->
+                   typed_error_at expression.loc
+                     "recursive coverage caller `%s` needs [@refined.measure]"
+                     current_function.symbol.display
+             in
+             let callee =
+               List.find_map
+                 (fun (((argument : Typed_core.symbol), _), term) ->
+                   if argument.key = callee_measure.key then Some term else None)
+                 (List.combine function_def.arguments terms)
+               |> Option.get
+             in
+             let caller = (List.assoc caller_measure.key env).term in
+             generic_calls.summary_assumptions <-
+               under_path path
+                 (and_ [ app ">=" [ caller; "0" ]; app "<" [ callee; caller ] ])
+               :: generic_calls.summary_assumptions);
+          { term = result; refinement = expression.refinement; closure = None })
+        else if recursive then
+          typed_error_at expression.loc
+            (if mode = Under then
+               "recursive coverage call to `%s` needs a compositional \
+                under-summary"
+             else "recursive call to `%s` needs one safety summary")
+            symbol.display
+        else
+          let call_env =
+            List.map2
+              (fun (argument, _) term -> (argument.Typed_core.key, term))
+              function_def.arguments values
+          in
+          typed_expr_smt_with_choices program analysis mode function_def path
+            (symbol.key :: call_stack) choices generic_calls call_env
+            function_def.body
 
 let typed_expr_smt program analysis mode function_def env expression =
   let choices = ref [] in
@@ -803,6 +1286,8 @@ let rec typed_has_exception (expression : Typed_core.expr) =
   | Apply (_, expressions)
   | Record (_, expressions) ->
       List.exists typed_has_exception expressions
+  | Apply_value (callee, expressions) ->
+      typed_has_exception callee || List.exists typed_has_exception expressions
   | If (condition, if_true, if_false) ->
       List.exists typed_has_exception [ condition; if_true; if_false ]
   | Let (_, value, body) ->
@@ -834,6 +1319,8 @@ let typed_requires_relational (program : Typed_core.program) expression =
                (fun (callee : Typed_core.function_def) ->
                  callee.symbol.key = symbol.key)
                program.functions)
+    | Apply_value (callee, arguments) ->
+        check visited callee || List.exists (check visited) arguments
     | Tuple expressions
     | Construct (_, expressions)
     | Choose expressions
@@ -882,6 +1369,8 @@ let typed_local_cells expression =
     | Apply (_, expressions)
     | Record (_, expressions) ->
         List.fold_left collect cells expressions
+    | Apply_value (callee, expressions) ->
+        List.fold_left collect (collect cells callee) expressions
     | Assign (_, value) | Field (_, _, value) -> collect cells value
     | Var _ | Int _ | Bool _ | Raise (_, None) | Perform (_, None) | Deref _ ->
         cells
@@ -934,7 +1423,7 @@ let typed_expression_reference_sorts ?registry expression =
                               (reachable_content_sorts registry
                                  (sort_name :: visited))
                               constructor.arguments))
-        | S_int | S_bool | S_unit | S_var _ -> [])
+        | S_arrow _ | S_int | S_bool | S_unit | S_var _ -> [])
   in
   let rec collect sorts (expression : Typed_core.expr) =
     let sorts =
@@ -970,6 +1459,8 @@ let typed_expression_reference_sorts ?registry expression =
     | Apply (_, expressions)
     | Record (_, expressions) ->
         List.fold_left collect sorts expressions
+    | Apply_value (callee, expressions) ->
+        List.fold_left collect (collect sorts callee) expressions
     | Assign (_, value) | Field (_, _, value) -> collect sorts value
     | Raise (_, Some payload) | Perform (_, Some payload) ->
         collect sorts payload
@@ -1017,6 +1508,8 @@ let typed_expression_sorts expression =
           (collect sorts body) cases
     | Tuple expressions | Choose expressions | Apply (_, expressions) ->
         List.fold_left collect sorts expressions
+    | Apply_value (callee, expressions) ->
+        List.fold_left collect (collect sorts callee) expressions
     | Construct (constructor, expressions) | Record (constructor, expressions)
       ->
         List.fold_left collect
@@ -1113,6 +1606,10 @@ let typed_outcome_payload_sorts ?program expression =
                 collect (symbol.key :: visited) outcomes callee.body
             | None -> outcomes)
         | None | Some _ -> outcomes)
+    | Apply_value (callee, expressions) ->
+        List.fold_left (collect visited)
+          (collect visited outcomes callee)
+          expressions
     | Tuple expressions
     | Construct (_, expressions)
     | Choose expressions
@@ -1137,6 +1634,159 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
           Option.map (fun value -> (value.term, sort)) (List.assoc_opt key env))
       )
   in
+  let is_arrow = function Typed_core.S_arrow _ -> true | _ -> false in
+  let is_global_function symbol =
+    List.exists
+      (fun (callee : Typed_core.function_def) ->
+        callee.symbol.key = symbol.Typed_core.key)
+      program.Typed_core.functions
+  in
+  let global_function symbol =
+    List.find_opt
+      (fun (callee : Typed_core.function_def) ->
+        callee.symbol.key = symbol.Typed_core.key)
+      program.Typed_core.functions
+  in
+  let residual_application (expression : Typed_core.expr) =
+    match expression.desc with
+    | Var global ->
+        Option.map (fun callee -> (callee, [])) (global_function global)
+    | Apply (global, arguments) -> (
+        match global_function global with
+        | Some callee when List.length arguments < List.length callee.arguments
+          ->
+            Some (callee, arguments)
+        | Some _ | None -> None)
+    | _ -> None
+  in
+  let rec substitute_closure target replacement (expression : Typed_core.expr) =
+    let recurse = substitute_closure target replacement in
+    let desc =
+      match expression.desc with
+      | Var symbol when symbol.key = target -> replacement.Typed_core.desc
+      | Apply (symbol, arguments) when symbol.key = target ->
+          Apply_value (replacement, List.map recurse arguments)
+      | (Var _ | Int _ | Bool _ | Deref _) as desc -> desc
+      | Apply (symbol, arguments) -> Apply (symbol, List.map recurse arguments)
+      | Apply_value (callee, arguments) ->
+          Apply_value (recurse callee, List.map recurse arguments)
+      | Tuple expressions -> Tuple (List.map recurse expressions)
+      | Construct (constructor, expressions) ->
+          Construct (constructor, List.map recurse expressions)
+      | Record (constructor, expressions) ->
+          Record (constructor, List.map recurse expressions)
+      | Choose expressions -> Choose (List.map recurse expressions)
+      | If (condition, if_true, if_false) ->
+          If (recurse condition, recurse if_true, recurse if_false)
+      | Let (symbol, value, body) -> Let (symbol, recurse value, recurse body)
+      | Match (scrutinee, cases) ->
+          Match
+            ( recurse scrutinee,
+              List.map (fun (pattern, body) -> (pattern, recurse body)) cases )
+      | Field (constructor, index, record) ->
+          Field (constructor, index, recurse record)
+      | Raise (exception_, payload) ->
+          Raise (exception_, Option.map recurse payload)
+      | Try (body, cases) ->
+          Try
+            ( recurse body,
+              List.map
+                (fun (pattern, handler) -> (pattern, recurse handler))
+                cases )
+      | Ref (sort, initial) -> Ref (sort, recurse initial)
+      | Let_ref (symbol, sort, initial, body) ->
+          Let_ref (symbol, sort, recurse initial, recurse body)
+      | Assign (symbol, value) -> Assign (symbol, recurse value)
+      | Sequence (first, second) -> Sequence (recurse first, recurse second)
+      | Perform (operation, payload) ->
+          Perform (operation, Option.map recurse payload)
+      | Handle (body, handlers) ->
+          let rec action = function
+            | Typed_core.Abort body -> Typed_core.Abort (recurse body)
+            | Resume value -> Resume (recurse value)
+            | Conditional (condition, if_true, if_false) ->
+                Conditional (recurse condition, action if_true, action if_false)
+          in
+          Handle
+            ( recurse body,
+              List.map
+                (fun (operation, payload, handler) ->
+                  (operation, payload, action handler))
+                handlers )
+    in
+    { expression with desc }
+  in
+  let rec normalize_residual_closures (expression : Typed_core.expr) =
+    let normalize = normalize_residual_closures in
+    let rebuild desc = { expression with desc } in
+    match expression.desc with
+    | Let (symbol, value, body) when is_arrow value.sort ->
+        let value : Typed_core.expr = normalize value in
+        rebuild (Let (symbol, value, normalize body))
+    | Apply_value (callee, arguments) -> (
+        let callee = normalize callee in
+        let arguments = List.map normalize arguments in
+        match callee.desc with
+        | Var symbol when is_global_function symbol ->
+            rebuild (Apply (symbol, arguments))
+        | Apply (symbol, _captured) when is_global_function symbol ->
+            rebuild (Apply_value (callee, arguments))
+        | _ -> rebuild (Apply_value (callee, arguments)))
+    | Var _ | Int _ | Bool _ | Deref _ -> expression
+    | Apply (symbol, arguments) ->
+        rebuild (Apply (symbol, List.map normalize arguments))
+    | Tuple expressions -> rebuild (Tuple (List.map normalize expressions))
+    | Construct (constructor, expressions) ->
+        rebuild (Construct (constructor, List.map normalize expressions))
+    | Record (constructor, expressions) ->
+        rebuild (Record (constructor, List.map normalize expressions))
+    | Choose expressions -> rebuild (Choose (List.map normalize expressions))
+    | If (condition, if_true, if_false) ->
+        rebuild
+          (If (normalize condition, normalize if_true, normalize if_false))
+    | Let (symbol, value, body) ->
+        rebuild (Let (symbol, normalize value, normalize body))
+    | Match (scrutinee, cases) ->
+        rebuild
+          (Match
+             ( normalize scrutinee,
+               List.map (fun (pattern, body) -> (pattern, normalize body)) cases
+             ))
+    | Field (constructor, index, record) ->
+        rebuild (Field (constructor, index, normalize record))
+    | Raise (exception_, payload) ->
+        rebuild (Raise (exception_, Option.map normalize payload))
+    | Try (body, cases) ->
+        rebuild
+          (Try
+             ( normalize body,
+               List.map
+                 (fun (pattern, handler) -> (pattern, normalize handler))
+                 cases ))
+    | Ref (sort, initial) -> rebuild (Ref (sort, normalize initial))
+    | Let_ref (symbol, sort, initial, body) ->
+        rebuild (Let_ref (symbol, sort, normalize initial, normalize body))
+    | Assign (symbol, value) -> rebuild (Assign (symbol, normalize value))
+    | Sequence (first, second) ->
+        rebuild (Sequence (normalize first, normalize second))
+    | Perform (operation, payload) ->
+        rebuild (Perform (operation, Option.map normalize payload))
+    | Handle (body, handlers) ->
+        let rec action = function
+          | Typed_core.Abort body -> Typed_core.Abort (normalize body)
+          | Resume value -> Resume (normalize value)
+          | Conditional (condition, if_true, if_false) ->
+              Conditional (normalize condition, action if_true, action if_false)
+        in
+        rebuild
+          (Handle
+             ( normalize body,
+               List.map
+                 (fun (operation, payload, handler) ->
+                   (operation, payload, action handler))
+                 handlers ))
+  in
+  let expression = normalize_residual_closures expression in
   let rec translate env state path (expression : Typed_core.expr) continuation =
     match expression.desc with
     | Raise (exception_, None) -> R.raise_ ~state exception_.display
@@ -1156,6 +1806,20 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
         | Some payload ->
             translate env state path payload (fun payload state ->
                 perform (Some payload) state))
+    | Apply_value (callee, arguments)
+      when Option.is_some (residual_application callee) ->
+        let _closure =
+          typed_expr_smt_with_choices program analysis mode function_def path []
+            choices generic_calls env callee
+        in
+        let function_def, captured = Option.get (residual_application callee) in
+        let application =
+          {
+            expression with
+            desc = Apply (function_def.symbol, captured @ arguments);
+          }
+        in
+        translate env state path application continuation
     | Apply (symbol, arguments) -> (
         match
           List.find_opt
@@ -1635,7 +2299,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 let relation_env =
                   witness_env @ call_formula_env @ old_reference_env
                 in
-                let post = parse summary.post in
+                let _, post = contract_expressions summary in
                 formula_theory_symbols program.registry public_target_env post
                 |> List.iter (use_theory_symbol generic_calls);
                 let result_state_guards =
@@ -1985,11 +2649,14 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 formula_theory_symbols program.registry env formula
                 |> List.iter (use_theory_symbol generic_calls)
               in
-              let pre_formula = parse summary.pre in
-              mark formula_env pre_formula;
+              let pre_formulas, _ = contract_expressions summary in
+              List.iter (mark formula_env) pre_formulas;
               generic_calls.side_conditions <-
                 under_path path
-                  (typed_formula program.registry formula_env pre_formula)
+                  (and_
+                     (List.map
+                        (typed_formula program.registry formula_env)
+                        pre_formulas))
                 :: generic_calls.side_conditions;
               let reference_formals = typed_reference_arguments callee in
               let actual_cell name =
@@ -2083,7 +2750,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               let result_env =
                 ("result", (result, callee.result)) :: formula_env
               in
-              let post_formula = parse summary.post in
+              let _, post_formula = contract_expressions summary in
               mark result_env post_formula;
               let result_state_guards, result_final_state, result_updates =
                 match reference_content_sort callee.result with
@@ -2463,7 +3130,9 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   let handler_env =
                     match (payload_binder, payload) with
                     | Some (binder : Typed_core.symbol), Some payload ->
-                        (binder.key, { term = payload; refinement = None })
+                        ( binder.key,
+                          { term = payload; refinement = None; closure = None }
+                        )
                         :: env
                     | None, _ -> env
                     | Some _, None ->
@@ -2519,10 +3188,25 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
             (translate env state
                (app "not" [ condition.term ] :: path)
                if_false continuation)
+    | Let (symbol, value, body)
+      when is_arrow value.sort && Option.is_some (residual_application value) ->
+        let closure =
+          typed_expr_smt_with_choices program analysis mode function_def path []
+            choices generic_calls env value
+        in
+        if Option.is_none closure.closure then
+          typed_error_at value.loc
+            "function-valued binding did not produce a residual closure";
+        let body =
+          substitute_closure symbol.key value body
+          |> normalize_residual_closures
+        in
+        translate env state path body continuation
     | Let (symbol, value, body) ->
         translate env state path value (fun value state ->
             translate
-              ((symbol.key, { term = value; refinement = None }) :: env)
+              ((symbol.key, { term = value; refinement = None; closure = None })
+              :: env)
               state path body continuation)
     | Match (scrutinee, cases) ->
         translate env state path scrutinee (fun value state ->
@@ -2562,7 +3246,9 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                     match (pattern, payload) with
                     | ( Typed_core.Exn (_, Some (binder : Typed_core.symbol)),
                         Some payload ) ->
-                        (binder.key, { term = payload; refinement = None })
+                        ( binder.key,
+                          { term = payload; refinement = None; closure = None }
+                        )
                         :: env
                     | Exn (_, None), _ | Exn_any, _ -> env
                     | Exn (_, Some _), None ->
@@ -2626,7 +3312,9 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               :: List.remove_assoc key state
             in
             let env =
-              (symbol.key, { term = identity; refinement = None }) :: env
+              ( symbol.key,
+                { term = identity; refinement = None; closure = None } )
+              :: env
             in
             translate env state path body continuation)
     | Deref symbol ->
@@ -2691,6 +3379,7 @@ let typed_collect_sorts program function_def =
   let rec closed = function
     | Typed_core.S_var _ -> false
     | S_tuple sorts | S_app (_, sorts) -> List.for_all closed sorts
+    | S_arrow (domain, codomain) -> closed domain && closed codomain
     | S_int | S_bool | S_unit -> true
   in
   let rec add set sort =
@@ -2698,6 +3387,7 @@ let typed_collect_sorts program function_def =
     match sort with
     | Typed_core.S_tuple sorts | S_app (_, sorts) ->
         List.fold_left add set sorts
+    | S_arrow (domain, codomain) -> add (add set domain) codomain
     | S_int | S_bool | S_unit | S_var _ -> set
   in
   let set =
@@ -2735,13 +3425,19 @@ let typed_collect_sorts program function_def =
   let set =
     List.fold_left
       (fun set (axiom : Typed_core.axiom) ->
-        List.fold_left (fun set (_, sort) -> add set sort) set axiom.variables)
+        List.fold_left
+          (fun set (_, sort) -> add set sort)
+          set
+          (List.map (fun (_, name, sort) -> (name, sort)) axiom.binders))
       set program.registry.axioms
   in
   let set =
     List.fold_left
       (fun set (lemma : Typed_core.axiom) ->
-        List.fold_left (fun set (_, sort) -> add set sort) set lemma.variables)
+        List.fold_left
+          (fun set (_, sort) -> add set sort)
+          set
+          (List.map (fun (_, name, sort) -> (name, sort)) lemma.binders))
       set program.registry.checked_lemmas
   in
   List.fold_left
@@ -2759,12 +3455,16 @@ let typed_collect_sort_values program function_def =
   let rec closed = function
     | Typed_core.S_var _ -> false
     | S_tuple sorts | S_app (_, sorts) -> List.for_all closed sorts
+    | S_arrow (domain, codomain) -> closed domain && closed codomain
     | S_int | S_bool | S_unit -> true
   in
   let rec add sort =
     Hashtbl.replace values (typed_smt_sort sort) sort;
     match sort with
     | Typed_core.S_tuple sorts | S_app (_, sorts) -> List.iter add sorts
+    | S_arrow (domain, codomain) ->
+        add domain;
+        add codomain
     | S_int | S_bool | S_unit | S_var _ -> ()
   in
   List.iter (fun (_, sort) -> add sort) function_def.Typed_core.arguments;
@@ -2797,11 +3497,15 @@ let typed_collect_sort_values program function_def =
     program.registry.logic_by_name;
   List.iter
     (fun (axiom : Typed_core.axiom) ->
-      List.iter (fun (_, sort) -> add sort) axiom.variables)
+      List.iter
+        (fun (_, sort) -> add sort)
+        (List.map (fun (_, name, sort) -> (name, sort)) axiom.binders))
     program.registry.axioms;
   List.iter
     (fun (lemma : Typed_core.axiom) ->
-      List.iter (fun (_, sort) -> add sort) lemma.variables)
+      List.iter
+        (fun (_, sort) -> add sort)
+        (List.map (fun (_, name, sort) -> (name, sort)) lemma.binders))
     program.registry.checked_lemmas;
   Hashtbl.fold (fun _ sort result -> sort :: result) values []
 
@@ -2816,12 +3520,14 @@ let typed_datatype_prelude program function_def =
         typed_smt_sort datatype.Typed_core.owner)
       program.Typed_core.registry.datatypes
   in
-  typed_collect_sorts program function_def
+  let collected_sorts = typed_collect_sorts program function_def in
+  collected_sorts
   |> List.iter (fun sort ->
       if
         sort <> "Int" && sort <> "Bool"
         && not (List.mem sort datatype_sort_names)
       then line "(declare-sort %s 0)" sort);
+  if List.mem "Unit" collected_sorts then line "(declare-const unit Unit)";
   List.iter
     (fun (datatype : Typed_core.datatype) ->
       line "(declare-sort %s 0)" (typed_smt_sort datatype.Typed_core.owner))
@@ -2889,21 +3595,23 @@ let typed_datatype_prelude program function_def =
     let env =
       List.map
         (fun (name, sort) -> (name, (smt_identifier name, sort)))
-        axiom.variables
+        (List.map (fun (_, name, sort) -> (name, sort)) axiom.binders)
     in
     let body = typed_formula ~scope:axiom.scope program.registry env formula in
-    let binders =
-      "("
-      ^ String.concat " "
-          (List.map
-             (fun (name, sort) ->
-               Printf.sprintf "(%s %s)" (smt_identifier name)
-                 (typed_smt_sort sort))
-             axiom.variables)
-      ^ ")"
-    in
     let assertion =
-      if axiom.variables = [] then body else app "forall" [ binders; body ]
+      List.fold_right
+        (fun (quantifier, name, sort) body ->
+          let quantifier =
+            match quantifier with
+            | Typed_core.Forall -> "forall"
+            | Exists -> "exists"
+          in
+          let binder =
+            Printf.sprintf "((%s %s))" (smt_identifier name)
+              (typed_smt_sort sort)
+          in
+          app quantifier [ binder; body ])
+        axiom.binders body
     in
     line "; %s: %s" provenance axiom.axiom_name;
     line "(assert %s)" assertion

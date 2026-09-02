@@ -6,14 +6,12 @@ type _ Effect.t += Signal : int Effect.t
 
 let[@refined.over
      {
-       pre = "true";
-       post = "result = 1 || result = 2";
+       type_ = "seed:int -> {result:int | result = 1 || result = 2}";
        state = [ ("cell", "value = result") ];
      }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "result = 1 || result = 2";
+       type_ = "seed:int -> {result:int | result = 1 || result = 2}";
        witnesses = [ ("seed", "0") ];
        state = [ ("cell", "value = result") ];
      }] nondeterministic_write (seed : int) : int =
@@ -26,8 +24,7 @@ let[@refined.over
 
 let[@refined.over
      {
-       pre = "true";
-       post = "false";
+       type_ = "seed:int -> {result:int | false}";
        raises = [ ("Picked", "true") ];
        performs = [ ("Signal", "true") ];
        outcome_state =
@@ -38,8 +35,7 @@ let[@refined.over
      }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "false";
+       type_ = "seed:int -> {result:int | false}";
        outcomes =
          [
            ("raise", "Picked", "true", [ ("seed", "0") ]);

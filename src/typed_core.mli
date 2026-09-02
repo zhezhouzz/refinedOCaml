@@ -7,6 +7,7 @@ type sort =
   | S_var of string
   | S_tuple of sort list
   | S_app of symbol * sort list
+  | S_arrow of sort * sort
 
 type constructor = { symbol : symbol; arguments : sort list; result : sort }
 type datatype = { owner : sort; constructors : constructor list }
@@ -17,10 +18,12 @@ type logic_symbol = {
   result : sort;
 }
 
+type quantifier = Forall | Exists
+
 type axiom = {
   axiom_name : string;
   scope : string list;
-  variables : (string * sort) list;
+  binders : (quantifier * string * sort) list;
   body : string;
   loc : Source_span.t;
 }
@@ -61,6 +64,7 @@ and expr_desc =
   | Construct of constructor * expr list
   | Choose of expr list
   | Apply of symbol * expr list
+  | Apply_value of expr * expr list
   | If of expr * expr * expr
   | Let of symbol * expr * expr
   | Match of expr * (pattern * expr) list
@@ -83,10 +87,24 @@ and handler_action =
   | Resume of expr
   | Conditional of expr * handler_action * handler_action
 
+type refined_base = {
+  value_name : string;
+  base_sort : sort;
+  predicate : string;
+}
+
+type refined_type =
+  | Refined_base of refined_base
+  | Refined_arrow of {
+      parameter : string;
+      domain : refined_type;
+      codomain : refined_type;
+    }
+
 type contract = {
   mode : Refined_types.mode;
-  pre : string;
-  post : string;
+  refined_type : refined_type;
+  function_arity : int;
   result_state : string option;
   result_fresh : bool;
   result_references : (string * string) list;
@@ -118,6 +136,11 @@ and coverage_outcome = {
   witnesses : (string * string) list;
   witness_relation : string option;
 }
+
+val rename_identifier : from:string -> into:string -> string -> string
+val contract_domains : contract -> (string * refined_type) list
+val contract_result : contract -> refined_type
+val refined_sort : refined_type -> sort
 
 type function_def = {
   symbol : symbol;

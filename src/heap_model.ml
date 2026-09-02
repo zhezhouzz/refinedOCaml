@@ -8,7 +8,7 @@ let heap_key sort = "heap_" ^ smt_identifier (typed_smt_sort sort)
 let initial_heap_name sort = "initial_" ^ heap_key sort
 
 let reference_sort sort =
-  Typed_core.S_app ({ key = "Stdlib.ref"; display = "ref" }, [ sort ])
+  Typed_core.S_app ({ key = "ref"; display = "ref" }, [ sort ])
 
 let heap_select state identity sort =
   match List.assoc_opt (heap_key sort) state with

@@ -12,6 +12,7 @@ module Sort_term = struct
     | Boolean
     | Unit
     | Tuple
+    | Arrow
     | Application of Typed_core.symbol
 
   let view = function
@@ -21,6 +22,7 @@ module Sort_term = struct
     | S_unit -> `Node (Unit, [])
     | S_tuple elements -> `Node (Tuple, elements)
     | S_app (symbol, arguments) -> `Node (Application symbol, arguments)
+    | S_arrow (domain, codomain) -> `Node (Arrow, [ domain; codomain ])
 
   let make_node head children =
     match (head, children) with
@@ -28,12 +30,19 @@ module Sort_term = struct
     | Boolean, [] -> S_bool
     | Unit, [] -> S_unit
     | Tuple, elements -> S_tuple elements
+    | Arrow, [ domain; codomain ] -> S_arrow (domain, codomain)
     | Application symbol, arguments -> S_app (symbol, arguments)
-    | (Integer | Boolean | Unit), _ -> invalid_arg "base sort with arguments"
+    | (Integer | Boolean | Unit | Arrow), _ ->
+        invalid_arg "sort constructor with invalid arity"
 
   let equal_head left right =
     match (left, right) with
-    | Integer, Integer | Boolean, Boolean | Unit, Unit | Tuple, Tuple -> true
+    | Integer, Integer
+    | Boolean, Boolean
+    | Unit, Unit
+    | Tuple, Tuple
+    | Arrow, Arrow ->
+        true
     | Application left, Application right -> left.key = right.key
     | _ -> false
 
@@ -64,6 +73,11 @@ let typed_smt_sort =
                      arguments)
         in
         "T_" ^ smt_identifier symbol.key ^ suffix
+    | S_arrow (domain, codomain) ->
+        "Fn_"
+        ^ smt_identifier (translate domain)
+        ^ "_to_"
+        ^ smt_identifier (translate codomain)
   in
   translate
 
@@ -135,7 +149,7 @@ let typed_lookup_logic registry scope name =
     names
 
 let typed_specialize_program (program : Typed_core.program)
-    (function_def : Typed_core.function_def) pre_expression post_expression =
+    (function_def : Typed_core.function_def) pre_expressions post_expression =
   let open Typed_core in
   let substitutions = Sort_evars.create () in
   let substitute = Sort_evars.substitute substitutions in
@@ -258,6 +272,9 @@ let typed_specialize_program (program : Typed_core.program)
                   formal actual.sort)
               logic_symbol.arguments arguments)
           (typed_lookup_logic program.registry [] symbol.key)
+    | Apply_value (callee, arguments) ->
+        recurse callee;
+        List.iter recurse arguments
     | Tuple expressions | Choose expressions -> List.iter recurse expressions
     | Construct (_, expressions) | Record (_, expressions) ->
         List.iter recurse expressions
@@ -296,7 +313,9 @@ let typed_specialize_program (program : Typed_core.program)
         in
         List.iter (fun (_, _, action) -> recurse_action action) handlers
   in
-  ignore (infer_formula [] formula_env pre_expression);
+  List.iter
+    (fun expression -> ignore (infer_formula [] formula_env expression))
+    pre_expressions;
   ignore
     (infer_formula []
        (("result", function_def.result) :: formula_env)
@@ -330,10 +349,11 @@ let typed_specialize_program (program : Typed_core.program)
         (fun (axiom : Typed_core.axiom) ->
           {
             axiom with
-            variables =
+            binders =
               List.map
-                (fun (name, sort) -> (name, substitute sort))
-                axiom.variables;
+                (fun (quantifier, name, sort) ->
+                  (quantifier, name, substitute sort))
+                axiom.binders;
           })
         statements
     in
@@ -362,6 +382,7 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
   let rec closed = function
     | Typed_core.S_var _ -> false
     | S_tuple sorts | S_app (_, sorts) -> List.for_all closed sorts
+    | S_arrow (domain, codomain) -> closed domain && closed codomain
     | S_int | S_bool | S_unit -> true
   in
   let instances = Hashtbl.create 16 in
@@ -374,6 +395,9 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
     | None -> ());
     match sort with
     | Typed_core.S_tuple sorts | S_app (_, sorts) -> List.iter collect sorts
+    | S_arrow (domain, codomain) ->
+        collect domain;
+        collect codomain
     | S_int | S_bool | S_unit | S_var _ -> ()
   in
   let rec collect_pattern = function
@@ -403,6 +427,9 @@ let typed_monomorphize_datatypes (program : Typed_core.program)
         List.iter collect constructor.arguments;
         List.iter collect_expression expressions
     | Tuple expressions | Choose expressions | Apply (_, expressions) ->
+        List.iter collect_expression expressions
+    | Apply_value (callee, expressions) ->
+        collect_expression callee;
         List.iter collect_expression expressions
     | If (condition, if_true, if_false) ->
         List.iter collect_expression [ condition; if_true; if_false ]
@@ -789,7 +816,7 @@ let slice_program_theory (program : Typed_core.program) ~roots =
     let env =
       List.map
         (fun (name, sort) -> (name, (smt_identifier name, sort)))
-        axiom.variables
+        (List.map (fun (_, name, sort) -> (name, sort)) axiom.binders)
     in
     let symbols =
       formula_theory_symbols ~scope:axiom.scope registry env formula

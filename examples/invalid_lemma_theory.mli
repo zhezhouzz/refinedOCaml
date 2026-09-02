@@ -4,6 +4,6 @@ val q : int -> bool [@@refined.predicate]
 [@@@refined.lemma
 {
   name = "invented_implication";
-  vars = [ ("x", "int") ];
+  quantifiers = [ ("forall", "x", "int") ];
   body = "implies (p x) (q x)";
 }]

@@ -3,7 +3,7 @@ module Arg1 : sig
 
   val enabled : bool [@@refined.predicate]
 
-  [@@@refined.axiom { name = "enabled"; vars = []; body = "enabled" }]
+  [@@@refined.axiom { name = "enabled"; quantifiers = []; body = "enabled" }]
 end
 
 module Fresh () : sig
@@ -12,7 +12,7 @@ module Fresh () : sig
   val mark : t -> bool [@@refined.predicate]
 
   [@@@refined.axiom
-  { name = "mark_all"; vars = [ ("x", "t") ]; body = "mark x" }]
+  { name = "mark_all"; quantifiers = [ ("forall", "x", "t") ]; body = "mark x" }]
 end
 
 module Arg2 : sig
@@ -20,7 +20,7 @@ module Arg2 : sig
 
   val enabled : bool [@@refined.predicate]
 
-  [@@@refined.axiom { name = "enabled"; vars = []; body = "enabled" }]
+  [@@@refined.axiom { name = "enabled"; quantifiers = []; body = "enabled" }]
 end
 
 module Make (X : sig
@@ -35,7 +35,7 @@ end) : sig
   [@@@refined.axiom
   {
     name = "mark_enabled";
-    vars = [ ("x", "t") ];
+    quantifiers = [ ("forall", "x", "t") ];
     body = "implies X.enabled (mark x)";
   }]
 end

@@ -3,8 +3,9 @@ type _ Effect.t += Send : int -> int Effect.t
 
 let[@refined.over
      {
-       pre = "true";
-       post = "(flag && result = 42) || (not flag && result = 7)";
+       type_ =
+         "flag:bool -> {result:int | (flag && result = 42) || (not flag && \
+          result = 7)}";
      }] conditional (flag : bool) : int =
   Effect.Deep.match_with
     (fun () ->
@@ -24,7 +25,7 @@ let[@refined.over
           | _ -> None);
     }
 
-let[@refined.over { pre = "true"; post = "result >= 0" }] payload_conditional
+let[@refined.over { type_ = "input:int -> {result:int | result >= 0}" }] payload_conditional
     (input : int) : int =
   Effect.Deep.match_with
     (fun () -> Effect.perform (Send input))

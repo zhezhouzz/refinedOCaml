@@ -2,8 +2,7 @@ exception Bad
 
 let[@refined.over
      {
-       pre = "true";
-       post = "false";
+       type_ = "_unit:unit -> {result:int | false}";
        raises = [ ("Bad", "true") ];
        outcome_state = [ ("raise", "Bad", "cell", "value = 2") ];
      }] wrong_abnormal_state (_unit : unit) : int =

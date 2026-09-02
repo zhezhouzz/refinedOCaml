@@ -1,5 +1,5 @@
 exception Negative
 
-let[@refined.coverage { pre = "true"; post = "true" }] unsupported_exception
+let[@refined.coverage { type_ = "x:int -> int" }] unsupported_exception
     (x : int) : int =
   if x < 0 then raise Negative else x

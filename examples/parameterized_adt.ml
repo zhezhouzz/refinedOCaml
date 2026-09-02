@@ -7,34 +7,35 @@ let unwrap box = match box with Box value -> value
 let make_cell value = { value }
 let get_cell cell = cell.value
 
-let[@refined.over { pre = "true"; post = "result = Box x" }] int_box (x : int) :
-    int box =
+let[@refined.over { type_ = "x:int -> {result:int box | result = Box x}" }] int_box
+    (x : int) : int box =
   wrap x
 
-let[@refined.over { pre = "true"; post = "result = Box x" }] bool_box (x : bool)
-    : bool box =
+let[@refined.over { type_ = "x:bool -> {result:bool box | result = Box x}" }] bool_box
+    (x : bool) : bool box =
   wrap x
 
-let[@refined.over { pre = "true"; post = "result = x" }] int_roundtrip (x : int)
-    : int =
+let[@refined.over { type_ = "x:int -> {result:int | result = x}" }] int_roundtrip
+    (x : int) : int =
   unwrap (wrap x)
 
-let[@refined.over { pre = "true"; post = "result.value = x" }] int_cell
+let[@refined.over { type_ = "x:int -> {result:int cell | result.value = x}" }] int_cell
     (x : int) : int cell =
   make_cell x
 
-let[@refined.over { pre = "true"; post = "result = x" }] bool_cell_roundtrip
+let[@refined.over { type_ = "x:bool -> {result:bool | result = x}" }] bool_cell_roundtrip
     (x : bool) : bool =
   get_cell (make_cell x)
 
-let[@refined.over { pre = "true"; post = "true" }] int_tree (x : int) : int tree
+let[@refined.over { type_ = "x:int -> int tree" }] int_tree (x : int) : int tree
     =
   Node (Leaf x, Leaf x)
 
-let[@refined.over { pre = "true"; post = "true" }] both_boxes (x : int)
-    (flag : bool) : int box * bool box =
+let[@refined.over { type_ = "x:int -> flag:bool -> int box * bool box" }] both_boxes
+    (x : int) (flag : bool) : int box * bool box =
   (Box x, Box flag)
 
-let[@refined.over { pre = "true"; post = "result = input" }] opaque_box
+let[@refined.over
+     { type_ = "input:int box -> {result:int box | result = input}" }] opaque_box
     (input : int box) : int box =
   input

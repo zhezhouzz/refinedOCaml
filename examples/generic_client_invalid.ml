@@ -1,4 +1,4 @@
-let[@refined.over { pre = "true"; post = "true" }] invalid_generic_call
+let[@refined.over { type_ = "value:int -> int" }] invalid_generic_call
     (value : int) : int =
   List_theory.require_zero
     (value

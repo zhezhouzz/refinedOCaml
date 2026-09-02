@@ -33,7 +33,7 @@ val typed_lookup_logic :
 val typed_specialize_program :
   Typed_core.program ->
   Typed_core.function_def ->
-  Parsetree.expression ->
+  Parsetree.expression list ->
   Parsetree.expression ->
   Typed_core.program
 

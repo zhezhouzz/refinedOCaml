@@ -15,9 +15,10 @@ The current frontend supports exactly OCaml 5.5.0. This is enforced in four plac
 An `.rmi` also records `Sys.ocaml_version` and the corresponding `.cmi` digest. A client rejects an `.rmi`
 produced by another compiler version or from a stale interface.
 
-The current `.rmi` format version is 6. It separates trusted axioms from checked lemmas, stores a verification
-artifact for every lemma, and exports abstract-sort/module-alias/functor-template metadata. Older formats are
-rejected rather than decoded as if they carried this provenance.
+The current `.rmi` format version is 8. It separates trusted axioms from checked lemmas, preserves the declared
+order of arbitrarily interleaved universal and existential statement binders, stores a verification artifact for every lemma, and exports
+abstract-sort/module-alias/functor-template metadata. Older formats are rejected rather than decoded as if they
+carried this provenance.
 
 ## Upgrade procedure
 

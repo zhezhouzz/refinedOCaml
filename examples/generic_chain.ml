@@ -1,5 +1,5 @@
-let[@refined.over { pre = "true"; post = "true" }] complement_twice
-    (value : int) : int =
+let[@refined.over { type_ = "value:int -> int" }] complement_twice (value : int)
+    : int =
   let complemented =
     List_theory.complement
       (value
@@ -13,8 +13,8 @@ let[@refined.over { pre = "true"; post = "true" }] complement_twice
   in
   List_theory.complement complemented
 
-let[@refined.over { pre = "true"; post = "true" }] horn_twice (value : int) :
-    int =
+let[@refined.over { type_ = "value:int -> int" }] horn_twice (value : int) : int
+    =
   let once =
     List_theory.horn_identity
       (value

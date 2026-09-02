@@ -1,4 +1,4 @@
-let[@refined.over { pre = "true"; post = "true" }]
-   [@refined.coverage { pre = "true"; post = "true" }] pair (left : int)
-    (right : int) : int * int =
+let[@refined.over { type_ = "left:int -> right:int -> int * int" }]
+   [@refined.coverage { type_ = "left:int -> right:int -> int * int" }] pair
+    (left : int) (right : int) : int * int =
   (left, right)

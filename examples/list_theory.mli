@@ -29,6 +29,6 @@ val horn_identity : int -> int
 [@@@refined.axiom
 {
   name = "hd_mem";
-  vars = [ ("l", "'a list"); ("x", "'a") ];
+  quantifiers = [ ("forall", "l", "'a list"); ("forall", "x", "'a") ];
   body = "implies (hd l x) (mem l x)";
 }]

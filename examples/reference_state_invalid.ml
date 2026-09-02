@@ -1,7 +1,6 @@
 let[@refined.coverage
      {
-       pre = "true";
-       post = "result >= 1";
+       type_ = "cell:int ref -> {result:int | result >= 1}";
        state = [ ("cell", "value = result") ];
        state_witnesses = [ ("cell", "result") ];
      }] wrong_initial_state (cell : int ref) : int =

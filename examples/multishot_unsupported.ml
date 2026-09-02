@@ -1,6 +1,6 @@
 type _ Effect.t += Choose : int Effect.t
 
-let[@refined.over { pre = "true"; post = "true" }] resumes_twice (_unit : unit)
+let[@refined.over { type_ = "_unit:unit -> int" }] resumes_twice (_unit : unit)
     : int =
   Effect.Deep.match_with
     (fun () -> Effect.perform Choose)

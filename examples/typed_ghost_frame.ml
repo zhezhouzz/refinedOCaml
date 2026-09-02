@@ -2,8 +2,7 @@ type 'a token = Empty | Token of 'a
 
 let[@refined.coverage
      {
-       pre = "true";
-       post = "result >= 0";
+       type_ = "x:int -> {result:int | result >= 0}";
        ghosts = [ ("ticket", "int token") ];
        witness_relation =
          "(ticket = Empty && x = result) || (ticket = Token(result) && x = \
@@ -12,22 +11,22 @@ let[@refined.coverage
   x
 
 let[@refined.coverage
-     { pre = "true"; post = "result >= 0"; witness_relation = "x = result" }] adt_ghost_wrapper
-    (x : int) : int =
+     {
+       type_ = "x:int -> {result:int | result >= 0}";
+       witness_relation = "x = result";
+     }] adt_ghost_wrapper (x : int) : int =
   adt_ghost x
 
 let[@refined.over
      {
-       pre = "true";
+       type_ = "left:int ref -> flag:bool ref -> {result:int | result = 1}";
        requires_state = [ ("flag", "value") ];
-       post = "result = 1";
        state = [ ("left", "value = 1") ];
        modifies = [ "left" ];
      }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "result = 1";
+       type_ = "left:int ref -> flag:bool ref -> {result:int | result = 1}";
        state = [ ("left", "value = 1") ];
        modifies = [ "left" ];
        witness_relation = "old_left = 0 && old_flag";
@@ -37,15 +36,13 @@ let[@refined.over
 
 let[@refined.over
      {
-       pre = "true";
+       type_ = "left:int ref -> flag:bool ref -> {result:bool | result}";
        requires_state = [ ("flag", "value") ];
-       post = "result";
        modifies = [ "left" ];
      }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "result";
+       type_ = "left:int ref -> flag:bool ref -> {result:bool | result}";
        state = [ ("left", "value = 1") ];
        modifies = [ "left" ];
        witness_relation = "old_left = 0 && old_flag";
@@ -57,16 +54,14 @@ exception Stop
 
 let[@refined.over
      {
-       pre = "true";
+       type_ = "left:int ref -> flag:bool ref -> {result:int | false}";
        raises = [ ("Stop", "true") ];
-       post = "false";
        outcome_state = [ ("raise", "Stop", "left", "value = 1") ];
        outcome_modifies = [ ("raise", "Stop", "left") ];
      }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "false";
+       type_ = "left:int ref -> flag:bool ref -> {result:int | false}";
        outcomes = [ ("raise", "Stop", "true", [], "old_left = 0 && old_flag") ];
        outcome_state = [ ("raise", "Stop", "left", "value = 1") ];
        outcome_modifies = [ ("raise", "Stop", "left") ];
@@ -76,15 +71,13 @@ let[@refined.over
 
 let[@refined.over
      {
-       pre = "true";
+       type_ = "left:int ref -> flag:bool ref -> {result:bool | result}";
        requires_state = [ ("flag", "value") ];
-       post = "result";
        modifies = [ "left" ];
      }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "result";
+       type_ = "left:int ref -> flag:bool ref -> {result:bool | result}";
        state = [ ("left", "value = 1") ];
        modifies = [ "left" ];
        witness_relation = "old_left = 0 && old_flag";
