@@ -11,10 +11,7 @@
   theory_slice
   evar_context
   horn_fixpoint
-  generic_refinement
-  refinement_domain
-  typing_judgment
-  vc_semantics))
+  generic_refinement))
 
 (library
  (name refined_core)

@@ -669,7 +669,7 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 | 模块 | 职责 |
 |---|---|
-| `refined_ocaml.ir` | 不依赖 compiler-libs 的 source span、stable Core 与 VC semantics |
+| `refined_ocaml.ir` | 不依赖 compiler-libs 的 source span、stable Core 与 generic refinement 算法 |
 | `Ocaml_5_5_attributes` | generic refinement 与 expression attribute payload parsing |
 | `Ocaml_5_5_lowering` | Typedtree/Types/Path/Ident/Shape 到 stable Core 的 lowering |
 | `Ocaml_5_5_theory` | structure/signature 中 logic、axiom、module/functor theory 的注册 |
@@ -679,16 +679,18 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | `Heap_model` | typed heap 的 select/store、alias consistency 与 frame rules |
 | `Ownership` | returned-reference traversal、权限检查与 affine region discipline |
 | `Vc_encoding` | 各类 VC 共用的 expression、constraint、datatype 与 relational SMT 编码 |
-| `Pure_vc` | 普通 over-approximate pure VC 生成 |
+| `Pure_vc` | 普通 safety/coverage pure VC 的直接生成 |
 | `Outcome_vc` | exception/relational outcome safety VC 生成 |
 | `Coverage_vc` | under-approximate outcome coverage VC 生成 |
 | `Vc_backend` | lemma obligation 与三类 VC generator 的薄编排层 |
 | `Solver_backend` | 有 timeout 的 Z3 process 与 verdict 解释 |
 | `Refined_core` | 保持现有公共 API 的薄 façade |
 
-IR 还导出 `Refinement_domain.S`、`Typing_judgment.Make` 与 `Evar_context.Make`。当前 Safety/Coverage
-验证已经通过 compositional subsumption judgment 生成，而 use-site theory specialization 使用带
-occurs-check 的 evar unifier。设计依据与后续 Hindley/Horn 边界见 `docs/generic-refinement-design.md`。
+IR 导出 `Evar_context.Make`，供 use-site theory specialization 与 Hindley generic 使用带 occurs-check
+的统一算法。Safety/Coverage 的 implication direction 直接写在 `Pure_vc` 的两个分支中；消融实验表明，
+原先只有单个字符串实现的 refinement-domain functor、只包装一次根公式的 compositional judgment，
+以及其 first-class-module dispatch 都没有提供实际替换点。设计依据与 Hindley/Horn 边界见
+`docs/generic-refinement-design.md`。
 
 `Generic_refinement` 进一步提供 higher-sorted refinement terms、Hindley/Horn schemes 与 application
 elaboration。Hindley generic 必须出现在 value-dependent input index；成功调用会返回显式 ghost

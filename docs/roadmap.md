@@ -13,7 +13,7 @@
 | B. Axioms vs lemmas | 区分 trusted assumptions 与 solver-checked theorem | Artifact 保存 statement/VC SHA-256、完整 SMT、solver/timeout/依赖；小型 kernel 校验并重解 | Replay MVP 已完成 | 原生 Z3/外部 assistant certificate kernel |
 | B. ADT encoding | 将 OCaml ADT 编码成可查看的 SMT theory | 单态/参数化 ADT monomorphisation、dependency slicing 与 typed Logic AST expected-sort 消歧已完成；constructor/selector 在 SMT 前解析为具体实例 | Typed ADT MVP 已完成 | 研究更细的 constructor axiom bundle 与 abstract type theory |
 | C. Safety vs coverage | 同时支持 over-approximate safety 和 under/coverage checking | First-class identity、named deep regions、affine consume、borrow/transfer、frame 与 relational ghosts 已组合 | Region-typed relational heap/outcome MVP 完成 | ownership polymorphism 与 region inference |
-| C. 参数化 checker | 让 checker parameterized over denotation、typing algorithm、refinement domain | Hindley/Horn、递归 measure、relational outcomes/witnesses、typed ADT ghosts 与 frame rules 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | observable identity 与 separation-style ownership domain |
+| C. Generic refinements | 支持 Hindley/Horn generic refinement inference，并保持 safety/coverage 语义显式 | Hindley/Horn、递归 measure、relational outcomes/witnesses、typed ADT ghosts 与 frame rules 位于稳定 Core | Safety/Generic/Coverage/Outcome core 完成 | observable identity 与 separation-style ownership rules |
 | C. Coverage typing algorithm | 支持 Coverage Type 风格的 under-approximate typechecking | Functional/relational inverses、closed typed ghosts、normal/abnormal footprint targets；relation 检查 totality/soundness | Framed relational coverage MVP 已完成 | escaping references 与 ownership-aware witnesses |
 | 函数调用 | 支持 first-order 函数调用 | 本地 safety contract 可作为 summary；Tarjan SCC 识别直接/互递归；`int` parameter measure 对每条递归边生成非负和严格下降 VC | Safety MVP 已完成 | 支持结构 measure 与 compositional coverage summary |
 | 多态 | 利用 Typedtree use-site type 做实例化 | predicate/axiom 及用户参数化 ADT 可按 obligation 实例化；普通多态函数 first-order inline 时替换整个 Core body | 部分完成 | 处理 polymorphic recursion 的拒绝/abstract theory 机制 |
@@ -45,22 +45,22 @@
 
 但这个机制目前还是一阶、非 functor、非 abstract-theory-transformer 的版本。它适合作为 MVP，但如果 OCaml module 真正成为 axiom/theory 管理层，后面必须处理 abstract types、functor generativity、module alias、checked lemmas 等问题。
 
-### 3. 参数化 checker 是下一阶段的核心
+### 3. Generic refinement 算法保留，空泛参数化已消融
 
-当前代码已经完成工程层拆分，并加入由 refinement domain 与 denotation 参数化的 compositional
-checking/synthesis/subtyping skeleton。Safety/Coverage 的生产 VC 已通过这一 skeleton 生成；完整设计与
-论文映射记录在 `docs/generic-refinement-design.md`。
+当前代码已经完成工程层拆分。消融实验删除了只有单一 SMT-string 实现的 refinement-domain interface、
+没有参与表达式遍历的 compositional judgment，以及只在两个 mode 间分派的 first-class module。
+Safety/Coverage 的生产公式现在直接位于 `Pure_vc`；Hindley evar、Horn fixpoint 和 application elaboration
+仍保留在 compiler-independent IR。完整设计与论文映射记录在 `docs/generic-refinement-design.md`。
 
 | 层 | 职责 |
 |---|---|
 | Versioned frontend | OCaml Typedtree 到 refined Core 的翻译，随 OCaml 版本变化 |
 | Stable Core | 与 OCaml 版本无关的表达式、类型、pattern、module theory IR |
-| Denotation interface | 不同 refinement/coverage/safety 语义对 Core 的解释 |
-| Typing algorithm | 语法导向的 checking/inference/subtyping 规则 |
+| Generic refinement | Hindley/Horn application elaboration、unification 与 fixpoint |
 | VC backend | SMT obligation、solver 调用、model 解释、proof artifact |
 
 论文实际重点是 generic refinement parameters，而不是直接统一 Safety/Coverage。我们采用其
-bidirectional/subtyping/evar 结构，同时保留 Safety 与 Coverage 的 denotation 差异。higher-sorted
+subtyping/evar 结构，同时显式保留 Safety 与 Coverage 的公式差异。higher-sorted
 Hindley schemes 已完成 `.mli/.rmi` surface 与 resolved-call integration；非递归正向 Horn
 constraint generation/solving 也已接入同一条生产路径。
 
@@ -76,7 +76,7 @@ forall result. post(result) => exists input. pre(input) /\ result = f(input)
 target-totality 和 pointwise-soundness obligations，避免把“存在某个相关输入”错误地当成“所有相关输入都
 可用”。后续仍需决定：
 
-- coverage judgment 是否和 safety 共享同一 Core typing skeleton；
+- coverage 与 safety 可以安全共享哪些 Core traversal；
 - first-class identity、escaping references 与 ownership 如何表达；
 - coverage subtyping/entailment 是否能复用 safety 的 refinement domain；
 - nondeterminism、effects、exceptions 是否需要 relational outcome semantics。
@@ -118,7 +118,7 @@ Functor theory transformer 与 generativity MVP 也已完成。具名参数应�
 identity，unit functor application 使用目标 module path 生成 fresh identity；result predicates/axioms 和
 parameter aliases 会在 application 处实例化。
 
-Compositional coverage judgment 与 witness-carrying under-summary 也已完成。完整 functional mapping 或
+witness-carrying coverage summary 也已完成。完整 functional mapping 或
 relational witness 会把 whole-image existential 加强为可检查的 inverse；调用点 existentially 选择 call
 result/ghost，再加入 witness equations 或 relation。递归调用继续受 measure 约束。
 
