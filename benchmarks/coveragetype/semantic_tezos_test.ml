@@ -14,8 +14,7 @@ let[@refined.predicate] valid_tezos_test_report (report : tezos_test_report) :
 {
   name = "tezos_test_report_intro";
   quantifiers = [];
-  body =
-    "valid_tezos_test_report (Tezos_test_report (true, true, true))";
+  body = "valid_tezos_test_report (Tezos_test_report (true, true, true))";
 }]
 
 [@@@refined.axiom

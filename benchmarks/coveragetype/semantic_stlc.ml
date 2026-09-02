@@ -16,7 +16,7 @@ type term_case = Term_case of int * int * context * ty * term
 
 let rec type_equal left right =
   match left with
-  | Nat -> ( match right with Nat -> true | Arr (_, _) -> false )
+  | Nat -> ( match right with Nat -> true | Arr (_, _) -> false)
   | Arr (left_arg, left_result) -> (
       match right with
       | Nat -> false
@@ -26,7 +26,8 @@ let rec type_equal left right =
 let rec lookup context index =
   match context with
   | Empty_context -> No_type
-  | Bind (head, tail) -> if index = 0 then Has_type head else lookup tail (index - 1)
+  | Bind (head, tail) ->
+      if index = 0 then Has_type head else lookup tail (index - 1)
 
 let rec infer context term =
   match term with
@@ -83,7 +84,8 @@ let[@refined.predicate] term_certificate (context : context) (value : term)
 let[@refined.predicate] valid_term_case (case : term_case) : bool =
   match case with
   | Term_case (measure, apps, context, expected, value) ->
-      measure >= 0 && apps >= 0 && number_of_arrows expected = measure
+      measure >= 0 && apps >= 0
+      && number_of_arrows expected = measure
       && typed_apps context value expected apps
 
 let[@refined.logic] arrow_count (value : ty) : int = number_of_arrows value
@@ -136,8 +138,7 @@ let[@refined.logic] case_term (case : term_case) : term =
 [@@@refined.axiom
 {
   name = "arr_arrows";
-  quantifiers =
-    [ ("forall", "argument", "ty"); ("forall", "result", "ty") ];
+  quantifiers = [ ("forall", "argument", "ty"); ("forall", "result", "ty") ];
   body =
     "arrow_count (Arr (argument, result)) = 1 + arrow_count argument + \
      arrow_count result";
@@ -199,8 +200,8 @@ let[@refined.logic] case_term (case : term_case) : term =
     "implies (typed_apps context function_term (Arr (argument_type, \
      result_type)) function_apps && typed_apps context argument_term \
      argument_type argument_apps) (typed_apps context (App (argument_type, \
-     function_term, argument_term)) result_type (function_apps + \
-     argument_apps + 1))";
+     function_term, argument_term)) result_type (function_apps + argument_apps \
+     + 1))";
 }]
 
 [@@@refined.axiom
@@ -216,17 +217,17 @@ let[@refined.logic] case_term (case : term_case) : term =
   body =
     "implies (typed_apps context value expected apps) ((value = Const \
      (term_number value) && expected = Nat && apps = 0) || (value = Var \
-     (term_number value) && apps = 0 && context_has context (term_number value) \
-     expected) || (value = Abs (term_argument_type value, term_body value) && \
-     expected = Arr (term_argument_type value, type_result expected) && \
-     typed_apps (Bind (term_argument_type value, context)) (term_body value) \
-     (type_result expected) apps) || (value = \
-     App (term_argument_type value, term_function value, term_argument value) \
-     && typed_apps context (term_function value) (Arr (term_argument_type \
-     value, expected)) (app_count (term_function value)) && typed_apps context \
-     (term_argument value) (term_argument_type value) (app_count (term_argument \
-     value)) && apps = app_count (term_function value) + app_count \
-     (term_argument value) + 1))";
+     (term_number value) && apps = 0 && context_has context (term_number \
+     value) expected) || (value = Abs (term_argument_type value, term_body \
+     value) && expected = Arr (term_argument_type value, type_result expected) \
+     && typed_apps (Bind (term_argument_type value, context)) (term_body \
+     value) (type_result expected) apps) || (value = App (term_argument_type \
+     value, term_function value, term_argument value) && typed_apps context \
+     (term_function value) (Arr (term_argument_type value, expected)) \
+     (app_count (term_function value)) && typed_apps context (term_argument \
+     value) (term_argument_type value) (app_count (term_argument value)) && \
+     apps = app_count (term_function value) + app_count (term_argument value) \
+     + 1))";
 }]
 
 [@@@refined.axiom
@@ -253,17 +254,18 @@ let[@refined.logic] case_term (case : term_case) : term =
   body =
     "implies (valid_term_case case) (case = Term_case (case_measure case, \
      case_apps case, case_context case, case_expected case, case_term case) && \
-     case_measure case >= 0 && case_apps case >= 0 && arrow_count (case_expected \
-     case) = case_measure case && term_certificate (case_context case) (case_term \
-     case) (case_expected case) (case_apps case))";
+     case_measure case >= 0 && case_apps case >= 0 && arrow_count \
+     (case_expected case) = case_measure case && term_certificate \
+     (case_context case) (case_term case) (case_expected case) (case_apps \
+     case))";
 }]
 
 let[@refined.coverage
      {
        type_ =
          "measure:{measure:int | measure >= 0} -> apps:{apps:int | apps >= 0} \
-          -> context:context -> expected:ty -> value:term -> {result:term_case | \
-          valid_term_case result}";
+          -> context:context -> expected:ty -> value:term -> {result:term_case \
+          | valid_term_case result}";
        witness_relation =
          "result = Term_case (measure, apps, context, expected, value) && \
           arrow_count expected = measure && term_certificate context value \
@@ -276,8 +278,8 @@ let[@refined.coverage
      {
        type_ =
          "measure:{measure:int | measure >= 0} -> apps:{apps:int | apps >= 0} \
-          -> context:context -> expected:ty -> value:term -> {result:term_case | \
-          valid_term_case result}";
+          -> context:context -> expected:ty -> value:term -> {result:term_case \
+          | valid_term_case result}";
        witness_relation =
          "result = Term_case (measure, apps, context, expected, value) && \
           arrow_count expected = measure && term_certificate context value \
@@ -291,5 +293,8 @@ let runtime_examples (_unit : unit) =
   let application = App (Nat, identity, Const 4) in
   typed_apps Empty_context identity (Arr (Nat, Nat)) 0
   && typed_apps Empty_context application Nat 1
-  && not (typed_apps Empty_context application Nat 0)
-  && not (typed_apps Empty_context (App (Arr (Nat, Nat), identity, Const 4)) Nat 1)
+  && (not (typed_apps Empty_context application Nat 0))
+  && not
+       (typed_apps Empty_context
+          (App (Arr (Nat, Nat), identity, Const 4))
+          Nat 1)

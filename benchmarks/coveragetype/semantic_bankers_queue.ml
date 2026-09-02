@@ -46,11 +46,7 @@ let[@refined.logic] queue_rear (case : queue_case) : rear_list =
   match case with Queue_case (_, _, rear) -> rear
 
 [@@@refined.axiom
-{
-  name = "front_nil";
-  quantifiers = [];
-  body = "front_sized FNil 0";
-}]
+{ name = "front_nil"; quantifiers = []; body = "front_sized FNil 0" }]
 
 [@@@refined.axiom
 {
@@ -72,8 +68,8 @@ let[@refined.logic] queue_rear (case : queue_case) : rear_list =
   quantifiers =
     [ ("forall", "value", "front_stream"); ("forall", "size", "int") ];
   body =
-    "implies (front_sized value size) ((size = 0 && value = FNil) || (size > \
-     0 && value = FCons (front_head value, front_tail value) && front_sized \
+    "implies (front_sized value size) ((size = 0 && value = FNil) || (size > 0 \
+     && value = FCons (front_head value, front_tail value) && front_sized \
      (front_tail value) (size - 1)))";
 }]
 
@@ -94,15 +90,14 @@ let[@refined.logic] queue_rear (case : queue_case) : rear_list =
       ("forall", "bound", "int");
     ];
   body =
-    "implies (bound > 1 && rear_shorter tail (bound - 1)) (rear_shorter \
-     (RCons (head, tail)) bound)";
+    "implies (bound > 1 && rear_shorter tail (bound - 1)) (rear_shorter (RCons \
+     (head, tail)) bound)";
 }]
 
 [@@@refined.axiom
 {
   name = "rear_elim";
-  quantifiers =
-    [ ("forall", "value", "rear_list"); ("forall", "bound", "int") ];
+  quantifiers = [ ("forall", "value", "rear_list"); ("forall", "bound", "int") ];
   body =
     "implies (rear_shorter value bound) (bound > 0 && (value = RNil || (bound \
      > 1 && value = RCons (rear_head value, rear_tail value) && rear_shorter \
@@ -129,13 +124,13 @@ let[@refined.logic] queue_rear (case : queue_case) : rear_list =
   quantifiers = [ ("forall", "case", "queue_case") ];
   body =
     "implies (valid_bankers_queue case) (case = Queue_case (queue_size case, \
-     queue_front case, queue_rear case) && queue_size case >= 0 && \
-     front_sized (queue_front case) (queue_size case) && rear_shorter \
-     (queue_rear case) (queue_size case))";
+     queue_front case, queue_rear case) && queue_size case >= 0 && front_sized \
+     (queue_front case) (queue_size case) && rear_shorter (queue_rear case) \
+     (queue_size case))";
 }]
 
-let[@refined.choose] choose_front (left : front_stream)
-    (_right : front_stream) : front_stream =
+let[@refined.choose] choose_front (left : front_stream) (_right : front_stream)
+    : front_stream =
   left
 
 let[@refined.choose] choose_rear (left : rear_list) (_right : rear_list) :
@@ -153,9 +148,9 @@ let[@refined.coverage
          "result = Queue_case (size, queue_front result, queue_rear result) && \
           ((size = 0 && queue_front result = FNil) || (size > 0 && queue_front \
           result = FCons (front_head_value, front_tail_value) && front_sized \
-          front_tail_value (size - 1))) && (queue_rear result = RNil || (size > \
-          1 && queue_rear result = RCons (rear_head_value, rear_tail_value) && \
-          rear_shorter rear_tail_value (size - 1)))";
+          front_tail_value (size - 1))) && (queue_rear result = RNil || (size \
+          > 1 && queue_rear result = RCons (rear_head_value, rear_tail_value) \
+          && rear_shorter rear_tail_value (size - 1)))";
      }] bankers_queue_port (size : int) (front_head_value : int)
     (front_tail_value : front_stream) (rear_head_value : int)
     (rear_tail_value : rear_list) : queue_case =
@@ -169,5 +164,5 @@ let runtime_examples (_unit : unit) =
   let valid_rear = RCons (4, RCons (5, RNil)) in
   let long_rear = RCons (4, RCons (5, RCons (6, RNil))) in
   valid_bankers_queue (Queue_case (3, front, valid_rear))
-  && not (valid_bankers_queue (Queue_case (2, front, valid_rear)))
+  && (not (valid_bankers_queue (Queue_case (2, front, valid_rear))))
   && not (valid_bankers_queue (Queue_case (3, front, long_rear)))

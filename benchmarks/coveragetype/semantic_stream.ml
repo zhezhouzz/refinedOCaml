@@ -50,8 +50,7 @@ let[@refined.logic] case_stream (case : stream_case) : stream =
 [@@@refined.axiom
 {
   name = "stream_bounded_elim";
-  quantifiers =
-    [ ("forall", "value", "stream"); ("forall", "bound", "int") ];
+  quantifiers = [ ("forall", "value", "stream"); ("forall", "bound", "int") ];
   body =
     "implies (bound >= 0 && stream_bounded value bound) (value = SNil || \
      (bound > 0 && value = SCons (stream_head value, stream_tail value) && \
@@ -61,8 +60,7 @@ let[@refined.logic] case_stream (case : stream_case) : stream =
 [@@@refined.axiom
 {
   name = "valid_stream_case_intro";
-  quantifiers =
-    [ ("forall", "bound", "int"); ("forall", "value", "stream") ];
+  quantifiers = [ ("forall", "bound", "int"); ("forall", "value", "stream") ];
   body =
     "implies (bound >= 0 && stream_bounded value bound) (valid_stream_case \
      (Stream_case (bound, value)))";

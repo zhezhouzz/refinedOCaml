@@ -21,7 +21,8 @@ let[@refined.predicate] complete_exact (value : tree) (expected : int) : bool =
   complete value && depth value = expected
 
 let[@refined.predicate] valid_complete_case (case : complete_case) : bool =
-  match case with Complete_case (expected, value) -> complete_exact value expected
+  match case with
+  | Complete_case (expected, value) -> complete_exact value expected
 
 let[@refined.logic] tree_key (value : tree) : int =
   match value with Leaf -> 0 | Node (key, _, _) -> key
@@ -60,8 +61,7 @@ let[@refined.logic] case_tree (case : complete_case) : tree =
 [@@@refined.axiom
 {
   name = "complete_elim";
-  quantifiers =
-    [ ("forall", "value", "tree"); ("forall", "expected", "int") ];
+  quantifiers = [ ("forall", "value", "tree"); ("forall", "expected", "int") ];
   body =
     "implies (complete_exact value expected) ((expected = 0 && value = Leaf) \
      || (expected > 0 && value = Node (tree_key value, tree_left value, \
@@ -72,8 +72,7 @@ let[@refined.logic] case_tree (case : complete_case) : tree =
 [@@@refined.axiom
 {
   name = "complete_case_intro";
-  quantifiers =
-    [ ("forall", "expected", "int"); ("forall", "value", "tree") ];
+  quantifiers = [ ("forall", "expected", "int"); ("forall", "value", "tree") ];
   body =
     "implies (complete_exact value expected) (valid_complete_case \
      (Complete_case (expected, value)))";
@@ -110,5 +109,5 @@ let runtime_examples (_unit : unit) =
   let full = Node (1, Node (2, leaf, leaf), Node (3, leaf, leaf)) in
   let incomplete = Node (1, Node (2, leaf, leaf), leaf) in
   valid_complete_case (Complete_case (2, full))
-  && not (valid_complete_case (Complete_case (1, full)))
+  && (not (valid_complete_case (Complete_case (1, full))))
   && not (valid_complete_case (Complete_case (2, incomplete)))

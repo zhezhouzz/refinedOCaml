@@ -46,8 +46,7 @@ let[@refined.logic] case_heap (case : heap_case) : heap =
 [@@@refined.axiom
 {
   name = "heap_empty";
-  quantifiers =
-    [ ("forall", "bound", "int"); ("forall", "maximum", "int") ];
+  quantifiers = [ ("forall", "bound", "int"); ("forall", "maximum", "int") ];
   body = "implies (bound >= 0) (bounded_heap Empty bound maximum)";
 }]
 
@@ -120,16 +119,15 @@ let[@refined.coverage
        witness_relation =
          "result = Heap_case (bound, maximum, case_heap result) && (case_heap \
           result = Empty || (bound > 0 && case_heap result = Heap_node (key, \
-          left, right) && key < maximum && bounded_heap left (bound - 1) key && \
-          bounded_heap right (bound - 1) key))";
+          left, right) && key < maximum && bounded_heap left (bound - 1) key \
+          && bounded_heap right (bound - 1) key))";
      }] sized_heap_port (bound : int) (maximum : int) (key : int) (left : heap)
     (right : heap) : heap_case =
-  Heap_case
-    (bound, maximum, choose_heap Empty (Heap_node (key, left, right)))
+  Heap_case (bound, maximum, choose_heap Empty (Heap_node (key, left, right)))
 
 let runtime_examples (_unit : unit) =
   let valid = Heap_node (7, Heap_node (3, Empty, Empty), Empty) in
   let wrong_order = Heap_node (7, Heap_node (9, Empty, Empty), Empty) in
   valid_heap_case (Heap_case (2, 10, valid))
-  && not (valid_heap_case (Heap_case (1, 10, valid)))
+  && (not (valid_heap_case (Heap_case (1, 10, valid))))
   && not (valid_heap_case (Heap_case (2, 10, wrong_order)))

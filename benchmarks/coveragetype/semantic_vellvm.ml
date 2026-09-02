@@ -47,13 +47,15 @@ and llvm_typing value expected =
   | Type_vector (size, element_type) -> (
       match value with
       | D_vector (actual_type, values) ->
-          actual_type = expected && size >= 0 && value_count values = size
+          actual_type = expected && size >= 0
+          && value_count values = size
           && all_typed values element_type
       | _ -> false)
   | Type_array (size, element_type) -> (
       match value with
       | D_array (actual_type, values) ->
-          actual_type = expected && size >= 0 && value_count values = size
+          actual_type = expected && size >= 0
+          && value_count values = size
           && all_typed values element_type
       | _ -> false)
   | Type_others -> false
@@ -67,7 +69,9 @@ let build_report (_unit : unit) =
       llvm_typing D_none Type_void,
       llvm_typing
         (D_vector
-           (vector_type, More_values (D_int (8, 1), More_values (D_int (8, 2), No_values))))
+           ( vector_type,
+             More_values (D_int (8, 1), More_values (D_int (8, 2), No_values))
+           ))
         vector_type,
       llvm_typing
         (D_array (array_type, More_values (D_int (32, 9), No_values)))
@@ -90,8 +94,8 @@ let[@refined.predicate] valid_vellvm_report (report : vellvm_report) : bool =
   name = "vellvm_report_elim";
   quantifiers = [ ("forall", "report", "vellvm_report") ];
   body =
-    "implies (valid_vellvm_report report) (report = Vellvm_report (true, \
-     true, true, true, true))";
+    "implies (valid_vellvm_report report) (report = Vellvm_report (true, true, \
+     true, true, true))";
 }]
 
 let[@refined.coverage
@@ -99,22 +103,22 @@ let[@refined.coverage
        type_ =
          "unit_value:unit -> {result:vellvm_report | valid_vellvm_report \
           result}";
-       witness_relation = "result = Vellvm_report (true, true, true, true, true)";
+       witness_relation =
+         "result = Vellvm_report (true, true, true, true, true)";
      }] vellvm (unit_value : unit) : vellvm_report =
   let _unused_unit = unit_value in
   Vellvm_report (true, true, true, true, true)
 
 let runtime_examples (_unit : unit) =
-  let Vellvm_report (i1_ok, integer_ok, void_ok, vector_ok, array_ok) =
+  let (Vellvm_report (i1_ok, integer_ok, void_ok, vector_ok, array_ok)) =
     build_report _unit
   in
   i1_ok && integer_ok && void_ok && vector_ok && array_ok
-  && not (llvm_typing (D_int (1, 2)) (Type_i 1))
-  && not (llvm_typing (D_int (16, 4)) (Type_i 16))
-  && not
-       (llvm_typing
-          (D_vector
-             ( Type_vector (2, Type_i 8),
-               More_values (D_int (8, 1), No_values) ))
-          (Type_vector (2, Type_i 8)))
+  && (not (llvm_typing (D_int (1, 2)) (Type_i 1)))
+  && (not (llvm_typing (D_int (16, 4)) (Type_i 16)))
+  && (not
+        (llvm_typing
+           (D_vector
+              (Type_vector (2, Type_i 8), More_values (D_int (8, 1), No_values)))
+           (Type_vector (2, Type_i 8))))
   && not (llvm_typing D_error Type_void)

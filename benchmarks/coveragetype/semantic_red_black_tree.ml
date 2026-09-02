@@ -20,7 +20,7 @@ let rec no_red_red value =
   match value with
   | RBLeaf -> true
   | RBNode (red, left, _, right) ->
-      (not red || ((not (root_red left)) && not (root_red right)))
+      ((not red) || ((not (root_red left)) && not (root_red right)))
       && no_red_red left && no_red_red right
 
 let[@refined.predicate] rb_wellformed (value : rb_tree) (height : int) : bool =
@@ -33,9 +33,7 @@ let[@refined.predicate] root_allowed (value : rb_tree) (color : bool)
     (height : int) : bool =
   if color then not (root_red value)
   else if height = 0 then
-    match value with
-    | RBLeaf -> true
-    | RBNode (red, _, _, _) -> red
+    match value with RBLeaf -> true | RBNode (red, _, _, _) -> red
   else true
 
 let[@refined.predicate] valid_rb_case (case : rb_case) : bool =
@@ -132,8 +130,7 @@ let[@refined.logic] case_tree (case : rb_case) : rb_tree =
 [@@@refined.axiom
 {
   name = "rb_elim";
-  quantifiers =
-    [ ("forall", "value", "rb_tree"); ("forall", "height", "int") ];
+  quantifiers = [ ("forall", "value", "rb_tree"); ("forall", "height", "int") ];
   body =
     "implies (rb_wellformed value height) ((height = 0 && value = RBLeaf) || \
      (height >= 0 && value = RBNode (true, rb_left value, rb_key value, \
@@ -156,9 +153,9 @@ let[@refined.logic] case_tree (case : rb_case) : rb_tree =
     ];
   body =
     "implies (invariant >= 0 && height >= 0 && ((color && 2 * height = \
-     invariant) || (not color && 2 * height + 1 = invariant)) && \
-     rb_wellformed value height && root_allowed value color height) \
-     (valid_rb_case (RBCase (invariant, color, height, value)))";
+     invariant) || (not color && 2 * height + 1 = invariant)) && rb_wellformed \
+     value height && root_allowed value color height) (valid_rb_case (RBCase \
+     (invariant, color, height, value)))";
 }]
 
 [@@@refined.axiom
@@ -191,9 +188,9 @@ let[@refined.coverage
           ((height = 0 && case_tree result = RBLeaf) || (height >= 0 && \
           case_tree result = RBNode (true, left, key, right) && rb_wellformed \
           left height && rb_wellformed right height && nonred_root left && \
-          nonred_root right) || (height > 0 && case_tree result = RBNode (false, \
-          left, key, right) && rb_wellformed left (height - 1) && rb_wellformed \
-          right (height - 1)))";
+          nonred_root right) || (height > 0 && case_tree result = RBNode \
+          (false, left, key, right) && rb_wellformed left (height - 1) && \
+          rb_wellformed right (height - 1)))";
      }] red_black_tree_port (invariant : int) (color : bool) (height : int)
     (key : int) (left : rb_tree) (right : rb_tree) : rb_case =
   let red = RBNode (true, left, key, right) in
@@ -206,5 +203,5 @@ let runtime_examples (_unit : unit) =
   let red_red = RBNode (true, red_leaf, 2, RBLeaf) in
   valid_rb_case (RBCase (3, false, 1, black_root))
   && valid_rb_case (RBCase (0, true, 0, RBLeaf))
-  && not (valid_rb_case (RBCase (2, false, 1, black_root)))
+  && (not (valid_rb_case (RBCase (2, false, 1, black_root))))
   && not (valid_rb_case (RBCase (1, false, 0, red_red)))

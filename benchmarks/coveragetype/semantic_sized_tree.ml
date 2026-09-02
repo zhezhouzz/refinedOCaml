@@ -58,20 +58,18 @@ let[@refined.logic] case_tree (case : sized_case) : tree =
 [@@@refined.axiom
 {
   name = "sized_elim";
-  quantifiers =
-    [ ("forall", "value", "tree"); ("forall", "bound", "int") ];
+  quantifiers = [ ("forall", "value", "tree"); ("forall", "bound", "int") ];
   body =
     "implies (bound >= 0 && depth_bounded value bound) (value = Leaf || (bound \
-     > 0 && value = Node (tree_key value, tree_left value, tree_right value) && \
-     depth_bounded (tree_left value) (bound - 1) && depth_bounded (tree_right \
-     value) (bound - 1)))";
+     > 0 && value = Node (tree_key value, tree_left value, tree_right value) \
+     && depth_bounded (tree_left value) (bound - 1) && depth_bounded \
+     (tree_right value) (bound - 1)))";
 }]
 
 [@@@refined.axiom
 {
   name = "sized_case_intro";
-  quantifiers =
-    [ ("forall", "bound", "int"); ("forall", "value", "tree") ];
+  quantifiers = [ ("forall", "bound", "int"); ("forall", "value", "tree") ];
   body =
     "implies (bound >= 0 && depth_bounded value bound) (valid_sized_tree \
      (Sized_case (bound, value)))";
@@ -92,8 +90,8 @@ let[@refined.choose] choose_tree (left : tree) (_right : tree) : tree = left
 let[@refined.coverage
      {
        type_ =
-         "bound:{bound:int | bound >= 0} -> key:int -> left:tree -> \
-          right:tree -> {result:sized_case | valid_sized_tree result}";
+         "bound:{bound:int | bound >= 0} -> key:int -> left:tree -> right:tree \
+          -> {result:sized_case | valid_sized_tree result}";
        witness_relation =
          "result = Sized_case (bound, case_tree result) && (case_tree result = \
           Leaf || (bound > 0 && case_tree result = Node (key, left, right) && \

@@ -53,8 +53,7 @@ let[@refined.logic] queue_rear (case : queue_case) : ilist =
 [@@@refined.axiom
 {
   name = "exact_elim";
-  quantifiers =
-    [ ("forall", "value", "ilist"); ("forall", "size", "int") ];
+  quantifiers = [ ("forall", "value", "ilist"); ("forall", "size", "int") ];
   body =
     "implies (exact_size value size) ((size = 0 && value = Nil) || (size > 0 \
      && value = Cons (list_head value, list_tail value) && exact_size \
@@ -85,11 +84,10 @@ let[@refined.logic] queue_rear (case : queue_case) : ilist =
 [@@@refined.axiom
 {
   name = "shorter_elim";
-  quantifiers =
-    [ ("forall", "value", "ilist"); ("forall", "bound", "int") ];
+  quantifiers = [ ("forall", "value", "ilist"); ("forall", "bound", "int") ];
   body =
-    "implies (shorter value bound) (bound > 0 && (value = Nil || (bound > 1 \
-     && value = Cons (list_head value, list_tail value) && shorter (list_tail \
+    "implies (shorter value bound) (bound > 0 && (value = Nil || (bound > 1 && \
+     value = Cons (list_head value, list_tail value) && shorter (list_tail \
      value) (bound - 1))))";
 }]
 
@@ -129,9 +127,10 @@ let[@refined.coverage
        witness_relation =
          "result = Queue_case (size, queue_front result, queue_rear result) && \
           ((size = 0 && queue_front result = Nil) || (size > 0 && queue_front \
-          result = Cons (front_head, front_tail) && exact_size front_tail (size \
-          - 1))) && (queue_rear result = Nil || (size > 1 && queue_rear result \
-          = Cons (rear_head, rear_tail) && shorter rear_tail (size - 1)))";
+          result = Cons (front_head, front_tail) && exact_size front_tail \
+          (size - 1))) && (queue_rear result = Nil || (size > 1 && queue_rear \
+          result = Cons (rear_head, rear_tail) && shorter rear_tail (size - \
+          1)))";
      }] batched_queue_port (size : int) (front_head : int) (front_tail : ilist)
     (rear_head : int) (rear_tail : ilist) : queue_case =
   Queue_case
@@ -144,5 +143,5 @@ let runtime_examples (_unit : unit) =
   let valid_rear = Cons (4, Cons (5, Nil)) in
   let long_rear = Cons (4, Cons (5, Cons (6, Nil))) in
   valid_batched_queue (Queue_case (3, front, valid_rear))
-  && not (valid_batched_queue (Queue_case (2, front, valid_rear)))
+  && (not (valid_batched_queue (Queue_case (2, front, valid_rear))))
   && not (valid_batched_queue (Queue_case (3, front, long_rear)))

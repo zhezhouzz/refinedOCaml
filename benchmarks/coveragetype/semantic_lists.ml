@@ -38,12 +38,12 @@ let rec unique value =
   | Nil -> true
   | Cons (head, tail) -> (not (member head tail)) && unique tail
 
-let[@refined.predicate] bounded (value : ilist) (expected : int)
-    (floor : int) : bool =
+let[@refined.predicate] bounded (value : ilist) (expected : int) (floor : int) :
+    bool =
   ilength value = expected && all_ge floor value
 
-let[@refined.predicate] duplicates (value : ilist) (expected : int)
-    (item : int) : bool =
+let[@refined.predicate] duplicates (value : ilist) (expected : int) (item : int)
+    : bool =
   ilength value = expected && all_equal item value
 
 let[@refined.predicate] sorted_sized (value : ilist) (expected : int) : bool =
@@ -175,11 +175,7 @@ let[@refined.logic] case_list (case : list_case) : ilist =
 }]
 
 [@@@refined.axiom
-{
-  name = "sorted_sized_nil";
-  quantifiers = [];
-  body = "sorted_sized Nil 0";
-}]
+{ name = "sorted_sized_nil"; quantifiers = []; body = "sorted_sized Nil 0" }]
 
 [@@@refined.axiom
 {
@@ -198,8 +194,7 @@ let[@refined.logic] case_list (case : list_case) : ilist =
 [@@@refined.axiom
 {
   name = "sorted_sized_elim";
-  quantifiers =
-    [ ("forall", "value", "ilist"); ("forall", "expected", "int") ];
+  quantifiers = [ ("forall", "value", "ilist"); ("forall", "expected", "int") ];
   body =
     "implies (sorted_sized value expected) ((expected = 0 && value = Nil) || \
      (expected > 0 && value = Cons (list_head value, list_tail value) && \
@@ -240,16 +235,12 @@ let[@refined.logic] case_list (case : list_case) : ilist =
   body =
     "implies (sorted_from_sized value expected lower) ((expected = 0 && value \
      = Nil) || (expected > 0 && value = Cons (list_head value, list_tail \
-     value) && list_head value >= lower && sorted_from_sized (list_tail \
-     value) (expected - 1) (list_head value)))";
+     value) && list_head value >= lower && sorted_from_sized (list_tail value) \
+     (expected - 1) (list_head value)))";
 }]
 
 [@@@refined.axiom
-{
-  name = "unique_nil";
-  quantifiers = [];
-  body = "unique_sized Nil 0";
-}]
+{ name = "unique_nil"; quantifiers = []; body = "unique_sized Nil 0" }]
 
 [@@@refined.axiom
 {
@@ -268,8 +259,7 @@ let[@refined.logic] case_list (case : list_case) : ilist =
 [@@@refined.axiom
 {
   name = "unique_elim";
-  quantifiers =
-    [ ("forall", "value", "ilist"); ("forall", "expected", "int") ];
+  quantifiers = [ ("forall", "value", "ilist"); ("forall", "expected", "int") ];
   body =
     "implies (unique_sized value expected) ((expected = 0 && value = Nil) || \
      (expected > 0 && value = Cons (list_head value, list_tail value) && \
@@ -294,18 +284,17 @@ let[@refined.logic] case_list (case : list_case) : ilist =
       ("forall", "bound", "int");
     ];
   body =
-    "implies (bound > 0 && list_bounded tail (bound - 1)) (list_bounded \
-     (Cons (head, tail)) bound)";
+    "implies (bound > 0 && list_bounded tail (bound - 1)) (list_bounded (Cons \
+     (head, tail)) bound)";
 }]
 
 [@@@refined.axiom
 {
   name = "list_bounded_elim";
-  quantifiers =
-    [ ("forall", "value", "ilist"); ("forall", "bound", "int") ];
+  quantifiers = [ ("forall", "value", "ilist"); ("forall", "bound", "int") ];
   body =
-    "implies (bound >= 0 && list_bounded value bound) (value = Nil || (bound \
-     > 0 && value = Cons (list_head value, list_tail value) && list_bounded \
+    "implies (bound >= 0 && list_bounded value bound) (value = Nil || (bound > \
+     0 && value = Cons (list_head value, list_tail value) && list_bounded \
      (list_tail value) (bound - 1)))";
 }]
 
@@ -360,11 +349,10 @@ let[@refined.logic] case_list (case : list_case) : ilist =
 [@@@refined.axiom
 {
   name = "valid_sorted_case_intro";
-  quantifiers =
-    [ ("forall", "size", "int"); ("forall", "value", "ilist") ];
+  quantifiers = [ ("forall", "size", "int"); ("forall", "value", "ilist") ];
   body =
-    "implies (sorted_sized value size) (valid_sorted_case (List_case (size, \
-     0, value)))";
+    "implies (sorted_sized value size) (valid_sorted_case (List_case (size, 0, \
+     value)))";
 }]
 
 [@@@refined.axiom
@@ -380,11 +368,10 @@ let[@refined.logic] case_list (case : list_case) : ilist =
 [@@@refined.axiom
 {
   name = "valid_unique_case_intro";
-  quantifiers =
-    [ ("forall", "size", "int"); ("forall", "value", "ilist") ];
+  quantifiers = [ ("forall", "size", "int"); ("forall", "value", "ilist") ];
   body =
-    "implies (unique_sized value size) (valid_unique_case (List_case (size, \
-     0, value)))";
+    "implies (unique_sized value size) (valid_unique_case (List_case (size, 0, \
+     value)))";
 }]
 
 [@@@refined.axiom
@@ -400,8 +387,7 @@ let[@refined.logic] case_list (case : list_case) : ilist =
 [@@@refined.axiom
 {
   name = "valid_sized_case_intro";
-  quantifiers =
-    [ ("forall", "bound", "int"); ("forall", "value", "ilist") ];
+  quantifiers = [ ("forall", "bound", "int"); ("forall", "value", "ilist") ];
   body =
     "implies (bound >= 0 && list_bounded value bound) (valid_sized_case \
      (List_case (bound, 0, value)))";
@@ -526,14 +512,15 @@ let runtime_examples (_unit : unit) =
   let distinct = Cons (4, Cons (2, Cons (9, Nil))) in
   let duplicate = Cons (4, Cons (2, Cons (4, Nil))) in
   let two_items = Cons (10, Cons (20, Nil)) in
-  bounded increasing 3 1 && not (bounded increasing 3 2)
+  bounded increasing 3 1
+  && (not (bounded increasing 3 2))
   && duplicates repeated 3 7
-  && not (duplicates repeated 2 7)
+  && (not (duplicates repeated 2 7))
   && sorted_sized increasing 3
-  && not (sorted_sized decreasing 2)
+  && (not (sorted_sized decreasing 2))
   && unique_sized distinct 3
-  && not (unique_sized duplicate 3)
+  && (not (unique_sized duplicate 3))
   && list_bounded two_items 2
-  && not (list_bounded two_items 1)
+  && (not (list_bounded two_items 1))
   && sorted_from_sized increasing 3 0
   && not (sorted_from_sized increasing 3 2)

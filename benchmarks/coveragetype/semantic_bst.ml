@@ -15,13 +15,13 @@ let rec between_bst value lower upper =
   match value with
   | Leaf -> true
   | Node (key, left, right) ->
-      lower < key && key < upper
-      && between_bst left lower key
+      lower < key && key < upper && between_bst left lower key
       && between_bst right key upper
 
 let[@refined.predicate] bst_bounded (value : tree) (bound : int) (lower : int)
     (upper : int) : bool =
-  bound >= 0 && lower < upper && depth value <= bound
+  bound >= 0 && lower < upper
+  && depth value <= bound
   && between_bst value lower upper
 
 let[@refined.predicate] valid_bst_case (case : tree_case) : bool =
@@ -65,8 +65,7 @@ let[@refined.logic] case_tree (case : tree_case) : tree =
       ("forall", "upper", "int");
     ];
   body =
-    "implies (bound >= 0 && lower < upper) (bst_bounded Leaf bound lower \
-     upper)";
+    "implies (bound >= 0 && lower < upper) (bst_bounded Leaf bound lower upper)";
 }]
 
 [@@@refined.axiom
@@ -209,7 +208,7 @@ let runtime_examples (_unit : unit) =
   let valid = Node (4, Node (2, Leaf, Leaf), Node (7, Leaf, Leaf)) in
   let wrong_order = Node (4, Node (5, Leaf, Leaf), Node (7, Leaf, Leaf)) in
   valid_bst_case (Tree_case (2, 0, 10, valid))
-  && not (valid_bst_case (Tree_case (1, 0, 10, valid)))
-  && not (valid_bst_case (Tree_case (2, 0, 10, wrong_order)))
+  && (not (valid_bst_case (Tree_case (1, 0, 10, valid))))
+  && (not (valid_bst_case (Tree_case (2, 0, 10, wrong_order))))
   && valid_set_case (Tree_case (10, 0, 10, valid))
   && not (valid_set_case (Tree_case (9, 0, 10, valid)))
