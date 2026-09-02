@@ -35,31 +35,20 @@ result-indexed inverse witnesses 可形成 compositional under-summary，并在 
 当前属性语法可直接被 OCaml parser 接受：
 
 ```ocaml
-let[@refined.over  { pre = "..."; post = "..." }] f ... = ...
-let[@refined.coverage { pre = "..."; post = "..." }] g ... = ...
+let[@refined.over { type_ = "x:{v:int | ...} -> {v:int | ...}" }] f ... = ...
+let[@refined.coverage { type_ = "x:{v:int | ...} -> {v:int | ...}" }] g ... = ...
 ```
 
 已支持的递归语法：
 
 ```ocaml
-let[@refined.over { pre = "n >= 0"; post = "..." }]
+let[@refined.over { type_ = "n:{v:int | v >= 0} -> {v:int | ...}" }]
    [@refined.measure "n"] rec fold n = ...
 ```
 
-后续兼容语法：
-
-```ocaml
-type pos = int [@@refined "v > 0"]
-val f : (x : int) -> int
-  [@@refined.over  "x >= 0 ==> result > x"]
-  [@@refined.under "result > 0"]
-
-axiom[@refined.axiom] name = "forall ..."
-```
-
 字符串中的逻辑先复用 OCaml expression parser，随后 elaboration 到与 compiler-libs 隔离、每个节点
-带 sort 的 Logic AST。当前支持 expected-sort constructor/field 消歧；后续仍需独立 surface parser、
-quantifier、set、map、bitvector、浮点语义与 ghost binders。
+带 sort 的 Logic AST。当前支持 expected-sort constructor/field 消歧、有序交错量词，以及高阶参数的
+嵌套 refinement arrow；后续仍需独立 surface parser、set、map、bitvector 与浮点语义。
 
 ## 4. Datatype theory
 
@@ -154,7 +143,7 @@ first-order inlining、module-scoped theory、`.cmti/.rmi` separate compilation�
 
 ### M3
 
-functor/theory transformers、GADT、polymorphic variants、higher-order contracts、algebraic effect handlers。
+高阶 coverage polarity、GADT、polymorphic variants、并发 algebraic effect handlers。
 
 ### M4
 

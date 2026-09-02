@@ -7,6 +7,7 @@ type sort =
   | S_var of string
   | S_tuple of sort list
   | S_app of symbol * sort list
+  | S_arrow of sort * sort
 
 type constructor = { symbol : symbol; arguments : sort list; result : sort }
 type datatype = { owner : sort; constructors : constructor list }
@@ -17,10 +18,12 @@ type logic_symbol = {
   result : sort;
 }
 
+type quantifier = Forall | Exists
+
 type axiom = {
   axiom_name : string;
   scope : string list;
-  variables : (string * sort) list;
+  binders : (quantifier * string * sort) list;
   body : string;
   loc : Source_span.t;
 }
@@ -61,6 +64,7 @@ and expr_desc =
   | Construct of constructor * expr list
   | Choose of expr list
   | Apply of symbol * expr list
+  | Apply_value of expr * expr list
   | If of expr * expr * expr
   | Let of symbol * expr * expr
   | Match of expr * (pattern * expr) list
@@ -83,10 +87,24 @@ and handler_action =
   | Resume of expr
   | Conditional of expr * handler_action * handler_action
 
+type refined_base = {
+  value_name : string;
+  base_sort : sort;
+  predicate : string;
+}
+
+type refined_type =
+  | Refined_base of refined_base
+  | Refined_arrow of {
+      parameter : string;
+      domain : refined_type;
+      codomain : refined_type;
+    }
+
 type contract = {
   mode : Refined_types.mode;
-  pre : string;
-  post : string;
+  refined_type : refined_type;
+  function_arity : int;
   result_state : string option;
   result_fresh : bool;
   result_references : (string * string) list;
@@ -119,6 +137,54 @@ and coverage_outcome = {
   witness_relation : string option;
 }
 
+let identifier_character = function
+  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+  | _ -> false
+
+let rename_identifier ~from ~into text =
+  let buffer = Buffer.create (String.length text) in
+  let rec loop index =
+    if index = String.length text then Buffer.contents buffer
+    else if identifier_character text.[index] then (
+      let finish = ref (index + 1) in
+      while
+        !finish < String.length text && identifier_character text.[!finish]
+      do
+        incr finish
+      done;
+      let token = String.sub text index (!finish - index) in
+      Buffer.add_string buffer (if token = from then into else token);
+      loop !finish)
+    else (
+      Buffer.add_char buffer text.[index];
+      loop (index + 1))
+  in
+  loop 0
+
+let contract_domains contract =
+  let rec collect remaining domains = function
+    | _ when remaining = 0 -> List.rev domains
+    | Refined_base _ -> invalid_arg "contract has fewer arrows than its arity"
+    | Refined_arrow { parameter; domain; codomain } ->
+        collect (remaining - 1) ((parameter, domain) :: domains) codomain
+  in
+  collect contract.function_arity [] contract.refined_type
+
+let contract_result contract =
+  let rec result remaining type_ =
+    if remaining = 0 then type_
+    else
+      match type_ with
+      | Refined_base _ -> invalid_arg "contract has fewer arrows than its arity"
+      | Refined_arrow { codomain; _ } -> result (remaining - 1) codomain
+  in
+  result contract.function_arity contract.refined_type
+
+let rec refined_sort = function
+  | Refined_base base -> base.base_sort
+  | Refined_arrow { domain; codomain; _ } ->
+      S_arrow (refined_sort domain, refined_sort codomain)
+
 type function_def = {
   symbol : symbol;
   arguments : (symbol * sort) list;
@@ -135,6 +201,8 @@ type registry = {
   fields_by_name : (string, constructor * int) Hashtbl.t;
   logic_by_name : (string, logic_symbol) Hashtbl.t;
   abstract_sorts_by_name : (string, sort) Hashtbl.t;
+  concrete_sorts_by_name : (string, sort) Hashtbl.t;
+  choose_symbols : (string, unit) Hashtbl.t;
   module_aliases : (string, string) Hashtbl.t;
   functor_theories : (string, functor_theory) Hashtbl.t;
   generic_schemes_by_name : (string, Generic_refinement.scheme) Hashtbl.t;

@@ -11,13 +11,7 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   if contract.mode <> Over then
     typed_error_at contract.loc
       "exceptionful coverage contracts are not yet supported";
-  let env =
-    List.map
-      (fun (symbol, _) ->
-        ( symbol.Typed_core.key,
-          { term = smt_identifier symbol.key; refinement = None } ))
-      function_def.arguments
-  in
+  let env = contract_argument_env function_def contract in
   let formula_env =
     List.map2
       (fun (symbol, sort) (_, value) ->
@@ -29,8 +23,7 @@ let typed_exception_obligation (program : Typed_core.program) analysis
       ~loc:(location_of_span contract.loc)
       text
   in
-  let pre_expression = parse contract.pre in
-  let post_expression = parse contract.post in
+  let pre_expressions, post_expression = contract_expressions contract in
   let result_reference_sort = reference_content_sort function_def.result in
   let result_state_expression = Option.map parse contract.result_state in
   (match
@@ -203,7 +196,8 @@ let typed_exception_obligation (program : Typed_core.program) analysis
     typed_error_at contract.loc
       "outcome_state clauses must name each outcome cell once";
   let program =
-    typed_specialize_program program function_def pre_expression post_expression
+    typed_specialize_program program function_def pre_expressions
+      post_expression
     |> fun program -> typed_monomorphize_datatypes program function_def
   in
   let owned_result_paths result =
@@ -292,7 +286,9 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   in
   let roots =
     generic_calls.used_theory_symbols
-    @ formula_theory_symbols program.registry formula_env pre_expression
+    @ List.concat_map
+        (formula_theory_symbols program.registry formula_env)
+        pre_expressions
     @ List.concat_map
         (fun (path, expression) ->
           formula_theory_symbols program.registry
@@ -411,9 +407,8 @@ let typed_exception_obligation (program : Typed_core.program) analysis
   in
   let pre =
     and_
-      (typed_formula program.registry formula_env pre_expression
-       :: required_state_posts
-      @ required_region_posts)
+      (List.map (typed_formula program.registry formula_env) pre_expressions
+      @ required_state_posts @ required_region_posts)
   in
   let post =
     typed_formula program.registry

@@ -2,10 +2,14 @@ module Theory = struct
   let[@refined.predicate] predicate (_value : int) : bool = false
 
   [@@@refined.axiom
-  { name = "example"; vars = [ ("x", "int") ]; body = "predicate x" }]
+  {
+    name = "example";
+    quantifiers = [ ("forall", "x", "int") ];
+    body = "predicate x";
+  }]
 end
 
-let[@refined.coverage { pre = "true"; post = "true" }] identity (value : int) :
+let[@refined.coverage { type_ = "value:int -> int" }] identity (value : int) :
     int =
   value
 

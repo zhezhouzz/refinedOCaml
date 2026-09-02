@@ -4,8 +4,7 @@ type _ Effect.t += Send : int -> int Effect.t
 
 let[@refined.over
      {
-       pre = "true";
-       post = "false";
+       type_ = "cell:int ref -> x:int -> {result:int | false}";
        raises = [ ("Bad", "payload = x && x < 0") ];
        performs = [ ("Send", "payload = x && x >= 0") ];
        outcome_state =
@@ -16,8 +15,7 @@ let[@refined.over
      }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "false";
+       type_ = "cell:int ref -> x:int -> {result:int | false}";
        outcomes =
          [
            ("raise", "Bad", "payload < 0", [], "x = payload && old_cell = 0");
@@ -37,22 +35,26 @@ let[@refined.over
     Effect.perform (Send x))
 
 let[@refined.over
-     { pre = "true"; post = "result = 1"; state = [ ("cell", "value = 1") ] }]
+     {
+       type_ = "cell:int ref -> {result:int | result = 1}";
+       state = [ ("cell", "value = 1") ];
+     }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "result = 1";
+       type_ = "cell:int ref -> {result:int | result = 1}";
        state = [ ("cell", "value = 1") ];
        witness_relation = "old_cell = 0";
      }] catches_abnormal_state (cell : int ref) : int =
   try abnormal_write cell (-1) with Bad _payload -> !cell
 
 let[@refined.over
-     { pre = "true"; post = "result = 2"; state = [ ("cell", "value = 2") ] }]
+     {
+       type_ = "cell:int ref -> {result:int | result = 2}";
+       state = [ ("cell", "value = 2") ];
+     }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "result = 2";
+       type_ = "cell:int ref -> {result:int | result = 2}";
        state = [ ("cell", "value = 2") ];
        witness_relation = "old_cell = 0";
      }] handles_abnormal_state (cell : int ref) : int =

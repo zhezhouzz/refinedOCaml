@@ -4,8 +4,7 @@ type _ Effect.t += Send : int -> int Effect.t
 
 let[@refined.over
      {
-       pre = "true";
-       post = "result = x";
+       type_ = "x:int -> {result:int | result = x}";
        raises = [ ("Failed", "payload = x && x < 0") ];
        performs = [ ("Send", "payload = x && x = 0") ];
      }] outcome (x : int) : int =
@@ -15,16 +14,14 @@ let[@refined.over
 
 let[@refined.over
      {
-       pre = "true";
-       post = "result = x";
+       type_ = "x:int -> {result:int | result = x}";
        performs = [ ("Send", "payload = 0") ];
      }] catches_call (x : int) : int =
   try outcome x with Failed payload -> payload
 
 let[@refined.over
      {
-       pre = "true";
-       post = "result = x";
+       type_ = "x:int -> {result:int | result = x}";
        raises = [ ("Failed", "payload = x && x < 0") ];
      }] handles_call (x : int) : int =
   Effect.Deep.match_with

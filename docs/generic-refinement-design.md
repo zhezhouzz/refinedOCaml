@@ -61,7 +61,7 @@ Together these pieces correspond to the paper's FA-hdl and ≡inst rules.
 ## Current boundary
 
 Higher-sorted Hindley schemes are now exposed through `[@@refined.hindley]` in `.mli` files and were introduced in
-`.rmi` version 2; the current cache format is version 6. Call arguments carry their current type through
+`.rmi` version 2; the current cache format is version 8. Call arguments carry their current type through
 `[@refined.type]`. The versioned frontend parses
 both attributes, and the VC backend runs elaboration for the resolved OCaml `Path`, emits an uninterpreted runtime
 summary and checks elaborated side conditions. Ghost instantiations are retained in diagnostics.
@@ -167,7 +167,7 @@ Relational coverage witnesses and ghost-state synthesis are now implemented. `wi
 ordinary inputs, result/payload targets, final-state targets, `old_<ref>` heap contents, and typed existential
 ghosts. Whole-function checking splits the proof into target-totality and pointwise soundness; callers may
 therefore choose a ghost and safely apply the relation to their concrete arguments. Normal and abnormal under
-summaries share this mechanism, while functional witnesses remain backward compatible.
+summaries share this mechanism, while functional witnesses use the same composition path.
 
 Ghost sorts now use OCaml core-type syntax and support primitives, tuples, list/option, closed user ADTs and
 imported abstract sorts. Closed parameterized instances participate in the existing monomorphisation pipeline.
@@ -205,7 +205,7 @@ introducing untrusted or non-terminating recursive SMT axioms.
 Stable replay artifacts are now emitted as RPA1 netstring sidecars. Each record binds a canonical typed lemma
 statement, the complete SMT VC, SHA-256 digests, solver/timeout metadata, trusted axioms and ordered checked
 dependencies. The replay kernel validates framing, digests and dependency topology before re-solving every VC.
-v6 `.rmi` caches must match their sidecars exactly. This is a solver replay record, not yet a native proof
+v8 `.rmi` caches must match their sidecars exactly. This is a solver replay record, not yet a native proof
 certificate.
 
 The next implementation slice is an incremental verification cache keyed by VC and theory digests.

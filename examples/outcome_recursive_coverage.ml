@@ -2,8 +2,7 @@ exception Done of int
 
 let[@refined.coverage
      {
-       pre = "n >= 0";
-       post = "false";
+       type_ = "n:{n:int | n >= 0} -> {result:int | false}";
        outcomes = [ ("raise", "Done", "payload = 0", [ ("n", "0") ]) ];
      }]
    [@refined.measure "n"] rec covers_done (n : int) : int =

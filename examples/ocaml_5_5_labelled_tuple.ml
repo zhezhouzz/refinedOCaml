@@ -1,3 +1,3 @@
-let[@refined.over { pre = "true"; post = "true" }] labelled_tuple (value : int)
-    =
+let[@refined.over { type_ = "value:int -> int * int" }] labelled_tuple
+    (value : int) =
   (~value, value)

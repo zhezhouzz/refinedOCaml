@@ -29,6 +29,20 @@ let lookup_abstract_sort registry scope name =
       Hashtbl.find_opt registry.Typed_core.abstract_sorts_by_name candidate)
     names
 
+let lookup_concrete_sort registry scope name =
+  let rec candidates scope =
+    match scope with
+    | [] -> [ name ]
+    | _ ->
+        qualified_name scope name
+        :: candidates (List.rev (List.tl (List.rev scope)))
+  in
+  let names = if String.contains name '.' then [ name ] else candidates scope in
+  List.find_map
+    (fun candidate ->
+      Hashtbl.find_opt registry.Typed_core.concrete_sorts_by_name candidate)
+    names
+
 let rec logic_sort_of_core_type registry scope core_type =
   let open Typed_core in
   match core_type.Parsetree.ptyp_desc with
@@ -53,7 +67,15 @@ let rec logic_sort_of_core_type registry scope core_type =
           | Some _ ->
               typed_error ~loc:core_type.ptyp_loc
                 "abstract sort `%s` has the wrong number of parameters" name
-          | None -> S_app ({ key = name; display = name }, arguments)))
+          | None -> (
+              match lookup_concrete_sort registry scope name with
+              | Some (S_app (symbol, parameters))
+                when List.length parameters = List.length arguments ->
+                  S_app (symbol, arguments)
+              | Some _ ->
+                  typed_error ~loc:core_type.ptyp_loc
+                    "concrete sort `%s` has the wrong number of parameters" name
+              | None -> S_app ({ key = name; display = name }, arguments))))
   | Ptyp_var name -> S_var ("a_" ^ smt_identifier name)
   | Ptyp_tuple elements ->
       S_tuple
@@ -100,6 +122,12 @@ let theory_statement_of_attribute ~attribute_name ~kind registry scope attribute
               if longident_last txt = name then Some value else None)
             fields
         in
+        List.iter
+          (fun ({ txt; loc }, _) ->
+            let name = longident_last txt in
+            if not (List.mem name [ "name"; "quantifiers"; "body" ]) then
+              typed_error ~loc "unknown %s field `%s`" kind name)
+          fields;
         let required name =
           match find name with
           | Some value -> value
@@ -109,30 +137,50 @@ let theory_statement_of_attribute ~attribute_name ~kind registry scope attribute
         in
         let name = string_constant (required "name") in
         let body = string_constant (required "body") in
-        let variables =
-          expression_list (required "vars")
+        let typed_binders expression =
+          expression_list expression
           |> List.map (fun expression ->
               match expression.pexp_desc with
-              | Pexp_tuple [ (None, name); (None, sort) ] ->
-                  ( string_constant name,
+              | Pexp_tuple [ (None, quantifier); (None, name); (None, sort) ] ->
+                  let quantifier =
+                    match string_constant quantifier with
+                    | "forall" -> Typed_core.Forall
+                    | "exists" -> Exists
+                    | other ->
+                        typed_error ~loc:quantifier.pexp_loc
+                          "%s quantifier must be `forall` or `exists`, got `%s`"
+                          kind other
+                  in
+                  ( quantifier,
+                    string_constant name,
                     logic_sort_of_string registry scope ~loc:sort.pexp_loc
                       (string_constant sort) )
               | _ ->
                   typed_error ~loc:expression.pexp_loc
-                    "%s vars must contain (name, sort) string pairs" kind)
+                    "%s quantifiers must contain (quantifier, name, sort) \
+                     string triples"
+                    kind)
         in
+        let binders = typed_binders (required "quantifiers") in
+        let binder_names = List.map (fun (_, name, _) -> name) binders in
+        if
+          List.length binder_names
+          <> List.length (List.sort_uniq String.compare binder_names)
+        then
+          typed_error ~loc:attribute.attr_loc
+            "%s quantifier binders must have distinct names" kind;
         Some
           Typed_core.
             {
               axiom_name = qualified_name scope name;
               scope;
-              variables;
+              binders;
               body;
               loc = span_of_location attribute.attr_loc;
             }
     | _ ->
         typed_error ~loc:attribute.attr_loc
-          "expected [@@@%s { name; vars; body }]" attribute_name
+          "expected [@@@%s { name; quantifiers; body }]" attribute_name
 
 let axiom_of_attribute =
   theory_statement_of_attribute ~attribute_name:"refined.axiom" ~kind:"axiom"
@@ -158,15 +206,22 @@ let rec normalize_abstract_sort registry scope sort =
       | _ -> S_app (symbol, arguments))
   | S_tuple sorts ->
       S_tuple (List.map (normalize_abstract_sort registry scope) sorts)
+  | S_arrow (domain, codomain) ->
+      S_arrow
+        ( normalize_abstract_sort registry scope domain,
+          normalize_abstract_sort registry scope codomain )
   | (S_int | S_bool | S_unit | S_var _) as sort -> sort
 
 let register_logic_symbol registry scope binding =
-  if
-    not
-      (List.exists
-         (attribute_named "refined.predicate")
-         binding.Typedtree.vb_attributes)
-  then ()
+  let is_predicate =
+    List.exists
+      (attribute_named "refined.predicate")
+      binding.Typedtree.vb_attributes
+  in
+  let is_logic =
+    List.exists (attribute_named "refined.logic") binding.vb_attributes
+  in
+  if not (is_predicate || is_logic) then ()
   else
     let name, ident =
       match binding.vb_pat.pat_desc with
@@ -180,7 +235,7 @@ let register_logic_symbol registry scope binding =
       List.map (normalize_abstract_sort registry scope) arguments
     in
     let result = normalize_abstract_sort registry scope result in
-    if result <> Typed_core.S_bool then
+    if is_predicate && result <> Typed_core.S_bool then
       typed_error ~loc:binding.vb_loc "logical predicate `%s` must return bool"
         name;
     let full_name = qualified_name scope name in
@@ -199,12 +254,13 @@ let register_logic_symbol registry scope binding =
 
 let register_logic_value registry scope
     (description : Typedtree.value_description) =
-  if
-    not
-      (List.exists
-         (attribute_named "refined.predicate")
-         description.val_attributes)
-  then ()
+  let is_predicate =
+    List.exists (attribute_named "refined.predicate") description.val_attributes
+  in
+  let is_logic =
+    List.exists (attribute_named "refined.logic") description.val_attributes
+  in
+  if not (is_predicate || is_logic) then ()
   else
     let name = description.val_name.txt in
     let arguments, result = arrow_sorts description.val_val.Types.val_type in
@@ -212,7 +268,7 @@ let register_logic_value registry scope
       List.map (normalize_abstract_sort registry scope) arguments
     in
     let result = normalize_abstract_sort registry scope result in
-    if result <> Typed_core.S_bool then
+    if is_predicate && result <> Typed_core.S_bool then
       typed_error ~loc:description.val_loc
         "logical predicate `%s` must return bool" name;
     let full_name = qualified_name scope name in
@@ -330,6 +386,7 @@ let instantiate_functor_theory registry scope name functor_name argument =
           in
           S_app ({ symbol with key }, arguments)
     | S_tuple sorts -> S_tuple (List.map map_sort sorts)
+    | S_arrow (domain, codomain) -> S_arrow (map_sort domain, map_sort codomain)
     | (S_int | S_bool | S_unit | S_var _) as sort -> sort
   in
   if theory.parameter_name <> "" then
@@ -378,8 +435,11 @@ let instantiate_functor_theory registry scope name functor_name argument =
           axiom with
           axiom_name;
           scope = scope @ [ name ];
-          variables =
-            List.map (fun (name, sort) -> (name, map_sort sort)) axiom.variables;
+          binders =
+            List.map
+              (fun (quantifier, name, sort) ->
+                (quantifier, name, map_sort sort))
+              axiom.binders;
         }
         :: registry.axioms)
     theory.axioms

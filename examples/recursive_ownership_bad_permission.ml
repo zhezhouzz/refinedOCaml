@@ -1,7 +1,6 @@
 let[@refined.over
      {
-       pre = "true";
-       post = "true";
+       type_ = "cell:int ref -> int ref * int";
        result_references = [ ("0", "true") ];
        result_reference_permissions = [ ("0", "consume") ];
      }] bad_permission (cell : int ref) : int ref * int =

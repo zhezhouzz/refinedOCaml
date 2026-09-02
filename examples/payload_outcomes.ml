@@ -3,20 +3,22 @@ exception Bad of int
 type _ Effect.t += Send : int -> int Effect.t
 
 let[@refined.over
-     { pre = "true"; post = "result = x"; raises = [ ("Bad", "payload = x") ] }] payload_raise
-    (x : int) : int =
+     {
+       type_ = "x:int -> {result:int | result = x}";
+       raises = [ ("Bad", "payload = x") ];
+     }] payload_raise (x : int) : int =
   if x < 0 then raise (Bad x) else x
 
-let[@refined.over { pre = "true"; post = "result = x" }] payload_caught
+let[@refined.over { type_ = "x:int -> {result:int | result = x}" }] payload_caught
     (x : int) : int =
   try raise (Bad x) with Bad payload -> payload
 
 let[@refined.over
-     { pre = "true"; post = "true"; performs = [ ("Send", "payload = x") ] }] payload_perform
+     { type_ = "x:int -> int"; performs = [ ("Send", "payload = x") ] }] payload_perform
     (x : int) : int =
   Effect.perform (Send x)
 
-let[@refined.over { pre = "true"; post = "result = x + 1" }] payload_handled
+let[@refined.over { type_ = "x:int -> {result:int | result = x + 1}" }] payload_handled
     (x : int) : int =
   Effect.Deep.match_with
     (fun () ->

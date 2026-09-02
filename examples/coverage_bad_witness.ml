@@ -1,4 +1,6 @@
 let[@refined.coverage
-     { pre = "x >= 0"; post = "result >= 1"; witnesses = [ ("x", "result") ] }] bad_successor
-    (x : int) : int =
+     {
+       type_ = "x:{x:int | x >= 0} -> {result:int | result >= 1}";
+       witnesses = [ ("x", "result") ];
+     }] bad_successor (x : int) : int =
   x + 1

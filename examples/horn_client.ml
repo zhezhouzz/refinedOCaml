@@ -1,5 +1,4 @@
-let[@refined.over { pre = "true"; post = "true" }] use_horn (value : int) : int
-    =
+let[@refined.over { type_ = "value:int -> int" }] use_horn (value : int) : int =
   List_theory.horn_identity
     (value
     [@refined.type

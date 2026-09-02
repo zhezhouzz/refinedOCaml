@@ -1,0 +1,10 @@
+(test
+ (name benchmark_runner)
+ (libraries refined_core)
+ (deps
+  liquidhaskell/classics.ml
+  coveragetype/adapted.ml
+  coveragetype/leftist_heap.ml
+  coveragetype/leftist_heap_bad.ml
+  coveragetype/leftist_heap_runtime.ml
+  manifest.tsv))

@@ -33,16 +33,24 @@ let canonical_statement (axiom : Typed_core.axiom) =
         field symbol.key;
         field (string_of_int (List.length arguments));
         List.iter sort arguments
+    | S_arrow (domain, codomain) ->
+        field "arrow";
+        sort domain;
+        sort codomain
   in
   field axiom.axiom_name;
   field (string_of_int (List.length axiom.scope));
   List.iter field axiom.scope;
-  field (string_of_int (List.length axiom.variables));
+  field (string_of_int (List.length axiom.binders));
   List.iter
-    (fun (name, variable_sort) ->
+    (fun (quantifier, name, variable_sort) ->
+      field
+        (match quantifier with
+        | Typed_core.Forall -> "forall"
+        | Exists -> "exists");
       field name;
       sort variable_sort)
-    axiom.variables;
+    axiom.binders;
   field axiom.body;
   Buffer.contents buffer
 

@@ -64,11 +64,152 @@ let string_constant expression =
   | Pexp_constant { pconst_desc = Pconst_string (value, _, _); _ } -> value
   | _ -> error ~loc:expression.pexp_loc "contract fields must be strings"
 
+type surface_refined_base = {
+  surface_value : string;
+  surface_type : string;
+  surface_predicate : string;
+}
+
+type surface_refined_type =
+  | Surface_base of surface_refined_base
+  | Surface_arrow of string * surface_refined_type * surface_refined_type
+
+let trim = String.trim
+
+let identifier_character = function
+  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+  | _ -> false
+
+let rename_identifier ~from ~into text =
+  let buffer = Buffer.create (String.length text) in
+  let rec loop index =
+    if index = String.length text then Buffer.contents buffer
+    else if identifier_character text.[index] then (
+      let finish = ref (index + 1) in
+      while
+        !finish < String.length text && identifier_character text.[!finish]
+      do
+        incr finish
+      done;
+      let token = String.sub text index (!finish - index) in
+      Buffer.add_string buffer (if token = from then into else token);
+      loop !finish)
+    else (
+      Buffer.add_char buffer text.[index];
+      loop (index + 1))
+  in
+  loop 0
+
+let find_top_level ?(arrow = false) character text =
+  let length = String.length text in
+  let rec loop index parentheses brackets braces =
+    if index >= length then None
+    else
+      let current = text.[index] in
+      if
+        arrow && current = '-'
+        && index + 1 < length
+        && text.[index + 1] = '>'
+        && parentheses = 0 && brackets = 0 && braces = 0
+      then Some index
+      else if
+        (not arrow) && current = character && parentheses = 0 && brackets = 0
+        && braces = 0
+      then Some index
+      else
+        let parentheses, brackets, braces =
+          match current with
+          | '(' -> (parentheses + 1, brackets, braces)
+          | ')' -> (parentheses - 1, brackets, braces)
+          | '[' -> (parentheses, brackets + 1, braces)
+          | ']' -> (parentheses, brackets - 1, braces)
+          | '{' -> (parentheses, brackets, braces + 1)
+          | '}' -> (parentheses, brackets, braces - 1)
+          | _ -> (parentheses, brackets, braces)
+        in
+        if parentheses < 0 || brackets < 0 || braces < 0 then None
+        else loop (index + 1) parentheses brackets braces
+  in
+  loop 0 0 0 0
+
+let split_at index width text =
+  ( String.sub text 0 index |> trim,
+    String.sub text (index + width) (String.length text - index - width) |> trim
+  )
+
+let strip_outer_parentheses text =
+  let text = trim text in
+  let length = String.length text in
+  if length < 2 || text.[0] <> '(' || text.[length - 1] <> ')' then text
+  else
+    let rec closes_at_end index depth =
+      if index = length then depth = 0
+      else
+        let depth =
+          match text.[index] with
+          | '(' -> depth + 1
+          | ')' -> depth - 1
+          | _ -> depth
+        in
+        depth >= 0
+        && (index = length - 1 || depth > 0)
+        && closes_at_end (index + 1) depth
+    in
+    if closes_at_end 0 0 then String.sub text 1 (length - 2) |> trim else text
+
+let parse_surface_base ~loc ~default_value text =
+  let text = trim text in
+  let length = String.length text in
+  if length >= 2 && text.[0] = '{' && text.[length - 1] = '}' then
+    let inner = String.sub text 1 (length - 2) |> trim in
+    match find_top_level ':' inner with
+    | None -> error ~loc "refined base `%s` is missing `:`" text
+    | Some colon -> (
+        let value, rest = split_at colon 1 inner in
+        if value = "" then error ~loc "refined base has an empty value binder";
+        match find_top_level '|' rest with
+        | None -> error ~loc "refined base `%s` is missing `|`" text
+        | Some pipe ->
+            let type_, predicate = split_at pipe 1 rest in
+            if type_ = "" || predicate = "" then
+              error ~loc "refined base `%s` has an empty type or predicate" text;
+            {
+              surface_value = value;
+              surface_type = type_;
+              surface_predicate = predicate;
+            })
+  else if text = "" then error ~loc "refined type contains an empty base"
+  else
+    {
+      surface_value = default_value;
+      surface_type = text;
+      surface_predicate = "true";
+    }
+
+let parse_surface_refined_type ~loc text =
+  let rec parse text =
+    let text = strip_outer_parentheses text in
+    match find_top_level ~arrow:true '\000' text with
+    | None ->
+        Surface_base (parse_surface_base ~loc ~default_value:"result" text)
+    | Some arrow -> (
+        let parameter, codomain = split_at arrow 2 text in
+        match find_top_level ':' parameter with
+        | None ->
+            error ~loc "refined function parameter `%s` is missing `:`"
+              parameter
+        | Some colon ->
+            let name, domain = split_at colon 1 parameter in
+            if name = "" then error ~loc "refined function has an empty binder";
+            Surface_arrow (name, parse domain, parse codomain))
+  in
+  parse text
+
 let contract_of_attribute attribute =
   let mode =
     match attribute.attr_name.txt with
     | "refined.over" -> Some Over
-    | "refined.under" | "refined.coverage" -> Some Under
+    | "refined.coverage" -> Some Under
     | _ -> None
   in
   match mode with
@@ -89,14 +230,39 @@ let contract_of_attribute attribute =
                 if longident_last txt = name then Some expression else None)
               fields
           in
-          let find name = Option.map string_constant (find_expression name) in
-          let required name =
-            match find name with
-            | Some value -> value
-            | None ->
-                error ~loc:attribute.attr_loc
-                  "contract is missing the `%s` string field" name
+          let supported_fields =
+            [
+              "type_";
+              "witnesses";
+              "witness_relation";
+              "ghosts";
+              "raises";
+              "performs";
+              "outcomes";
+              "state";
+              "modifies";
+              "requires_state";
+              "state_witnesses";
+              "result_state";
+              "result_fresh";
+              "result_references";
+              "result_fresh_references";
+              "result_reference_permissions";
+              "result_recursive";
+              "result_region";
+              "requires_regions";
+              "consumes_regions";
+              "outcome_state";
+              "outcome_modifies";
+            ]
           in
+          List.iter
+            (fun ({ txt; loc }, _) ->
+              let name = longident_last txt in
+              if not (List.mem name supported_fields) then
+                error ~loc "unknown refined contract field `%s`" name)
+            fields;
+          let find name = Option.map string_constant (find_expression name) in
           let rec expression_list expression =
             match expression.pexp_desc with
             | Pexp_construct ({ txt = Lident "[]"; _ }, None) -> []
@@ -391,10 +557,17 @@ let contract_of_attribute attribute =
           if mode = Over && outcomes <> [] then
             error ~loc:attribute.attr_loc
               "safety contracts cannot declare coverage outcomes";
+          let surface_type =
+            match find "type_" with
+            | Some text ->
+                parse_surface_refined_type ~loc:attribute.attr_loc text
+            | None ->
+                error ~loc:attribute.attr_loc
+                  "contract is missing the Liquid-style `type_` string field"
+          in
           Some
             ( mode,
-              required "pre",
-              required "post",
+              surface_type,
               result_state,
               result_fresh,
               result_references,
@@ -418,7 +591,7 @@ let contract_of_attribute attribute =
               outcome_modifies )
       | _ ->
           error ~loc:attribute.attr_loc
-            "expected [@%s { pre = \"...\"; post = \"...\" }]"
+            "expected [@%s { type_ = \"x:int -> {v:int | ...}\" }]"
             attribute.attr_name.txt)
 
 let app name arguments = "(" ^ String.concat " " (name :: arguments) ^ ")"

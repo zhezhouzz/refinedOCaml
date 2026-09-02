@@ -67,7 +67,7 @@ let sort_reaches_reference registry sort =
                            (visit (name :: visited))
                            constructor.arguments)
                        datatype.constructors)
-        | S_int | S_bool | S_unit | S_var _ -> false)
+        | S_arrow _ | S_int | S_bool | S_unit | S_var _ -> false)
   in
   visit [] sort
 
@@ -140,7 +140,7 @@ let returned_reference_paths ?(recursive_frontier = false) registry ~result_sort
                          | Ok result, Ok paths -> Ok (result @ paths)
                          | Error error, _ | _, Error error -> Error error)
                        (Ok []))
-        | S_int | S_bool | S_unit | S_var _ -> Ok [])
+        | S_arrow _ | S_int | S_bool | S_unit | S_var _ -> Ok [])
   in
   collect [] [] [] result result_sort
 
@@ -163,7 +163,7 @@ let use_returned_reference_theory use_symbol registry sort =
                       use_symbol constructor.symbol.key;
                       List.iter (visit (name :: visited)) constructor.arguments)
                     datatype.constructors)
-        | S_int | S_bool | S_unit | S_var _ -> ())
+        | S_arrow _ | S_int | S_bool | S_unit | S_var _ -> ())
   in
   visit [] sort
 
@@ -531,6 +531,10 @@ let validate_region_contracts (program : Typed_core.program)
                 contract.result_region)
         in
         (binding, state)
+    | Apply_value (callee, arguments) ->
+        let _, state = analyze state callee in
+        let _, state = analyze_list state arguments in
+        (None, state)
     | Match (scrutinee, cases) ->
         let binding, state = analyze state scrutinee in
         let state =

@@ -4,31 +4,79 @@ open Refined_common
 open Vc_logic
 open Vc_encoding
 
+let eta_expand_function_result (function_def : Typed_core.function_def)
+    (contract : Typed_core.contract) =
+  match Typed_core.contract_result contract with
+  | Typed_core.Refined_base _ -> (function_def, contract)
+  | Refined_arrow _ when contract.mode = Under ->
+      typed_error_at contract.loc
+        "function-valued results in coverage contracts are not supported"
+  | result_type ->
+      let rec arguments index bindings expressions = function
+        | Typed_core.Refined_base result ->
+            (List.rev bindings, List.rev expressions, result)
+        | Refined_arrow { parameter; domain; codomain } ->
+            let sort = Typed_core.refined_sort domain in
+            let symbol =
+              Typed_core.
+                {
+                  key =
+                    function_def.symbol.key ^ ".returned_argument."
+                    ^ string_of_int index;
+                  display = parameter;
+                }
+            in
+            let expression =
+              Typed_core.
+                {
+                  desc = Var symbol;
+                  sort;
+                  refinement = None;
+                  loc = contract.loc;
+                }
+            in
+            arguments (index + 1)
+              ((symbol, sort) :: bindings)
+              (expression :: expressions)
+              codomain
+      in
+      let returned_arguments, applications, result =
+        arguments 0 [] [] result_type
+      in
+      let body =
+        Typed_core.
+          {
+            desc = Apply_value (function_def.body, applications);
+            sort = result.base_sort;
+            refinement = None;
+            loc = function_def.body.loc;
+          }
+      in
+      ( {
+          function_def with
+          arguments = function_def.arguments @ returned_arguments;
+          result = result.base_sort;
+          body;
+        },
+        {
+          contract with
+          function_arity =
+            contract.function_arity + List.length returned_arguments;
+        } )
+
 let typed_obligation (program : Typed_core.program) analysis
     (function_def : Typed_core.function_def) (contract : Typed_core.contract) =
-  let env =
-    List.map
-      (fun (symbol, _) ->
-        ( symbol.Typed_core.key,
-          { term = smt_identifier symbol.key; refinement = None } ))
-      function_def.Typed_core.arguments
+  let function_def, contract =
+    eta_expand_function_result function_def contract
   in
+  let env = contract_argument_env function_def contract in
   let formula_env =
     List.map2
       (fun (symbol, sort) (_, value) ->
         (symbol.Typed_core.display, (value.term, sort)))
       function_def.arguments env
   in
-  let pre_expression =
-    parse_formula ~filename:contract.loc.file
-      ~loc:(location_of_span contract.loc)
-      contract.pre
-  in
-  let post_expression =
-    parse_formula ~filename:contract.loc.file
-      ~loc:(location_of_span contract.loc)
-      contract.post
-  in
+  let pre_expressions, post_expression = contract_expressions contract in
   let witness_expressions =
     match contract.witnesses with
     | [] -> []
@@ -59,7 +107,8 @@ let typed_obligation (program : Typed_core.program) analysis
           function_def.arguments
   in
   let program =
-    typed_specialize_program program function_def pre_expression post_expression
+    typed_specialize_program program function_def pre_expressions
+      post_expression
   in
   let program = typed_monomorphize_datatypes program function_def in
   let body, choices, generic_calls =
@@ -68,7 +117,9 @@ let typed_obligation (program : Typed_core.program) analysis
   in
   let roots =
     generic_calls.used_theory_symbols
-    @ formula_theory_symbols program.registry formula_env pre_expression
+    @ List.concat_map
+        (formula_theory_symbols program.registry formula_env)
+        pre_expressions
     @ formula_theory_symbols program.registry
         (("result", ("result", function_def.result)) :: formula_env)
         post_expression
@@ -81,7 +132,9 @@ let typed_obligation (program : Typed_core.program) analysis
     |> List.sort_uniq String.compare
   in
   let program, _enabled_symbols = slice_program_theory program ~roots in
-  let pre = typed_formula program.registry formula_env pre_expression in
+  let pre =
+    and_ (List.map (typed_formula program.registry formula_env) pre_expressions)
+  in
   let result_name =
     match contract.mode with Over -> "result" | Under -> "missing_result"
   in

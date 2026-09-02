@@ -1,14 +1,12 @@
 let[@refined.over
      {
-       pre = "true";
-       post = "result = 1";
+       type_ = "seed:int -> {result:int | result = 1}";
        state =
          [ ("left", "value = 2"); ("right", "value = 1"); ("flag", "value") ];
      }]
    [@refined.coverage
      {
-       pre = "true";
-       post = "result = 1";
+       type_ = "seed:int -> {result:int | result = 1}";
        witnesses = [ ("seed", "0") ];
        state =
          [ ("left", "value = 2"); ("right", "value = 1"); ("flag", "value") ];

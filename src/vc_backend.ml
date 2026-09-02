@@ -21,7 +21,7 @@ let lemma_obligations registry lemmas =
           ( Typed_core.
               { key = "lemma." ^ lemma.axiom_name ^ "." ^ name; display = name },
             sort ))
-        lemma.variables
+        (List.map (fun (_, name, sort) -> (name, sort)) lemma.binders)
     in
     let dummy =
       Typed_core.
@@ -49,7 +49,7 @@ let lemma_obligations registry lemmas =
     let env =
       List.map
         (fun (name, sort) -> (name, (smt_identifier name, sort)))
-        lemma.variables
+        (List.map (fun (_, name, sort) -> (name, sort)) lemma.binders)
     in
     let roots =
       formula_theory_symbols ~scope:lemma.scope registry env formula
@@ -58,17 +58,20 @@ let lemma_obligations registry lemmas =
     let program, _enabled_symbols = slice_program_theory program ~roots in
     let sliced_registry = program.Typed_core.registry in
     let body = typed_formula ~scope:lemma.scope sliced_registry env formula in
-    let binders =
-      String.concat " "
-        (List.map
-           (fun (name, sort) ->
-             Printf.sprintf "(%s %s)" (smt_identifier name)
-               (typed_smt_sort sort))
-           lemma.variables)
-    in
     let theorem =
-      if lemma.variables = [] then body
-      else app "forall" [ "(" ^ binders ^ ")"; body ]
+      List.fold_right
+        (fun (quantifier, name, sort) body ->
+          let quantifier =
+            match quantifier with
+            | Typed_core.Forall -> "forall"
+            | Exists -> "exists"
+          in
+          let binder =
+            Printf.sprintf "((%s %s))" (smt_identifier name)
+              (typed_smt_sort sort)
+          in
+          app quantifier [ binder; body ])
+        lemma.binders body
     in
     let buffer = Buffer.create 4096 in
     Buffer.add_string buffer

@@ -1,5 +1,5 @@
-let[@refined.over { pre = "true"; post = "true" }] use_complement (value : int)
-    : int =
+let[@refined.over { type_ = "value:int -> int" }] use_complement (value : int) :
+    int =
   List_theory.complement
     (value
     [@refined.type

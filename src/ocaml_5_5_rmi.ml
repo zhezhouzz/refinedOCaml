@@ -16,7 +16,7 @@ type typed_rmi = {
   proof_artifacts : Refined_types.proof_artifact list;
 }
 
-let current_rmi_version = 6
+let current_rmi_version = 8
 
 let read_rmi path =
   let channel = open_in_bin path in

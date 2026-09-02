@@ -2,13 +2,12 @@ open Ppxlib
 
 let is_refined attribute =
   match attribute.attr_name.txt with
-  | "refined.over" | "refined.under" | "refined.coverage" | "refined.measure" ->
-      true
+  | "refined.over" | "refined.coverage" | "refined.measure" -> true
   | _ -> false
 
 let validate_contract attribute =
   match attribute.attr_name.txt with
-  | "refined.over" | "refined.under" | "refined.coverage" -> (
+  | "refined.over" | "refined.coverage" -> (
       match attribute.attr_payload with
       | PStr
           [
@@ -21,12 +20,44 @@ let validate_contract attribute =
           let names =
             List.map (fun ({ txt; _ }, _) -> Longident.last_exn txt) fields
           in
-          if not (List.mem "pre" names && List.mem "post" names) then
+          let supported_fields =
+            [
+              "type_";
+              "witnesses";
+              "witness_relation";
+              "ghosts";
+              "raises";
+              "performs";
+              "outcomes";
+              "state";
+              "modifies";
+              "requires_state";
+              "state_witnesses";
+              "result_state";
+              "result_fresh";
+              "result_references";
+              "result_fresh_references";
+              "result_reference_permissions";
+              "result_recursive";
+              "result_region";
+              "requires_regions";
+              "consumes_regions";
+              "outcome_state";
+              "outcome_modifies";
+            ]
+          in
+          List.iter
+            (fun name ->
+              if not (List.mem name supported_fields) then
+                Location.raise_errorf ~loc:attribute.attr_loc
+                  "unknown refined contract field `%s`" name)
+            names;
+          if not (List.mem "type_" names) then
             Location.raise_errorf ~loc:attribute.attr_loc
-              "refined contract requires string fields pre and post"
+              "refined contract requires the Liquid-style string field type_"
       | _ ->
           Location.raise_errorf ~loc:attribute.attr_loc
-            "expected [@refined.%s { pre = \"...\"; post = \"...\" }]"
+            "expected [@refined.%s { type_ = \"x:int -> {v:int | ...}\" }]"
             (if attribute.attr_name.txt = "refined.over" then "over"
              else "coverage"))
   | "refined.measure" -> (

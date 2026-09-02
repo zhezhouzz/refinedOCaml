@@ -1,7 +1,6 @@
 let[@refined.over
      {
-       pre = "true";
-       post = "result = cell";
+       type_ = "cell:int ref -> {result:int ref | result = cell}";
        result_state = "true";
        result_fresh = true;
      }] falsely_fresh (cell : int ref) : int ref =

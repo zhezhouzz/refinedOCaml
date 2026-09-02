@@ -39,6 +39,12 @@ let rec typed_sort_of_type type_expr =
       S_app
         ( { key = "option"; display = "option" },
           List.map typed_sort_of_type arguments )
+  | Types.Tconstr (path, arguments, _)
+    when (Path.name path = "ref"
+         || String.ends_with ~suffix:".ref" (Path.name path))
+         && List.length arguments = 1 ->
+      S_app
+        ({ key = "ref"; display = "ref" }, List.map typed_sort_of_type arguments)
   | Types.Tconstr (path, arguments, _) ->
       S_app (symbol_of_path path, List.map typed_sort_of_type arguments)
   | Types.Ttuple elements ->
@@ -59,9 +65,14 @@ let rec typed_sort_of_type type_expr =
       S_var ("a_" ^ suffix)
   | Types.Tpoly (body, _) -> typed_sort_of_type body
   | Types.Tlink body -> typed_sort_of_type body
-  | Types.Tarrow _ | Types.Tfunctor _ ->
+  | Types.Tarrow (Nolabel, domain, codomain, _) ->
+      S_arrow (typed_sort_of_type domain, typed_sort_of_type codomain)
+  | Types.Tarrow _ ->
       typed_error ~loc:Location.none
-        "higher-order values are not part of the MVP logical sort language"
+        "labelled arrows are not supported by the refinement frontend"
+  | Types.Tfunctor _ ->
+      typed_error ~loc:Location.none
+        "functor values are not part of the logical sort language"
   | Types.Tobject _ | Types.Tfield _ | Types.Tnil | Types.Tsubst _
   | Types.Tvariant _ | Types.Tpackage _ ->
       typed_error ~loc:Location.none
@@ -76,6 +87,8 @@ let new_typed_registry () =
       fields_by_name = Hashtbl.create 32;
       logic_by_name = Hashtbl.create 32;
       abstract_sorts_by_name = Hashtbl.create 16;
+      concrete_sorts_by_name = Hashtbl.create 16;
+      choose_symbols = Hashtbl.create 8;
       module_aliases = Hashtbl.create 16;
       functor_theories = Hashtbl.create 8;
       generic_schemes_by_name = Hashtbl.create 16;
@@ -101,22 +114,32 @@ let typed_register_types registry structure =
         module_structure inner
     | _ -> None
   in
-  let rec visit_structure structure =
+  let rec visit_structure scope structure =
     List.iter
       (fun item ->
         match item.Typedtree.str_desc with
         | Typedtree.Tstr_type (_, declarations) ->
-            List.iter register declarations
+            List.iter (register scope) declarations
         | Tstr_module binding ->
-            Option.iter visit_structure (module_structure binding.mb_expr)
+            Option.iter
+              (fun name ->
+                Option.iter
+                  (visit_structure (scope @ [ name ]))
+                  (module_structure binding.mb_expr))
+              binding.mb_name.txt
         | Tstr_recmodule bindings ->
             List.iter
               (fun (binding : Typedtree.module_binding) ->
-                Option.iter visit_structure (module_structure binding.mb_expr))
+                Option.iter
+                  (fun name ->
+                    Option.iter
+                      (visit_structure (scope @ [ name ]))
+                      (module_structure binding.mb_expr))
+                  binding.mb_name.txt)
               bindings
         | _ -> ())
       structure.Typedtree.str_items
-  and register declaration =
+  and register scope declaration =
     let owner_symbol =
       symbol_of_ident ~display:declaration.typ_name.txt declaration.typ_id
     in
@@ -126,6 +149,12 @@ let typed_register_types registry structure =
         declaration.Typedtree.typ_params
     in
     let owner = S_app (owner_symbol, parameters) in
+    let qualified = qualified_name scope declaration.typ_name.txt in
+    Hashtbl.replace registry.concrete_sorts_by_name qualified owner;
+    if
+      not (Hashtbl.mem registry.concrete_sorts_by_name declaration.typ_name.txt)
+    then
+      Hashtbl.add registry.concrete_sorts_by_name declaration.typ_name.txt owner;
     match declaration.typ_kind with
     | Typedtree.Ttype_variant declarations ->
         let constructors =
@@ -192,7 +221,7 @@ let typed_register_types registry structure =
         typed_error ~loc:declaration.typ_loc
           "external type declarations are not supported by the 5.5 frontend"
   in
-  visit_structure structure
+  visit_structure [] structure
 
 let typed_lookup_constructor registry ~loc
     (description : Data_types.constructor_description) =
@@ -292,6 +321,10 @@ let rec normalize_registered_sort registry sort =
       | _ -> S_app (symbol, arguments))
   | S_tuple sorts ->
       S_tuple (List.map (normalize_registered_sort registry) sorts)
+  | S_arrow (domain, codomain) ->
+      S_arrow
+        ( normalize_registered_sort registry domain,
+          normalize_registered_sort registry codomain )
   | (S_int | S_bool | S_unit | S_var _) as sort -> sort
 
 let rec typed_expression registry (expression : Typedtree.expression) =
@@ -307,6 +340,18 @@ let rec typed_expression registry (expression : Typedtree.expression) =
     }
   in
   let recurse = typed_expression registry in
+  let application_arguments ~loc arguments =
+    List.map
+      (function
+        | Asttypes.Nolabel, Typedtree.Arg argument -> recurse argument
+        | _, Typedtree.Arg _ ->
+            typed_error ~loc
+              "labelled applications are not part of the MVP Core"
+        | _, Typedtree.Omitted () ->
+            typed_error ~loc
+              "partial labelled applications are not part of the MVP Core")
+      arguments
+  in
   match expression.exp_desc with
   | Typedtree.Texp_ident (path, _, _) -> make (Var (symbol_of_path path))
   | Texp_constant (Const_int value) -> make (Int value)
@@ -558,27 +603,34 @@ let rec typed_expression registry (expression : Typedtree.expression) =
          | "ref" :: _ -> true
          | _ -> false ->
       make (Ref (typed_sort_of_type initial.exp_type, recurse initial))
-  | Texp_apply ({ exp_desc = Texp_ident (path, _, description); _ }, arguments)
-    ->
+  | Texp_apply (callee, raw_arguments) -> (
       let arguments =
-        List.map
-          (function
-            | Nolabel, Typedtree.Arg argument -> recurse argument
-            | _, Typedtree.Arg _ ->
-                typed_error ~loc:expression.exp_loc
-                  "labelled applications are not part of the MVP Core"
-            | _, Typedtree.Omitted () ->
-                typed_error ~loc:expression.exp_loc
-                  "partial labelled applications are not part of the MVP Core")
-          arguments
+        application_arguments ~loc:expression.exp_loc raw_arguments
+      in
+      let description =
+        match callee.exp_desc with
+        | Texp_ident (_, _, description) -> Some description
+        | _ -> None
       in
       if
-        List.exists
-          (fun attribute ->
-            attribute.Parsetree.attr_name.txt = "refined.choose")
-          description.Types.val_attributes
+        (match callee.exp_desc with
+          | Texp_ident (path, _, _) ->
+              Hashtbl.mem registry.Typed_core.choose_symbols
+                (symbol_of_path path).key
+          | _ -> false)
+        || Option.exists
+             (fun description ->
+               List.exists
+                 (fun attribute ->
+                   attribute.Parsetree.attr_name.txt = "refined.choose")
+                 description.Types.val_attributes)
+             description
       then make (Choose arguments)
-      else make (Apply (symbol_of_path path, arguments))
+      else
+        match callee.exp_desc with
+        | Texp_ident (path, _, _) ->
+            make (Apply (symbol_of_path path, arguments))
+        | _ -> make (Apply_value (recurse callee, arguments)))
   | Texp_ifthenelse (condition, if_true, Some if_false) ->
       make (If (recurse condition, recurse if_true, recurse if_false))
   | Texp_let
@@ -741,6 +793,8 @@ let contract_ghost_sort registry ~loc text =
             S_app ({ key = "list"; display = "list" }, [ argument ])
         | "option", [ argument ] ->
             S_app ({ key = "option"; display = "option" }, [ argument ])
+        | "ref", [ argument ] ->
+            S_app ({ key = "ref"; display = "ref" }, [ argument ])
         | _ -> (
             let abstract =
               match
@@ -783,6 +837,7 @@ let contract_ghost_sort registry ~loc text =
                    typed_error ~loc:element.ptyp_loc
                      "labelled tuples are not supported in refinement sorts")
              elements)
+    | Ptyp_var name -> S_var ("a_" ^ smt_identifier name)
     | _ -> typed_error ~loc "unsupported ghost sort `%s`" text
   in
   let lexbuf = Lexing.from_string text in
@@ -791,15 +846,109 @@ let contract_ghost_sort registry ~loc text =
   | Location.Error _ as error -> raise error
   | _ -> typed_error ~loc "cannot parse ghost sort `%s`" text
 
-let typed_contracts registry attributes =
+let refined_base_of_surface registry ~loc ~expected_sort
+    (base : surface_refined_base) =
+  let base_sort = contract_ghost_sort registry ~loc base.surface_type in
+  let base_sort = normalize_registered_sort registry base_sort in
+  if base_sort <> expected_sort then
+    typed_error ~loc "refined type `%s` does not match the inferred OCaml type"
+      base.surface_type;
+  Typed_core.
+    {
+      value_name = base.surface_value;
+      base_sort;
+      predicate = base.surface_predicate;
+    }
+
+let refined_type_of_surface registry ~loc ~arguments ~result surface =
+  let check_predicate env (base : Typed_core.refined_base) =
+    let formula =
+      parse_formula ~filename:loc.Location.loc_start.pos_fname ~loc
+        base.predicate
+    in
+    let allowed_variable name =
+      name = base.value_name
+      || List.exists (fun (bound, _) -> bound = name) env
+      || Option.is_some (binary_operator name)
+      || name = "not"
+      || Hashtbl.fold
+           (fun _ (symbol : Typed_core.logic_symbol) found ->
+             found || symbol.logic_name.display = name)
+           registry.Typed_core.logic_by_name false
+    in
+    let iterator =
+      {
+        Ast_iterator.default_iterator with
+        expr =
+          (fun self expression ->
+            (match expression.Parsetree.pexp_desc with
+            | Pexp_ident { txt = Lident name; _ }
+              when not (allowed_variable name) ->
+                typed_error ~loc:expression.pexp_loc
+                  "refinement variable `%s` is not in Liquid scope" name
+            | _ -> ());
+            Ast_iterator.default_iterator.expr self expression);
+      }
+    in
+    iterator.expr iterator formula
+  in
+  let rec convert env expected_sort expected_parameters = function
+    | Surface_base base -> (
+        match expected_sort with
+        | Typed_core.S_arrow _ ->
+            typed_error ~loc
+              "refined function type has fewer arrows than the inferred OCaml \
+               type"
+        | _ ->
+            let base =
+              refined_base_of_surface registry ~loc ~expected_sort base
+            in
+            check_predicate env base;
+            Typed_core.Refined_base base)
+    | Surface_arrow (parameter, domain, codomain) -> (
+        match expected_sort with
+        | Typed_core.S_arrow (domain_sort, codomain_sort) ->
+            (match expected_parameters with
+            | (expected : Typed_core.symbol) :: _
+              when parameter <> expected.display ->
+                typed_error ~loc
+                  "refined parameter `%s` does not match OCaml parameter `%s`"
+                  parameter expected.display
+            | _ -> ());
+            let domain = convert env domain_sort [] domain in
+            let expected_parameters =
+              match expected_parameters with [] -> [] | _ :: rest -> rest
+            in
+            Typed_core.Refined_arrow
+              {
+                parameter;
+                domain;
+                codomain =
+                  convert
+                    ((parameter, (smt_identifier parameter, domain_sort)) :: env)
+                    codomain_sort expected_parameters codomain;
+              }
+        | _ ->
+            typed_error ~loc
+              "refined function type has more arrows than the inferred OCaml \
+               type")
+  in
+  let function_sort =
+    List.fold_right
+      (fun (_, argument_sort) result ->
+        Typed_core.S_arrow (argument_sort, result))
+      arguments result
+  in
+  convert [] function_sort (List.map fst arguments) surface
+
+let typed_contracts registry ~arguments ~result attributes =
   List.filter_map
     (fun attribute ->
       match contract_of_attribute attribute with
       | None -> None
       | Some
           ( mode,
-            pre,
-            post,
+            surface_type,
             result_state,
             result_fresh,
             result_references,
@@ -825,8 +974,10 @@ let typed_contracts registry attributes =
             Typed_core.
               {
                 mode;
-                pre;
-                post;
+                refined_type =
+                  refined_type_of_surface registry ~loc:attribute.attr_loc
+                    ~arguments ~result surface_type;
+                function_arity = List.length arguments;
                 result_state;
                 result_fresh;
                 result_references;
@@ -1030,6 +1181,12 @@ let typed_normalize expression =
     | Apply (symbol, expressions) ->
         atoms expressions (fun expressions ->
             bind_operation expression (Apply (symbol, expressions)) continuation)
+    | Apply_value (callee, expressions) ->
+        anf callee (fun callee ->
+            atoms expressions (fun expressions ->
+                bind_operation expression
+                  (Apply_value (callee, expressions))
+                  continuation))
     | Field (constructor, index, record) ->
         anf record (fun record ->
             bind_operation expression
@@ -1050,9 +1207,58 @@ let typed_bound_variable (pattern : Typedtree.pattern) =
           typed_sort_of_type pattern.pat_type )
   | _ -> None
 
+let typed_register_choices registry structure =
+  let rec module_structure = function
+    | { Typedtree.mod_desc = Typedtree.Tmod_structure structure; _ } ->
+        Some structure
+    | { mod_desc = Tmod_constraint (inner, _, _, _); _ } ->
+        module_structure inner
+    | _ -> None
+  in
+  let rec visit structure =
+    List.iter
+      (fun item ->
+        match item.Typedtree.str_desc with
+        | Typedtree.Tstr_value (_, bindings) ->
+            List.iter
+              (fun binding ->
+                if
+                  List.exists
+                    (fun attribute ->
+                      attribute.Parsetree.attr_name.txt = "refined.choose")
+                    binding.Typedtree.vb_attributes
+                then
+                  match binding.vb_pat.pat_desc with
+                  | Typedtree.Tpat_var (ident, name, _) ->
+                      let symbol = symbol_of_ident ~display:name.txt ident in
+                      Hashtbl.replace registry.Typed_core.choose_symbols
+                        symbol.key ()
+                  | _ ->
+                      typed_error ~loc:binding.vb_pat.pat_loc
+                        "a choice primitive binding must have a simple name")
+              bindings
+        | Tstr_module binding ->
+            Option.iter visit (module_structure binding.mb_expr)
+        | Tstr_recmodule bindings ->
+            List.iter
+              (fun (binding : Typedtree.module_binding) ->
+                Option.iter visit (module_structure binding.mb_expr))
+              bindings
+        | _ -> ())
+      structure.Typedtree.str_items
+  in
+  visit structure
+
 let typed_function registry binding =
   let open Typed_core in
-  let contracts = typed_contracts registry binding.Typedtree.vb_attributes in
+  let has_contract =
+    List.exists
+      (fun attribute ->
+        match attribute.Parsetree.attr_name.txt with
+        | "refined.over" | "refined.coverage" -> true
+        | _ -> false)
+      binding.Typedtree.vb_attributes
+  in
   match binding.vb_expr.exp_desc with
   | Typedtree.Texp_function (parameters, Tfunction_body body) ->
       let symbol =
@@ -1060,7 +1266,7 @@ let typed_function registry binding =
         | Typedtree.Tpat_var (ident, name, _) ->
             symbol_of_ident ~display:name.txt ident
         | _ ->
-            if contracts = [] then
+            if not has_contract then
               typed_error ~loc:binding.vb_pat.pat_loc
                 "top-level functions in the MVP Core must have a simple \
                  variable name"
@@ -1097,19 +1303,24 @@ let typed_function registry binding =
       then
         typed_error ~loc:binding.vb_loc
           "refined function parameters must have distinct source names";
+      let result =
+        typed_sort_of_type body.exp_type |> normalize_registered_sort registry
+      in
+      let contracts =
+        typed_contracts registry ~arguments ~result
+          binding.Typedtree.vb_attributes
+      in
       Some
         {
           symbol;
           arguments;
-          result =
-            typed_sort_of_type body.exp_type
-            |> normalize_registered_sort registry;
+          result;
           body = typed_normalize (typed_expression registry body);
           contracts;
           measure = typed_measure binding.vb_attributes arguments;
         }
   | _ ->
-      if contracts = [] then None
+      if not has_contract then None
       else
         typed_error ~loc:binding.vb_expr.exp_loc
           "a refined binding must be an explicitly written function"

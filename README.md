@@ -30,6 +30,13 @@ dune build @fuzz
 REFINED_FUZZ_CASES=20000 REFINED_FUZZ_SEED=1592594470 dune build @fuzz --force
 ```
 
+SMT queries time out after 10 seconds by default. Set a larger positive value
+for slower machines or larger verification suites:
+
+```sh
+REFINED_SOLVER_TIMEOUT_SECONDS=60 dune build @refined
+```
+
 Fuzzer 由 QCheck2 驱动，默认使用固定 master seed 跑 5,000 cases；CI 跑 20,000 cases。每个 case 使用
 独立 seed，失败时 QCheck2 会缩减该 seed，并输出可重放的最小失败 seed。
 
@@ -49,11 +56,13 @@ Fuzzer 由 QCheck2 驱动，默认使用固定 master seed 跑 5,000 cases；CI 
 constructor/field UID。普通类型错误产生的 partial Typedtree 会被拒绝。
 
 ```ocaml
-let[@refined.over { pre = "x >= 0"; post = "result > x" }]
+let[@refined.over
+      { type_ = "x:{v:int | v >= 0} -> {v:int | v > x}" }]
     succ (x : int) : int =
   x + 1
 
-let[@refined.coverage { pre = "x >= 0"; post = "result >= 1" }]
+let[@refined.coverage
+      { type_ = "x:{v:int | v >= 0} -> {v:int | v >= 1}" }]
     positive_range (x : int) : int =
   x + 1
 ```
@@ -77,6 +86,24 @@ CLI 只接受完成普通 OCaml typing 后生成的 `.cmt` implementation。
 (preprocess (pps refined_ocaml.ppx))
 ```
 
+Contract 使用单个 Liquid 风格的 `type_` 字符串：
+
+```text
+type       ::= parameter -> type | refinement
+parameter  ::= name : refinement | name : (type)
+refinement ::= ocaml_type | { value_name : ocaml_type | formula }
+```
+
+`x:int` 是 `{v:int | true}` 的简写。每个 domain formula 可以引用自己的 value binder
+和此前的参数；codomain formula 可以引用全部参数和自己的 value binder。字符串中的 OCaml
+base type 会与 Typedtree 推断出的参数和结果类型逐一核对。
+
+函数参数也可以携带完整 refinement type。例如
+`f:(x:{v:int | v >= 0} -> {v:int | v > x}) -> ...`。Checker 将这种参数
+解释为带合约的符号闭包：每次调用分阶段检查 domain，并把 codomain 作为调用结果假设。
+把具名函数或偏应用闭包传入时，目前要求它公开一个 alpha-equivalent 的 safety contract；不匹配时
+fail closed。
+
 ## 两种 refinement
 
 对纯函数 `f : X -> Y`：
@@ -92,8 +119,7 @@ Coverage contract 描述函数 image 的一个下界。当前 coverage
 ```ocaml
 let[@refined.coverage
       {
-        pre = "x >= 0";
-        post = "result >= 1";
+        type_ = "x:{v:int | v >= 0} -> {v:int | v >= 1}";
         witnesses = [ ("x", "result - 1") ];
       }]
     successor x =
@@ -109,7 +135,7 @@ forall result. post(result) =>
 
 完整 witness contract 可以作为 under call summary。Caller existentially 选择 call result，并加入 callee
 post 与 `actual_argument = witness(call_result)`；多层调用因而可以组合。递归 under-summary 还要求 SCC
-内 measure 非负且严格下降。没有 witnesses 的旧 contract 仍按 whole-image existential VC 验证，但只
+内 measure 非负且严格下降。没有 witnesses 的 contract 按 whole-image existential VC 验证，但只
 能 inline，不能关闭递归调用。
 
 当 inverse 不是函数时，可以改用 relational witness：
@@ -117,8 +143,7 @@ post 与 `actual_argument = witness(call_result)`；多层调用因而可以组�
 ```ocaml
 let[@refined.coverage
       {
-        pre = "true";
-        post = "result >= 0";
+        type_ = "x:int -> {v:int | v >= 0}";
         witness_relation = "x = result || x = 0 - result";
       }]
     absolute x =
@@ -143,17 +168,16 @@ model。
 external choose : int -> int -> int = "refined_choose" [@@refined.choose]
 
 let[@refined.over
-      { pre = "true"; post = "result = 0 || result = 1" }]
+      { type_ = "_unit:unit -> {v:int | v = 0 || v = 1}" }]
    [@refined.coverage
-      { pre = "true"; post = "result = 0 || result = 1" }]
+      { type_ = "_unit:unit -> {v:int | v = 0 || v = 1}" }]
     bit (_unit : unit) : int =
   choose 0 1
 ```
 
 如果实现改成恒定返回 `0`，safety 仍成立，但 coverage 会报告 `missing_result = 1`。
-`refined.under` 是 `refined.coverage` 的兼容别名。
-
-`choose` alternatives 可以包含 heap writes、raise 或 perform。Frontend 保留两个 computation，不会按
+`choose` 既可以像上例一样由 signature 声明，也可以写成带 `[@refined.choose]` 的普通可执行
+binding；验证时两者都表示 nondeterministic choice。它的 alternatives 可以包含 heap writes、raise 或 perform。Frontend 保留两个 computation，不会按
 OCaml 普通函数实参规则预先顺序求值；Safety 将 path union 解释为 demonic choice，Coverage 将其解释为
 angelic reachability。
 
@@ -168,9 +192,31 @@ val hd : 'a list -> 'a -> bool [@@refined.predicate]
 [@@@refined.axiom
   {
     name = "hd_mem";
-    vars = [ ("l", "'a list"); ("x", "'a") ];
+    quantifiers =
+      [ ("forall", "l", "'a list"); ("forall", "x", "'a") ];
     body = "implies (hd l x) (mem l x)";
   }]
+```
+
+返回 `bool` 的逻辑符号使用 `[@refined.predicate]`。需要在公式中返回其他一阶 sort 时使用
+`[@refined.logic]`，例如 `heap_depth : heap -> int`。这些 binding 的 OCaml body 仍可用于运行时测试；
+验证器把逻辑符号视为 uninterpreted，并只通过显式 axiom 使用其逻辑语义。
+
+`quantifiers` 按顺序保存任意交错的 `forall`/`exists` binder。下面的 statement 表示
+`forall x. exists y. forall z. y = x && witnessed x && z = z`：
+
+```ocaml
+[@@@refined.axiom
+{
+  name = "has_witness";
+  quantifiers =
+    [
+      ("forall", "x", "int");
+      ("exists", "y", "int");
+      ("forall", "z", "int");
+    ];
+  body = "y = x && witnessed x && z = z";
+}]
 ```
 
 从 `.cmti` 生成带 `.cmi` digest 的 refinement interface：
@@ -192,7 +238,8 @@ refined-ocaml check --theory list_theory.rmi client.cmt
 [@@@refined.lemma
 {
   name = "not_mem_not_hd";
-  vars = [ ("l", "'a list"); ("x", "'a") ];
+  quantifiers =
+    [ ("forall", "l", "'a list"); ("forall", "x", "'a") ];
   body = "implies (not (mem l x)) (not (hd l x))";
 }]
 ```
@@ -207,7 +254,7 @@ refined-ocaml replay list_theory.rmi.rpa
 ```
 
 Replay kernel 先验证格式、statement/VC digest 和依赖拓扑，再用当前 Z3 重新要求每条 VC 为 `unsat`。
-v6 `.rmi` import 必须带匹配 sidecar；Marshal 只保留 OCaml-specific theory cache。RPA1 仍是 solver replay
+v8 `.rmi` import 必须带匹配 sidecar；Marshal 只保留 OCaml-specific theory cache。RPA1 仍是 solver replay
 record，不是原生 Z3 proof certificate。详细格式见 [`docs/proof-artifacts.md`](docs/proof-artifacts.md)。
 
 CLI 使用 Cmdliner，主命令为 `check`、`emit-rmi` 和 `replay`，自动提供分命令 help 与参数校验。
@@ -221,7 +268,11 @@ type t
 val holds : t -> bool [@@refined.predicate]
 
 [@@@refined.axiom
-{ name = "holds_all"; vars = [ ("x", "t") ]; body = "holds x" }]
+{
+  name = "holds_all";
+  quantifiers = [ ("forall", "x", "t") ];
+  body = "holds x";
+}]
 ```
 
 Axiom/lemma sort parser 按 lexical module scope 解析 `"t"`，并与 Typedtree 中客户端看到的
@@ -299,7 +350,7 @@ fixpoint；互递归 SCC 支持 base-fact propagation，无依据循环稳定为
 一个 `int` 参数作为 well-founded measure：
 
 ```ocaml
-let[@refined.over { pre = "n >= 0"; post = "result = 0" }]
+let[@refined.over { type_ = "n:{v:int | v >= 0} -> {v:int | v = 0}" }]
    [@refined.measure "n"] rec countdown n =
   if n = 0 then 0 else countdown (n - 1)
 ```
@@ -355,8 +406,7 @@ contract 可增加 exceptional postconditions：
 ```ocaml
 let[@refined.over
       {
-        pre = "true";
-        post = "result >= 0";
+        type_ = "x:int -> {v:int | v >= 0}";
         raises = [ ("Negative", "x < 0") ];
       }]
     classify x =
@@ -373,8 +423,7 @@ Frontend 还支持局部 references：`let cell = ref init`、`!cell`、`cell :=
 ```ocaml
 let[@refined.over
       {
-        pre = "true";
-        post = "result = x + 1";
+        type_ = "cell:int ref -> x:int -> {v:int | v = x + 1}";
         state = [ ("cell", "value = result") ];
       }]
     bump x =
@@ -430,8 +479,7 @@ identity equality/disequality。`ref init` 本身也是 Core expression，可直
 ```ocaml
 let[@refined.over
       {
-        pre = "true";
-        post = "true";
+        type_ = "x:int -> int ref";
         result_state = "value = x";
         result_fresh = true;
       }]
@@ -492,8 +540,7 @@ type _ Effect.t += Stop : int Effect.t
 
 let[@refined.over
       {
-        pre = "true";
-        post = "result = 0";
+        type_ = "flag:bool -> {v:int | v = 0}";
         performs = [ ("Stop", "flag") ];
       }]
     run flag =
@@ -584,14 +631,16 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 | 反例模型、SMT-LIB 导出 | 支持 | Z3 / `--emit-smt` |
 | safety 函数 summary、直接/互递归 | 支持 | call-graph SCC + `int` measure |
 | 递归 coverage | 有条件支持 | complete witnesses + SCC measure |
-| 开放 polymorphic ADT obligation、高阶值 | 明确拒绝 | 需要 finite instances/closure |
+| safety 高阶参数、函数值结果与偏应用 | 支持 | refinement-typed symbolic/residual closure + result eta-expansion |
+| coverage 高阶参数 | 明确拒绝 | 需要 nested polarity/coverage semantics |
+| 函数值逃逸到一阶公式、coverage 函数值结果 | 明确拒绝 | 需要 higher-order coverage semantics |
 | functor、first-class/recursive module | 明确拒绝 | 需要 theory transformer/generativity |
 | nullary `raise`/`try` safety | 支持 | Return/Raised guarded paths |
 | local refs / lexical alias / final-state safety | 支持 | per-sort SMT heap + fresh identity |
 | nullary Effect.perform / abortive+one-shot Deep handler | 支持 | CPS continuation paths |
 | conditional linear continuation | 支持 | guarded Abort/Resume actions |
 | single-payload exception/effect | 支持 | payload-sorted outcome predicates |
-| effectful safety call summary | 支持 | normal/Raised/Performed symbolic paths |
+| effectful safety call summary 与偏应用 | 支持 | staged domain checks + normal/Raised/Performed symbolic paths |
 | exception/effect coverage summary | 支持 | per-outcome payload inverse witnesses |
 | aliased reference parameters / state summaries | 支持 | identity select/store + consistency guards |
 | abnormal outcome heap summaries | 支持 | `outcome_state` + caller heap update |

@@ -1,7 +1,7 @@
 type _ Effect.t += Stop : int Effect.t
 
-let[@refined.over { pre = "true"; post = "result = 42" }] resumes (_unit : unit)
-    : int =
+let[@refined.over { type_ = "_unit:unit -> {result:int | result = 42}" }] resumes
+    (_unit : unit) : int =
   Effect.Deep.match_with
     (fun () ->
       let value = Effect.perform Stop in

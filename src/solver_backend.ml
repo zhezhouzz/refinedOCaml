@@ -1,7 +1,15 @@
 open Refined_ir
 open Refined_types
 
-let timeout_seconds = 10
+let timeout_seconds =
+  match Sys.getenv_opt "REFINED_SOLVER_TIMEOUT_SECONDS" with
+  | None -> 10
+  | Some value -> (
+      match int_of_string_opt value with
+      | Some seconds when seconds > 0 -> seconds
+      | _ ->
+          invalid_arg
+            "REFINED_SOLVER_TIMEOUT_SECONDS must be a positive integer")
 
 let read_all channel =
   let buffer = Buffer.create 1024 in

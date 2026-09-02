@@ -36,7 +36,7 @@ Replay performs three stages:
 2. the structural kernel checks versions, SHA-256 digests, unique lemma names and dependency order;
 3. every stored VC is re-solved with the current Z3 and must return `unsat`.
 
-Loading a v6 `.rmi` requires its `.rpa`; unit name, interface digest, artifacts and canonical statement digests
+Loading a v8 `.rmi` requires its `.rpa`; unit name, interface digest, artifacts and canonical statement digests
 must match. RPA1 is a reproducible replay record, not a native Z3 proof certificate: the final stage still trusts
 the currently executed solver. A future certificate kernel can add another artifact version without changing the
 RPA1 framing.

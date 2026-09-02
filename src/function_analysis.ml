@@ -21,6 +21,8 @@ let calls expression =
         collect_all expressions
     | Apply (symbol, arguments) ->
         List.fold_left collect (symbol.key :: accumulator) arguments
+    | Apply_value (callee, arguments) ->
+        List.fold_left collect (collect accumulator callee) arguments
     | If (condition, if_true, if_false) ->
         List.fold_left collect accumulator [ condition; if_true; if_false ]
     | Let (_, value, body) -> List.fold_left collect accumulator [ value; body ]

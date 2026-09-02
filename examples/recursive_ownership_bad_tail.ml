@@ -2,8 +2,7 @@ type chain = End | Link of int ref * chain
 
 let[@refined.over
      {
-       pre = "true";
-       post = "true";
+       type_ = "tail:chain -> chain";
        result_recursive = true;
        result_region = "bad_tail_chain";
        result_references = [ ("Link.0", "true") ];
