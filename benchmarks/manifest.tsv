@@ -10,8 +10,8 @@ liquidhaskell	f92259ca775f07b7285187ad27affd0e31e63093	src/09-case-study-lazy-qu
 liquidhaskell	f92259ca775f07b7285187ad27affd0e31e63093	src/10-case-study-associative-maps.lhs	benchmarks/liquidhaskell/classics.ml	adapted-verified
 liquidhaskell	f92259ca775f07b7285187ad27affd0e31e63093	src/11-case-study-pointers.lhs	benchmarks/liquidhaskell/classics.ml	adapted-verified
 liquidhaskell	f92259ca775f07b7285187ad27affd0e31e63093	src/12-case-study-AVL.lhs	benchmarks/liquidhaskell/classics.ml	adapted-verified
-coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/basic/boundlist.ml	benchmarks/coveragetype/semantic_lists.ml	semantic-verified
-coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/basic/duplicate_list.ml	benchmarks/coveragetype/semantic_lists.ml	semantic-verified
+coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/basic/boundlist.ml	benchmarks/coveragetype/boundlist.ml	semantic-verified
+coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/basic/duplicate_list.ml	benchmarks/coveragetype/duplicate_list.ml	semantic-verified
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/basic/sortedlist_simpl.ml	benchmarks/coveragetype/semantic_lists.ml	semantic-verified
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/BankersQueue.ml	benchmarks/coveragetype/semantic_bankers_queue.ml	semantic-verified
 coveragetype	c158b803c1c50ad61829e4ae079710f9d6cca52a	data/PLDI23/elrond/BatchedQueue.ml	benchmarks/coveragetype/semantic_batched_queue.ml	semantic-verified

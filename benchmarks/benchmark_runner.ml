@@ -80,8 +80,8 @@ let read_file path =
 
 let coverage_manifest =
   [
-    ("data/PLDI23/basic/boundlist.ml", "coveragetype/semantic_lists.ml");
-    ("data/PLDI23/basic/duplicate_list.ml", "coveragetype/semantic_lists.ml");
+    ("data/PLDI23/basic/boundlist.ml", "coveragetype/boundlist.ml");
+    ("data/PLDI23/basic/duplicate_list.ml", "coveragetype/duplicate_list.ml");
     ("data/PLDI23/basic/sortedlist_simpl.ml", "coveragetype/semantic_lists.ml");
     ( "data/PLDI23/elrond/BankersQueue.ml",
       "coveragetype/semantic_bankers_queue.ml" );
@@ -197,14 +197,24 @@ let positive_fixtures =
       output = "semantic_lists";
       obligations =
         [
-          "boundlist";
-          "duplicate_list_port";
           "sortedlist_simpl";
           "unique_list_port";
           "sized_list_port";
           "sorted_list_port";
         ];
       runtime = "coveragetype/semantic_lists_runtime.ml";
+    };
+    {
+      source = "coveragetype/boundlist.ml";
+      output = "coveragetype_boundlist";
+      obligations = [ "bound_list_gen" ];
+      runtime = "coveragetype/boundlist_runtime.ml";
+    };
+    {
+      source = "coveragetype/duplicate_list.ml";
+      output = "coveragetype_duplicate_list";
+      obligations = [ "duplicate_list_gen" ];
+      runtime = "coveragetype/duplicate_list_runtime.ml";
     };
     {
       source = "coveragetype/semantic_bankers_queue.ml";
@@ -331,6 +341,9 @@ let positive_fixtures =
 
 let negative_fixtures =
   [
+    ( "coveragetype/basic_lists_bad.ml",
+      "basic_lists_bad",
+      [ "bound_list_below_floor"; "duplicate_list_wrong_item" ] );
     ( "coveragetype/leftist_heap_bad.ml",
       "leftist_heap_bad",
       [ "generate_bad_rank" ] );
