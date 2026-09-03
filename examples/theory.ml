@@ -14,8 +14,12 @@ module ListTheory = struct
   {
     name = "has_witness";
     quantifiers =
-      [ ("forall", "x", "int"); ("exists", "y", "int"); ("forall", "z", "int") ];
-    body = "y = x && witnessed x && z = z";
+      [
+        ("forall", "x", "int");
+        ("exists", "l", "int list");
+        ("forall", "z", "int");
+      ];
+    body = "mem l x && witnessed x && z = z";
   }]
 end
 

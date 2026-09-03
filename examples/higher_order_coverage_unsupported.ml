@@ -1,4 +1,0 @@
-let[@refined.coverage
-     { type_ = "f:(x:int -> {v:int | v = x}) -> x:int -> {v:int | true}" }] apply_identity
-    (f : int -> int) (x : int) : int =
-  f x

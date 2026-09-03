@@ -104,6 +104,9 @@ base type 会与 Typedtree 推断出的参数和结果类型逐一核对。
 具名函数、偏应用闭包和局部/匿名函数都使用同一套 closure typing。函数子类型按语义检查：参数
 逆变、结果协变，base refinement 由 SMT 证明蕴含；依赖 arrow 的 binder environment 会随参数阶段
 延伸。偏应用会保存删去已供参数后的残余 refinement type，而不是只在某个调用点做文本展开。
+因此联合前置条件可以按 curry 顺序放进后续 domain：
+`x:int -> y:{y:int | P x y} -> C` 在应用到 `3` 后得到保留捕获环境的
+`y:{y:int | P 3 y} -> C[x := 3]`。
 
 ## 两种 refinement
 
@@ -222,8 +225,8 @@ val hd : 'a list -> 'a -> bool [@@refined.predicate]
 `[@refined.logic]`，例如 `heap_depth : heap -> int`。这些 binding 的 OCaml body 仍可用于运行时测试；
 验证器把逻辑符号视为 uninterpreted，并只通过显式 axiom 使用其逻辑语义。
 
-`quantifiers` 按顺序保存任意交错的 `forall`/`exists` binder。下面的 statement 表示
-`forall x. exists y. forall z. y = x && witnessed x && z = z`：
+`quantifiers` 按顺序保存任意交错的 `forall`/`exists` binder。下面的 statement 包含
+CoverageType 常用的 `forall x. exists l. mem l x` witness 形状，并保留其后的 universal binder：
 
 ```ocaml
 [@@@refined.axiom
@@ -232,10 +235,10 @@ val hd : 'a list -> 'a -> bool [@@refined.predicate]
   quantifiers =
     [
       ("forall", "x", "int");
-      ("exists", "y", "int");
+      ("exists", "l", "int list");
       ("forall", "z", "int");
     ];
-  body = "y = x && witnessed x && z = z";
+  body = "mem l x && witnessed x && z = z";
 }]
 ```
 

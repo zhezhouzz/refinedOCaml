@@ -432,32 +432,6 @@ let[@refined.choose] choose_list (left : ilist) (_right : ilist) : ilist = left
 let[@refined.coverage
      {
        type_ =
-         "size:{size:int | size >= 0} -> floor:int -> head:int -> tail:ilist \
-          -> {result:list_case | valid_bound_case result}";
-       witness_relation =
-         "result = List_case (size, floor, case_list result) && ((size = 0 && \
-          case_list result = Nil) || (size > 0 && case_list result = Cons \
-          (head, tail) && head >= floor && bounded tail (size - 1) floor))";
-     }] boundlist (size : int) (floor : int) (head : int) (tail : ilist) :
-    list_case =
-  List_case (size, floor, choose_list Nil (Cons (head, tail)))
-
-let[@refined.coverage
-     {
-       type_ =
-         "size:{size:int | size >= 0} -> item:int -> tail:ilist -> \
-          {result:list_case | valid_duplicate_case result}";
-       witness_relation =
-         "result = List_case (size, item, case_list result) && ((size = 0 && \
-          case_list result = Nil) || (size > 0 && case_list result = Cons \
-          (item, tail) && duplicates tail (size - 1) item))";
-     }] duplicate_list_port (size : int) (item : int) (tail : ilist) : list_case
-    =
-  List_case (size, item, choose_list Nil (Cons (item, tail)))
-
-let[@refined.coverage
-     {
-       type_ =
          "size:{size:int | size >= 0} -> head:int -> tail:ilist -> \
           {result:list_case | valid_sorted_case result}";
        witness_relation =
