@@ -372,8 +372,8 @@ let integration_suite () =
   compile "../examples/higher_order.ml" "typed_higher_order";
   compile "../examples/higher_order_subtyping.ml" "typed_higher_order_subtyping";
   compile "../examples/higher_order_mismatch.ml" "typed_higher_order_mismatch";
-  compile "../examples/higher_order_coverage_unsupported.ml"
-    "typed_higher_order_coverage_unsupported";
+  compile "../examples/higher_order_coverage_indexed.ml"
+    "typed_higher_order_coverage_indexed";
   compile "../examples/higher_order_coverage.ml" "typed_higher_order_coverage";
   compile "../examples/higher_order_coverage_effect.ml"
     "typed_higher_order_coverage_effect";
@@ -497,8 +497,12 @@ let integration_suite () =
   obligations_of_cmt "typed_residual_subtyping.cmt"
   |> List.iter (fun obligation ->
       match obligation.name with
-      | "add" | "apply_add_two" | "use_residual" -> require `Valid obligation
-      | "use_wrong_residual" -> require `Invalid obligation
+      | "add" | "apply_add_two" | "use_residual" | "difference"
+      | "apply_after_three" | "use_dependent_residual" | "apply_at_any_int" ->
+          require `Valid obligation
+      | "use_wrong_residual" | "use_wrong_dependent_residual"
+      | "use_dependent_residual_outside_domain" ->
+          require `Invalid obligation
       | name -> failwith ("unexpected residual-subtyping obligation " ^ name));
   obligations_of_cmt "typed_higher_order.cmt"
   |> List.iter (fun obligation ->
@@ -524,10 +528,13 @@ let integration_suite () =
       | "identity" | "apply_positive" -> require `Valid obligation
       | "use_bad_callback" -> require `Invalid obligation
       | name -> failwith ("unexpected callback-subtyping obligation " ^ name));
-  obligations_of_cmt "typed_higher_order_coverage_unsupported.cmt"
+  obligations_of_cmt "typed_higher_order_coverage_indexed.cmt"
   |> List.iter (fun obligation ->
       match obligation.name with
-      | "apply_identity" -> require `Valid obligation
+      | "apply_identity" ->
+          if not (contains obligation.smt "(= missing_result x_") then
+            failwith "indexed higher-order coverage lost its x-dependent post";
+          require `Valid obligation
       | name -> failwith ("unexpected higher-order coverage obligation " ^ name));
   obligations_of_cmt "typed_higher_order_coverage.cmt"
   |> List.iter (fun obligation ->
@@ -595,15 +602,19 @@ let integration_suite () =
   |> List.iter (fun obligation ->
       (match obligation.name with
       | "head_is_member" ->
-          if obligation.trusted_axioms <> [ "ListTheory.hd_mem" ] then
-            failwith "local module axiom provenance was not preserved"
+          if
+            obligation.trusted_axioms
+            <> [ "ListTheory.hd_mem"; "ListTheory.has_witness" ]
+          then failwith "local module axiom provenance was not preserved"
       | "witness_exists" ->
-          if obligation.trusted_axioms <> [ "ListTheory.has_witness" ] then
-            failwith "existential axiom provenance was not preserved";
+          if
+            obligation.trusted_axioms
+            <> [ "ListTheory.hd_mem"; "ListTheory.has_witness" ]
+          then failwith "existential axiom provenance was not preserved";
           if
             not
               (contains obligation.smt
-                 "(forall ((x Int)) (exists ((y Int)) (forall ((z Int))")
+                 "(forall ((x Int)) (exists ((l T_list_Int)) (forall ((z Int))")
           then failwith "axiom quantifier order was not preserved"
       | name -> failwith ("unexpected theory obligation " ^ name));
       require `Valid obligation);
