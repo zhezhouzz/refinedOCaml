@@ -560,6 +560,13 @@ let typed_refinement_predicate program generic_calls ~loc environment
   |> List.iter (use_theory_symbol generic_calls);
   typed_formula program.registry environment formula
 
+(* A call may use facts established by earlier calls. Snapshot the environment
+   here: including later summaries would let a call justify its own domain. *)
+let add_call_side_condition state path predicate =
+  state.side_conditions <-
+    under_path (state.summary_assumptions @ path) predicate
+    :: state.side_conditions
+
 (* [actual <: expected] is a semantic judgment.  Base refinements generate an
    implication, while arrows are contravariant in their domain and covariant
    in their codomain.  A residual closure carries the environment for binders
@@ -582,9 +589,8 @@ let emit_refined_subtype program choices generic_calls path ~loc
         let value = fresh actual.base_sort in
         let actual = predicate actual_environment actual value in
         let expected = predicate expected_environment expected value in
-        generic_calls.side_conditions <-
-          under_path path (app "=>" [ actual; expected ])
-          :: generic_calls.side_conditions
+        add_call_side_condition generic_calls path
+          (app "=>" [ actual; expected ])
     | Typed_core.Refined_arrow actual, Typed_core.Refined_arrow expected ->
         if
           Typed_core.refined_sort actual.domain
@@ -726,11 +732,9 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
                           formula_theory_symbols program.registry predicate_env
                             predicate
                           |> List.iter (use_theory_symbol generic_calls);
-                          generic_calls.side_conditions <-
-                            under_path path
-                              (typed_formula program.registry predicate_env
-                                 predicate)
-                            :: generic_calls.side_conditions);
+                          add_call_side_condition generic_calls path
+                            (typed_formula program.registry predicate_env
+                               predicate));
                         ( argument_term,
                           (parameter, (argument_term, argument_sort))
                           :: environment )
@@ -741,7 +745,9 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
                               "higher-order argument `%s` is not a function \
                                value"
                               parameter
-                        | Some _ -> ());
+                        | Some closure ->
+                            ensure_closure_subtype path environment domain
+                              closure);
                         let identity =
                           "closure_argument_"
                           ^ string_of_int (List.length !choices)
@@ -906,8 +912,7 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
                 typed_refinement_predicate program generic_calls ~loc:body.loc
                   expected_environment expected term
               in
-              generic_calls.side_conditions <-
-                under_path path post :: generic_calls.side_conditions
+              add_call_side_condition generic_calls path post
           | [], (Typed_core.Refined_arrow _ as expected) -> (
               let result =
                 typed_expr_smt_with_choices program analysis mode
@@ -1374,10 +1379,8 @@ and typed_inline_call program analysis mode current_function path call_stack
                     formula_theory_symbols program.registry formula_env
                       predicate
                     |> List.iter (use_theory_symbol generic_calls);
-                    generic_calls.side_conditions <-
-                      under_path path
-                        (typed_formula program.registry formula_env predicate)
-                      :: generic_calls.side_conditions))
+                    add_call_side_condition generic_calls path
+                      (typed_formula program.registry formula_env predicate)))
             supplied
       | None -> ());
       if List.length captured < List.length function_def.arguments then
@@ -1507,12 +1510,10 @@ and typed_inline_call program analysis mode current_function path call_stack
                 typed_error_at expression.loc
                   "recursive caller and callee have incompatible lexicographic \
                    measures";
-              generic_calls.side_conditions <-
-                under_path path
-                  (termination_decrease ~loc:expression.loc function_def
-                     callee_measure ~callee:callee_measure_term
-                     ~caller:caller_measure_term)
-                :: generic_calls.side_conditions)
+              add_call_side_condition generic_calls path
+                (termination_decrease ~loc:expression.loc function_def
+                   callee_measure ~callee:callee_measure_term
+                   ~caller:caller_measure_term))
           in
           add_termination_condition ();
           match Typed_core.contract_result summary with

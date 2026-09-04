@@ -108,6 +108,9 @@ base type 会与 Typedtree 推断出的参数和结果类型逐一核对。
 `x:int -> y:{y:int | P x y} -> C` 在应用到 `3` 后得到保留捕获环境的
 `y:{y:int | P 3 y} -> C[x := 3]`。
 
+符号函数参数再次接收 callback 时，也会检查 callback 的完整 refinement。调用链可以使用此前
+调用的结果合约检查后续 domain；尚未调用的函数合约不能反过来证明当前调用合法。
+
 ## 两种 refinement
 
 对纯函数 `f : X -> Y`：
@@ -629,6 +632,12 @@ constructor/field/pattern、logic call 和 function summary；命中 statement �
 dependencies。未使用的 logic declarations、statements、artifacts 和 ADT bundles 不进入 SMT；只有 ADT
 sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory symbol 的全局算术 axiom 会被保守
 切掉，除非被 artifact 显式依赖。
+
+## 上游验证案例
+
+`opam exec -- dune runtest benchmarks` 验证实际的队列旋转/入队/出队、AVL 旋转/插入，以及
+按索引递归生成列表、LeftistHeap 和 STLC 项的案例。清单分别标记算法移植、小型教程示例和
+语义适配；完整性质、运行时负例及尚未移植的范围见 [benchmarks/README.md](benchmarks/README.md)。
 
 ## 支持范围
 

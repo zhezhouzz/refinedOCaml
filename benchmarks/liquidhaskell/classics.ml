@@ -3,7 +3,6 @@
    LiquidHaskell tutorial revision recorded in ../manifest.tsv. *)
 
 type 'a box = Box of 'a
-type tree = Leaf | Node of int * tree * tree
 type assoc = Empty | Bind of int * int * assoc
 
 let[@refined.over { type_ = "p:bool -> q:bool -> {v:bool | v = (not p || q)}" }] logic_implication
@@ -35,11 +34,6 @@ let[@refined.over { type_ = "x:int -> {v:int | v = x}" }] set_singleton
   x
 
 let[@refined.over
-     { type_ = "front:int list -> back:int list -> int list * int list" }] lazy_queue
-    (front : int list) (back : int list) : int list * int list =
-  (front, back)
-
-let[@refined.over
      {
        type_ =
          "key:int -> value:int -> tail:assoc -> {v:assoc | v = Bind (key, \
@@ -53,7 +47,3 @@ let[@refined.over
        requires_state = [ ("cell", "value >= 0") ];
      }] pointer_read (cell : int ref) : int =
   !cell
-
-let[@refined.over { type_ = "x:int -> {v:tree | v = Node (x, Leaf, Leaf)}" }] avl_singleton
-    (x : int) : tree =
-  Node (x, Leaf, Leaf)
