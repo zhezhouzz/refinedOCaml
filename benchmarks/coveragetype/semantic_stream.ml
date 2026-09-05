@@ -28,27 +28,6 @@ let[@refined.logic] case_stream (case : stream_case) : stream =
 
 [@@@refined.axiom
 {
-  name = "stream_bounded_nil";
-  quantifiers = [ ("forall", "bound", "int") ];
-  body = "implies (bound >= 0) (stream_bounded SNil bound)";
-}]
-
-[@@@refined.axiom
-{
-  name = "stream_bounded_cons_intro";
-  quantifiers =
-    [
-      ("forall", "head", "int");
-      ("forall", "tail", "stream");
-      ("forall", "bound", "int");
-    ];
-  body =
-    "implies (bound > 0 && stream_bounded tail (bound - 1)) (stream_bounded \
-     (SCons (head, tail)) bound)";
-}]
-
-[@@@refined.axiom
-{
   name = "stream_bounded_elim";
   quantifiers = [ ("forall", "value", "stream"); ("forall", "bound", "int") ];
   body =
@@ -57,40 +36,22 @@ let[@refined.logic] case_stream (case : stream_case) : stream =
      stream_bounded (stream_tail value) (bound - 1)))";
 }]
 
-[@@@refined.axiom
-{
-  name = "valid_stream_case_intro";
-  quantifiers = [ ("forall", "bound", "int"); ("forall", "value", "stream") ];
-  body =
-    "implies (bound >= 0 && stream_bounded value bound) (valid_stream_case \
-     (Stream_case (bound, value)))";
-}]
+exception Reject
 
-[@@@refined.axiom
-{
-  name = "valid_stream_case_elim";
-  quantifiers = [ ("forall", "case", "stream_case") ];
-  body =
-    "implies (valid_stream_case case) (case = Stream_case (case_bound case, \
-     case_stream case) && case_bound case >= 0 && stream_bounded (case_stream \
-     case) (case_bound case))";
-}]
-
-let[@refined.choose] choose_stream (left : stream) (_right : stream) : stream =
-  left
+let[@refined.choose] int_gen (_unit : unit) : int = 0
+let[@refined.choose] bool_gen (_unit : unit) : bool = false
 
 let[@refined.coverage
      {
        type_ =
-         "bound:{bound:int | bound >= 0} -> head:int -> tail:stream -> \
-          {result:stream_case | valid_stream_case result}";
-       witness_relation =
-         "result = Stream_case (bound, case_stream result) && (case_stream \
-          result = SNil || (bound > 0 && case_stream result = SCons (head, \
-          tail) && stream_bounded tail (bound - 1)))";
-     }] stream_port (bound : int) (head : int) (tail : stream) : stream_case =
-  Stream_case (bound, choose_stream SNil (SCons (head, tail)))
+         "bound:{bound:int | bound >= 0} -> {r:stream | stream_bounded r bound}";
+       universals = [ "bound" ];
+     }]
+   [@refined.measure "bound"] rec stream_port (bound : int) : stream =
+  if bound = 0 then SNil
+  else if bool_gen () then SNil
+  else
+    let tail = stream_port (bound - 1) in
+    SCons (int_gen (), tail)
 
-let runtime_examples (_unit : unit) =
-  let two = SCons (10, SCons (20, SNil)) in
-  stream_bounded two 2 && not (stream_bounded two 1)
+let runtime_examples (_unit : unit) = stream_bounded (stream_port 3) 3

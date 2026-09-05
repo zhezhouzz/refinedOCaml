@@ -635,9 +635,13 @@ sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory 
 
 ## 上游验证案例
 
-`opam exec -- dune runtest benchmarks` 验证实际的队列旋转/入队/出队、AVL 旋转/插入，以及
-按索引递归生成列表、LeftistHeap 和 STLC 项的案例。清单分别标记算法移植、小型教程示例和
-语义适配；完整性质、运行时负例及尚未移植的范围见 [benchmarks/README.md](benchmarks/README.md)。
+`REFINED_SOLVER_TIMEOUT_SECONDS=60 opam exec -- dune runtest benchmarks` 检查固定版本的
+11 个 LiquidHaskell 教程章节代表算法和 29 个 CoverageType 源文件条目。清单中的语义适配器
+已替换为实际递归算法，133 个正向义务须全部有效，11 个 SMT 负例须无效；另运行全部
+27 个模块的具体示例、17 个算法变异反例及上游递归失败复现。
+`tree2list` 与 `zipperposition` 的原始问题和修正分别保留，清单明确标记修正版。
+逐条算法、证明性质及表示变化见 [benchmarks/PORTS.md](benchmarks/PORTS.md)，
+验证边界见 [benchmarks/README.md](benchmarks/README.md)。
 
 ## 支持范围
 

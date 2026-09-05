@@ -1,66 +1,46 @@
-# Upstream benchmark inventory
+# Upstream benchmark ports
 
 `manifest.tsv` pins 11 LiquidHaskell tutorial chapters and 29 CoverageType
-source files. **Inventory rows are not counts of fully ported algorithms.**
-The runner checks the exact mapping, compiles every annotated fixture, and
-requires all 52 positive obligations to be valid (19 safety, 33 coverage).
-It separately requires 11 SMT mutation controls to be invalid, runs executable
-examples for every CoverageType fixture and both LiquidHaskell algorithm
-fixtures, and detects 8 mutations of the newly ported algorithm bodies at runtime.
-`Unknown` does not count as a successful verification.
+source files. Every row now maps to executable algorithm code; the former
+invariant/image adapters have been replaced. A row identifies the operations
+listed in [PORTS.md](PORTS.md), not every exercise in an upstream chapter.
+
+The runner checks the exact inventory and obligation names, requires **133
+positive obligations** (48 safety, 85 coverage) to be valid, and requires 11
+separate SMT negative controls to be invalid. It runs concrete examples for all
+27 fixture modules, detects 17 mutations of algorithm bodies, and reproduces
+the upstream zipperposition construction-time stack overflow. `Unknown` and
+timeouts fail the suite.
 
 | Manifest status | Meaning |
 | --- | --- |
-| `algorithm-verified` | The named operation/generator runs its algorithm, with the properties and adaptations below. This does not claim every function in the upstream file is ported. |
-| `adapted-verified` | One small illustrative safety obligation; not validation of the whole tutorial chapter. |
-| `semantic-adapter` | An invariant/image adapter; not verification of the original recursive generator. |
+| `algorithm-verified` | Executable operations with the properties and representation changes in PORTS.md. |
+| `corrected-verified` | The port includes a deliberate correction to the upstream body; the original failure is also reproduced. |
 
-## Algorithm ports
-
-- `liquidhaskell/lazy_queue.ml`: rotation, smart construction, insertion,
-  nonempty removal, and replication. Contracts check list/queue sizes and the
-  back/front balance invariant. Runtime examples check FIFO order. Strict OCaml
-  does not preserve the original Haskell lazy evaluation cost bound.
-- `liquidhaskell/avl.ml`: cached-height construction, single/double rotations,
-  and recursive insertion. Contracts check ordering within explicit integer
-  intervals, AVL balance, cached heights, and insertion's height bound. Runtime
-  examples check element preservation and all four rotations. Deletion is not
-  ported; set preservation is not currently an SMT obligation.
-- `coveragetype/boundlist.ml` and `duplicate_list.ml`: recursive generators with
-  universal size/element indices and compositional recursive under-summaries.
-- `coveragetype/leftist_heap.ml`: the recursive left/right generator with a
-  universal depth index. An independently checked range-generator summary
-  models `int_range_inc`; it avoids inlining the range clamp into the heap VC.
-- `coveragetype/semantic_stlc.ml`: no-application generation and recursive
-  application/abstraction generation. Context, target type, and application
-  count remain universal indices. The proof uses a lexicographic application/
-  arrow-count measure and preserves rejection paths. `gen_type` is the complete
-  nondeterministic library primitive declared in upstream `gen_term_size.ml`.
-  Variable generation uses an arbitrary index plus the original lookup filter;
-  application nodes retain the type computed internally by the source.
+Run `REFINED_SOLVER_TIMEOUT_SECONDS=60 opam exec -- dune runtest benchmarks`.
+The timeout is a per-obligation ceiling, not permission to accept an unknown.
 
 Logical predicates have executable definitions. Their explicit trusted axioms
-are inversion/measure laws, not automatically verified translations of their
-OCaml bodies. Runtime examples exercise the concrete interpretation. Coverage
-proofs use decomposition laws; recursive constructor-introduction laws are
-unnecessary here and can cause unbounded SMT instantiation.
+are decomposition and measure laws; this verifier does not automatically prove
+those laws from their OCaml definitions. Runtime examples test the concrete
+interpretation, including nontrivial trees, rejected paths, callback execution,
+map updates, buffer writes, and generator alternatives. They do not establish
+exhaustive coverage or prove the axioms.
 
-Coverage is a lower image bound: a particular runtime choice need not produce
-exactly the requested application count. Runtime tests do not establish
-exhaustive coverage; the quantified VCs do that. The 8 algorithm mutations are
-runtime counterexamples, not claimed SMT `Invalid` results. Z3 can time out on
-false goals involving quantified recursive theories.
+Coverage is a lower bound on the image of a nondeterministic generator. It says
+every target has a producing execution, not that every execution satisfies the
+target. `[@refined.choose]` supplies arbitrary symbolic choices during checking;
+its executable body supplies repeatable choices for runtime tests. Support is
+checked, not probabilities. Explicit `Reject` represents upstream `Err` paths.
+The 17 algorithm mutations are runtime counterexamples, not additional SMT
+`Invalid` results; recursive quantified theories can time out on false goals.
 
-The remaining nine tutorial representatives and 24 CoverageType adapters still
-need further ports before claiming full upstream benchmark parity. For example,
-`semantic_lists.ml` still accepts an existing tail instead of recursively
-constructing it. The manifest no longer labels those rows as algorithm ports.
+The ports do not claim full upstream language or library parity. In particular,
+Haskell laziness, arbitrary refinement-predicate polymorphism, IEEE float
+semantics, allocation costs, and every tutorial exercise are outside these
+contracts. See PORTS.md for each concrete adaptation and excluded operation.
 
-## Sources and execution
-
-- LiquidHaskell tutorial: <https://github.com/ucsd-progsys/liquidhaskell-tutorial>, BSD-3-Clause.
-- CoverageType artifact (`jfp` branch): <https://github.com/OCamlRefinementType/CoverageType/tree/jfp>, MIT.
-
-These are OCaml adaptations at the revisions recorded in the manifest.
-Refreshes must audit the pinned source changes before changing local fixtures or
-support status. Run with `opam exec -- dune runtest benchmarks`.
+Sources: [LiquidHaskell tutorial](https://github.com/ucsd-progsys/liquidhaskell-tutorial)
+(BSD-3-Clause) and [CoverageType artifact](https://github.com/OCamlRefinementType/CoverageType/tree/jfp)
+(MIT). Exact revisions and source paths are in the manifest. Refreshes must
+audit source changes before updating the inventory or support status.

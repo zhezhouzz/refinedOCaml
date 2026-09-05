@@ -35,28 +35,6 @@ let[@refined.logic] case_tree (case : sized_case) : tree =
 
 [@@@refined.axiom
 {
-  name = "sized_leaf";
-  quantifiers = [ ("forall", "bound", "int") ];
-  body = "implies (bound >= 0) (depth_bounded Leaf bound)";
-}]
-
-[@@@refined.axiom
-{
-  name = "sized_node_intro";
-  quantifiers =
-    [
-      ("forall", "bound", "int");
-      ("forall", "key", "int");
-      ("forall", "left", "tree");
-      ("forall", "right", "tree");
-    ];
-  body =
-    "implies (bound > 0 && depth_bounded left (bound - 1) && depth_bounded \
-     right (bound - 1)) (depth_bounded (Node (key, left, right)) bound)";
-}]
-
-[@@@refined.axiom
-{
   name = "sized_elim";
   quantifiers = [ ("forall", "value", "tree"); ("forall", "bound", "int") ];
   body =
@@ -66,41 +44,24 @@ let[@refined.logic] case_tree (case : sized_case) : tree =
      (tree_right value) (bound - 1)))";
 }]
 
-[@@@refined.axiom
-{
-  name = "sized_case_intro";
-  quantifiers = [ ("forall", "bound", "int"); ("forall", "value", "tree") ];
-  body =
-    "implies (bound >= 0 && depth_bounded value bound) (valid_sized_tree \
-     (Sized_case (bound, value)))";
-}]
+exception Reject
 
-[@@@refined.axiom
-{
-  name = "sized_case_elim";
-  quantifiers = [ ("forall", "case", "sized_case") ];
-  body =
-    "implies (valid_sized_tree case) (case = Sized_case (case_bound case, \
-     case_tree case) && case_bound case >= 0 && depth_bounded (case_tree case) \
-     (case_bound case))";
-}]
-
-let[@refined.choose] choose_tree (left : tree) (_right : tree) : tree = left
+let[@refined.choose] int_gen (_unit : unit) : int = 0
+let[@refined.choose] bool_gen (_unit : unit) : bool = false
 
 let[@refined.coverage
      {
        type_ =
-         "bound:{bound:int | bound >= 0} -> key:int -> left:tree -> right:tree \
-          -> {result:sized_case | valid_sized_tree result}";
-       witness_relation =
-         "result = Sized_case (bound, case_tree result) && (case_tree result = \
-          Leaf || (bound > 0 && case_tree result = Node (key, left, right) && \
-          depth_bounded left (bound - 1) && depth_bounded right (bound - 1)))";
-     }] sized_tree_port (bound : int) (key : int) (left : tree) (right : tree) :
-    sized_case =
-  Sized_case (bound, choose_tree Leaf (Node (key, left, right)))
+         "bound:{bound:int | bound >= 0} -> {r:tree | depth_bounded r bound}";
+       universals = [ "bound" ];
+     }]
+   [@refined.measure "bound"] rec sized_tree_port (bound : int) : tree =
+  if bound = 0 then Leaf
+  else if bool_gen () then Leaf
+  else
+    let key = int_gen () in
+    let left = sized_tree_port (bound - 1) in
+    let right = sized_tree_port (bound - 1) in
+    Node (key, left, right)
 
-let runtime_examples (_unit : unit) =
-  let two = Node (1, Node (2, Leaf, Leaf), Leaf) in
-  valid_sized_tree (Sized_case (2, two))
-  && not (valid_sized_tree (Sized_case (1, two)))
+let runtime_examples (_unit : unit) = depth_bounded (sized_tree_port 3) 3

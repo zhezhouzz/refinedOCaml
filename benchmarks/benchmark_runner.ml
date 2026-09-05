@@ -25,15 +25,6 @@ let check_result expected obligation =
   | _, Unknown reason ->
       failwith (Printf.sprintf "%s is unknown:\n%s" obligation.name reason)
 
-let verify_count source output expected =
-  compile source output;
-  let obligations = obligations_of_cmt (output ^ ".cmt") in
-  if List.length obligations <> expected then
-    failwith
-      (Printf.sprintf "%s produced %d obligations; expected %d" source
-         (List.length obligations) expected);
-  List.iter (check_result `Valid) obligations
-
 let verify_named source output expected_names expected_result =
   compile source output;
   let obligations = obligations_of_cmt (output ^ ".cmt") in
@@ -89,22 +80,14 @@ let liquid_manifest =
       "06-measure-bool";
       "07-measure-int";
       "08-measure-sets";
-      "10-case-study-associative-maps";
       "11-case-study-pointers";
     ]
   @ [
       ("src/09-case-study-lazy-queues.lhs", "liquidhaskell/lazy_queue.ml");
       ("src/12-case-study-AVL.lhs", "liquidhaskell/avl.ml");
+      ( "src/10-case-study-associative-maps.lhs",
+        "liquidhaskell/associative_map.ml" );
     ]
-
-let algorithm_coverage =
-  [
-    "data/PLDI23/basic/boundlist.ml";
-    "data/PLDI23/basic/duplicate_list.ml";
-    "data/PLDI23/elrond/LeftistHeap.ml";
-    "data/PLDI23/stlc/gen_term_size.ml";
-    "data/PLDI23/stlc/stlc.ml";
-  ]
 
 let coverage_manifest =
   [
@@ -150,8 +133,10 @@ let validate_semantic_fixture fixture =
   if not (Sys.file_exists fixture) then
     failwith ("missing benchmark fixture " ^ fixture);
   let contents = read_file fixture in
-  if contains contents ": bool = false" then
-    failwith ("constant-false predicate in semantic fixture " ^ fixture);
+  if
+    contains contents "[@refined.predicate]"
+    && contains contents "(value : bool) : bool = false"
+  then failwith ("constant-false predicate in semantic fixture " ^ fixture);
   if contains contents "(target :" then
     failwith ("target-seed adapter in semantic fixture " ^ fixture)
 
@@ -184,11 +169,7 @@ let validate_manifest () =
             match suite with
             | "liquidhaskell"
               when revision = "f92259ca775f07b7285187ad27affd0e31e63093"
-                   && status
-                      =
-                      if local_fixture = "liquidhaskell/classics.ml" then
-                        "adapted-verified"
-                      else "algorithm-verified" ->
+                   && status = "algorithm-verified" ->
                 if
                   List.assoc_opt upstream liquid_manifest <> Some local_fixture
                   || List.mem upstream !seen_liquid
@@ -202,9 +183,14 @@ let validate_manifest () =
               when revision = "c158b803c1c50ad61829e4ae079710f9d6cca52a"
                    && status
                       =
-                      if List.mem upstream algorithm_coverage then
-                        "algorithm-verified"
-                      else "semantic-adapter" -> (
+                      if
+                        List.mem upstream
+                          [
+                            "data/monad/tree2list.ml";
+                            "data/monad/zipperposition.ml";
+                          ]
+                      then "corrected-verified"
+                      else "algorithm-verified" -> (
                 match List.assoc_opt upstream coverage_manifest with
                 | Some expected when expected = local_fixture ->
                     if List.mem upstream !seen_coverage then
@@ -239,6 +225,7 @@ let positive_fixtures =
       output = "semantic_lists";
       obligations =
         [
+          "list_exact";
           "sortedlist_simpl";
           "unique_list_port";
           "sized_list_port";
@@ -261,13 +248,13 @@ let positive_fixtures =
     {
       source = "coveragetype/semantic_bankers_queue.ml";
       output = "semantic_bankers_queue";
-      obligations = [ "bankers_queue_port" ];
+      obligations = [ "int_range_inc"; "seq_gen"; "bankers_queue_port" ];
       runtime = "coveragetype/semantic_bankers_queue_runtime.ml";
     };
     {
       source = "coveragetype/semantic_batched_queue.ml";
       output = "semantic_batched_queue";
-      obligations = [ "batched_queue_port" ];
+      obligations = [ "int_range_inc"; "seq_gen"; "batched_queue_port" ];
       runtime = "coveragetype/semantic_batched_queue_runtime.ml";
     };
     {
@@ -280,7 +267,12 @@ let positive_fixtures =
       source = "coveragetype/semantic_bst.ml";
       output = "semantic_bst";
       obligations =
-        [ "unbalanced_set_port"; "sized_bst_port"; "sized_set_port" ];
+        [
+          "int_range_inc";
+          "unbalanced_set_port";
+          "sized_bst_port";
+          "sized_set_port";
+        ];
       runtime = "coveragetype/semantic_bst_runtime.ml";
     };
     {
@@ -335,13 +327,33 @@ let positive_fixtures =
     {
       source = "coveragetype/semantic_monad_library.ml";
       output = "semantic_monad_library";
-      obligations = [ "coverage_monad_library" ];
+      obligations =
+        [
+          "int_range_inc";
+          "int_bound";
+          "int_range";
+          "pos_split2";
+          "return_port";
+          "bind_port";
+          "fmap_port";
+          "fmap2_port";
+          "union_port";
+          "int_bound_port";
+          "int_range_port";
+          "nat_port";
+          "pair_port";
+          "option_port";
+          "cons_gen_port";
+          "numeral_port";
+          "pos_split2_port";
+          "fix_count";
+        ];
       runtime = "coveragetype/semantic_monad_library_runtime.ml";
     };
     {
       source = "coveragetype/semantic_herdtools.ml";
       output = "semantic_herdtools";
-      obligations = [ "herdtools7" ];
+      obligations = [ "int_range_inc"; "bits_gen"; "herdtools7" ];
       runtime = "coveragetype/semantic_herdtools_runtime.ml";
     };
     {
@@ -353,37 +365,68 @@ let positive_fixtures =
     {
       source = "coveragetype/semantic_tezos.ml";
       output = "semantic_tezos";
-      obligations = [ "tezos" ];
+      obligations =
+        [
+          "int_range_inc";
+          "string_size";
+          "operation_proto_gen";
+          "q_in_0_1";
+          "small_list";
+          "priority_gen";
+          "tezos_tree_gen";
+        ];
       runtime = "coveragetype/semantic_tezos_runtime.ml";
     };
     {
       source = "coveragetype/semantic_tezos_test.ml";
       output = "semantic_tezos_test";
-      obligations = [ "tezos_test" ];
+      obligations =
+        [
+          "int_range_inc";
+          "string_size";
+          "operation_proto_gen";
+          "q_in_0_1";
+          "small_list";
+          "priority_gen";
+        ];
       runtime = "coveragetype/semantic_tezos_test_runtime.ml";
     };
     {
       source = "coveragetype/semantic_tree2list.ml";
       output = "semantic_tree2list";
-      obligations = [ "tree2list" ];
+      obligations = [ "append"; "append"; "flatten"; "flatten"; "list_gen" ];
       runtime = "coveragetype/semantic_tree2list_runtime.ml";
     };
     {
       source = "coveragetype/semantic_vellvm.ml";
       output = "semantic_vellvm";
-      obligations = [ "vellvm" ];
+      obligations = [ "int_range_inc"; "gen_uvalue"; "gen_values" ];
       runtime = "coveragetype/semantic_vellvm_runtime.ml";
     };
     {
       source = "coveragetype/semantic_xen_api.ml";
       output = "semantic_xen_api";
-      obligations = [ "xen_api" ];
+      obligations =
+        [
+          "int_range_inc";
+          "fd_size_gen";
+          "file_kind_gen";
+          "timeout_gen";
+          "total_delay_gen";
+          "size_bound_gen";
+          "testable_file_kind_gen";
+          "select_fd_spec_gen";
+          "list_repeat";
+          "file_list_gen";
+          "delay_of_size";
+          "fd_gen";
+        ];
       runtime = "coveragetype/semantic_xen_api_runtime.ml";
     };
     {
       source = "coveragetype/semantic_zipperposition.ml";
       output = "semantic_zipperposition";
-      obligations = [ "zipperposition" ];
+      obligations = [ "int_range_inc"; "default_fuel"; "zipperposition" ];
       runtime = "coveragetype/semantic_zipperposition_runtime.ml";
     };
   ]
@@ -405,6 +448,52 @@ let liquid_algorithms =
       obligations = [ "node"; "balance"; "insert" ];
       runtime = "liquidhaskell/avl_runtime.ml";
     };
+    {
+      source = "liquidhaskell/classics.ml";
+      output = "liquidhaskell_classics";
+      obligations =
+        [
+          "logic_implication";
+          "excluded_middle";
+          "contradiction";
+          "de_morgan";
+          "implication_transitive";
+          "arithmetic_transitive";
+          "basic_absolute";
+          "divide";
+          "truncate";
+          "vector_get";
+          "loop";
+          "vector_sum";
+          "absolute_sum";
+          "insert";
+          "insertion_sort";
+          "nonempty_head";
+          "nonempty_tail";
+          "list_size";
+          "list_sum";
+          "average";
+          "append";
+          "reverse_acc";
+          "reverse";
+          "map";
+          "zip_with";
+          "nub";
+          "append_set";
+          "set_at";
+          "peek_at";
+          "poke";
+          "peek";
+          "zero_fill";
+        ];
+      runtime = "liquidhaskell/classics_runtime.ml";
+    };
+    {
+      source = "liquidhaskell/associative_map.ml";
+      output = "liquid_associative_map";
+      obligations = [ "set"; "get"; "mem" ];
+      runtime = "liquidhaskell/associative_map_runtime.ml";
+    };
   ]
 
 (* Mutate the verified algorithm itself and replay its concrete examples.
@@ -412,6 +501,44 @@ let liquid_algorithms =
    quantified recursive theories can make Z3 return Unknown on false goals. *)
 let runtime_mutations =
   [
+    ( "list_drop",
+      "coveragetype/semantic_lists.ml",
+      "rec list_exact (size : int) : ilist = if size = 0 then Nil else let \
+       tail = list_exact (size - 1) in Cons (int_gen (), tail)",
+      "rec list_exact (size : int) : ilist = if size = 0 then Nil else \
+       list_exact (size - 1)" );
+    ( "sort_drop",
+      "liquidhaskell/classics.ml",
+      "insert (n - 1) lower h (insertion_sort (n - 1) lower t)",
+      "insertion_sort (n - 1) lower t" );
+    ( "pointer_offset",
+      "liquidhaskell/classics.ml",
+      "poke n buffer offset 0",
+      "poke n buffer 0 0" );
+    ( "map_overwrite",
+      "liquidhaskell/associative_map.ml",
+      "if key = k then Node (k,entry,l,r)",
+      "if key = k then Node (k,v,l,r)" );
+    ( "flatten_left",
+      "coveragetype/semantic_tree2list.ml",
+      "Cons (x,append (tree_nodes l) left right)",
+      "Cons (x,right)" );
+    ( "monad_bind",
+      "coveragetype/semantic_monad_library.ml",
+      "f (g ()) ()",
+      "f (g ()) () |> fun _ -> raise Reject" );
+    ( "zipper_symbol",
+      "coveragetype/semantic_zipperposition.ml",
+      "then 2 else 3",
+      "then 4 else 3" );
+    ( "vector_length",
+      "coveragetype/semantic_vellvm.ml",
+      "D_vector (expected,gen_values (depth - 1) n t)",
+      "D_vector (expected,gen_values (depth - 1) 0 t)" );
+    ( "proto_length",
+      "coveragetype/semantic_tezos_test.ml",
+      "Byte (int_range_inc 0 255, string_size (size - 1))",
+      "string_size (size - 1)" );
     ( "heap_rank",
       "coveragetype/leftist_heap.ml",
       "Node (right_depth + 1, int_gen (), left, right)",
@@ -541,18 +668,19 @@ let () =
         (fun count fixture -> count + List.length fixture.obligations)
         0 positive_fixtures
     in
-    if positive_count <> 33 then
+    if positive_count <> 88 then
       failwith
-        (Printf.sprintf "runner has %d CoverageType obligations; expected 33"
+        (Printf.sprintf "runner has %d CoverageType obligations; expected 88"
            positive_count);
-    verify_count "liquidhaskell/classics.ml" "liquidhaskell_classics" 9;
     List.iter
       (fun fixture ->
+        Printf.printf "Checking %s\n%!" fixture.source;
         verify_named fixture.source fixture.output fixture.obligations `Valid;
         run_runtime fixture)
       liquid_algorithms;
     List.iter
       (fun fixture ->
+        Printf.printf "Checking %s\n%!" fixture.source;
         verify_named fixture.source fixture.output fixture.obligations `Valid;
         run_runtime fixture)
       positive_fixtures;
@@ -560,7 +688,14 @@ let () =
       (fun (source, output, obligations) ->
         verify_named source output obligations `Invalid)
       negative_fixtures;
-    List.iter run_runtime_mutation runtime_mutations
+    List.iter run_runtime_mutation runtime_mutations;
+    if
+      Sys.command
+        "ocamlc coveragetype/upstream_zipperposition_failure.ml -o \
+         upstream_zipperposition_failure.exe"
+      <> 0
+      || Sys.command "./upstream_zipperposition_failure.exe" <> 0
+    then failwith "upstream zipperposition failure reproduction failed"
   with exception_ ->
     Location.report_exception Format.err_formatter exception_;
     raise exception_

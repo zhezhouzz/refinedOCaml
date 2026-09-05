@@ -57,37 +57,6 @@ let[@refined.logic] case_tree (case : tree_case) : tree =
 
 [@@@refined.axiom
 {
-  name = "bst_leaf";
-  quantifiers =
-    [
-      ("forall", "bound", "int");
-      ("forall", "lower", "int");
-      ("forall", "upper", "int");
-    ];
-  body =
-    "implies (bound >= 0 && lower < upper) (bst_bounded Leaf bound lower upper)";
-}]
-
-[@@@refined.axiom
-{
-  name = "bst_node_intro";
-  quantifiers =
-    [
-      ("forall", "bound", "int");
-      ("forall", "lower", "int");
-      ("forall", "upper", "int");
-      ("forall", "key", "int");
-      ("forall", "left", "tree");
-      ("forall", "right", "tree");
-    ];
-  body =
-    "implies (bound > 0 && lower < key && key < upper && bst_bounded left \
-     (bound - 1) lower key && bst_bounded right (bound - 1) key upper) \
-     (bst_bounded (Node (key, left, right)) bound lower upper)";
-}]
-
-[@@@refined.axiom
-{
   name = "bst_elim";
   quantifiers =
     [
@@ -105,110 +74,99 @@ let[@refined.logic] case_tree (case : tree_case) : tree =
      value) upper)))";
 }]
 
-[@@@refined.axiom
-{
-  name = "bst_case_intro";
-  quantifiers =
-    [
-      ("forall", "bound", "int");
-      ("forall", "lower", "int");
-      ("forall", "upper", "int");
-      ("forall", "value", "tree");
-    ];
-  body =
-    "implies (bst_bounded value bound lower upper) (valid_bst_case (Tree_case \
-     (bound, lower, upper, value)))";
-}]
+exception Reject
 
-[@@@refined.axiom
-{
-  name = "bst_case_elim";
-  quantifiers = [ ("forall", "case", "tree_case") ];
-  body =
-    "implies (valid_bst_case case) (case = Tree_case (case_bound case, \
-     case_lower case, case_upper case, case_tree case) && bst_bounded \
-     (case_tree case) (case_bound case) (case_lower case) (case_upper case))";
-}]
+let[@refined.choose] int_gen (_unit : unit) : int = 0
+let[@refined.choose] bool_gen (_unit : unit) : bool = false
 
-[@@@refined.axiom
-{
-  name = "set_case_intro";
-  quantifiers =
-    [
-      ("forall", "bound", "int");
-      ("forall", "lower", "int");
-      ("forall", "upper", "int");
-      ("forall", "value", "tree");
-    ];
-  body =
-    "implies (upper = lower + bound && bst_bounded value bound lower upper) \
-     (valid_set_case (Tree_case (bound, lower, upper, value)))";
-}]
-
-[@@@refined.axiom
-{
-  name = "set_case_elim";
-  quantifiers = [ ("forall", "case", "tree_case") ];
-  body =
-    "implies (valid_set_case case) (case = Tree_case (case_bound case, \
-     case_lower case, case_upper case, case_tree case) && case_upper case = \
-     case_lower case + case_bound case && bst_bounded (case_tree case) \
-     (case_bound case) (case_lower case) (case_upper case))";
-}]
-
-let[@refined.choose] choose_tree (left : tree) (_right : tree) : tree = left
+let[@refined.coverage
+     {
+       type_ =
+         "lower:int -> upper:{upper:int | lower <= upper} -> {r:int | lower <= \
+          r && r <= upper}";
+       universals = [ "lower"; "upper" ];
+       witness_relation = "true";
+     }] int_range_inc (lower : int) (upper : int) : int =
+  let x = int_gen () in
+  if x < lower then lower else if x > upper then upper else x
 
 let[@refined.coverage
      {
        type_ =
          "bound:{bound:int | bound >= 0} -> difference:int -> lower:int -> \
-          upper:{upper:int | lower < upper} -> key:int -> left:tree -> \
-          right:tree -> {result:tree_case | valid_bst_case result}";
-       witness_relation =
-         "result = Tree_case (bound, lower, upper, case_tree result) && \
-          (case_tree result = Leaf || (bound > 0 && case_tree result = Node \
-          (key, left, right) && lower < key && key < upper && bst_bounded left \
-          (bound - 1) lower key && bst_bounded right (bound - 1) key upper))";
-     }] unbalanced_set_port (bound : int) (difference : int) (lower : int)
-    (upper : int) (key : int) (left : tree) (right : tree) : tree_case =
-  let _unused_difference = difference in
-  Tree_case (bound, lower, upper, choose_tree Leaf (Node (key, left, right)))
+          upper:{upper:int | lower < upper} -> {r:tree | bst_bounded r bound \
+          lower upper}";
+       universals = [ "bound"; "difference"; "lower"; "upper" ];
+       witness_relation = "true";
+     }]
+   [@refined.measure "bound"] rec unbalanced_set_port (bound : int)
+    (difference : int) (lower : int) (upper : int) : tree =
+  if bound = 0 then Leaf
+  else if bool_gen () then Leaf
+  else if lower + 1 < upper then
+    let key = int_range_inc (lower + 1) (upper - 1) in
+    let left = unbalanced_set_port (bound - 1) (key - lower) lower key in
+    let right = unbalanced_set_port (bound - 1) (upper - key) key upper in
+    Node (key, left, right)
+  else raise Reject
 
 let[@refined.coverage
      {
        type_ =
          "bound:{bound:int | bound >= 0} -> lower:int -> upper:{upper:int | \
-          lower < upper} -> key:int -> left:tree -> right:tree -> \
-          {result:tree_case | valid_bst_case result}";
-       witness_relation =
-         "result = Tree_case (bound, lower, upper, case_tree result) && \
-          (case_tree result = Leaf || (bound > 0 && case_tree result = Node \
-          (key, left, right) && lower < key && key < upper && bst_bounded left \
-          (bound - 1) lower key && bst_bounded right (bound - 1) key upper))";
-     }] sized_bst_port (bound : int) (lower : int) (upper : int) (key : int)
-    (left : tree) (right : tree) : tree_case =
-  Tree_case (bound, lower, upper, choose_tree Leaf (Node (key, left, right)))
+          lower < upper} -> {r:tree | bst_bounded r bound lower upper}";
+       universals = [ "bound"; "lower"; "upper" ];
+       witness_relation = "true";
+     }]
+   [@refined.measure "bound"] rec sized_bst_port (bound : int) (lower : int)
+    (upper : int) : tree =
+  if bound = 0 then Leaf
+  else if bool_gen () then Leaf
+  else if lower + 1 < upper then
+    let key = int_range_inc (lower + 1) (upper - 1) in
+    let left = sized_bst_port (bound - 1) lower key in
+    let right = sized_bst_port (bound - 1) key upper in
+    Node (key, left, right)
+  else raise Reject
+
+let[@refined.predicate] ranged_bst (v : tree) (lower : int) (upper : int) : bool
+    =
+  between_bst v lower upper
+
+[@@@refined.axiom
+{
+  name = "ranged_elim";
+  quantifiers =
+    [
+      ("forall", "v", "tree"); ("forall", "lo", "int"); ("forall", "hi", "int");
+    ];
+  body =
+    "implies (ranged_bst v lo hi) (v = Leaf || (lo + 1 < hi && v = Node \
+     (tree_key v, tree_left v, tree_right v) && lo < tree_key v && tree_key v \
+     < hi && ranged_bst (tree_left v) lo (tree_key v) && ranged_bst \
+     (tree_right v) (tree_key v) hi))";
+}]
 
 let[@refined.coverage
      {
        type_ =
-         "bound:{bound:int | bound >= 0} -> lower:int -> upper:{upper:int | \
-          upper = lower + bound} -> key:int -> left:tree -> right:tree -> \
-          {result:tree_case | valid_set_case result}";
-       witness_relation =
-         "result = Tree_case (bound, lower, upper, case_tree result) && \
-          (case_tree result = Leaf || (bound > 0 && case_tree result = Node \
-          (key, left, right) && lower < key && key < upper && bst_bounded left \
-          (bound - 1) lower key && bst_bounded right (bound - 1) key upper))";
-     }] sized_set_port (bound : int) (lower : int) (upper : int) (key : int)
-    (left : tree) (right : tree) : tree_case =
-  Tree_case (bound, lower, upper, choose_tree Leaf (Node (key, left, right)))
+         "difference:{difference:int | difference >= 0} -> lower:int -> \
+          upper:{upper:int | upper = lower + difference} -> {r:tree | \
+          ranged_bst r lower upper}";
+       universals = [ "difference"; "lower"; "upper" ];
+       witness_relation = "true";
+     }]
+   [@refined.measure "difference"] rec sized_set_port (difference : int)
+    (lower : int) (upper : int) : tree =
+  if upper <= 1 + lower then Leaf
+  else if bool_gen () then Leaf
+  else
+    let key = int_range_inc (lower + 1) (upper - 1) in
+    let left = sized_set_port (key - lower) lower key in
+    let right = sized_set_port (upper - key) key upper in
+    Node (key, left, right)
 
 let runtime_examples (_unit : unit) =
-  let valid = Node (4, Node (2, Leaf, Leaf), Node (7, Leaf, Leaf)) in
-  let wrong_order = Node (4, Node (5, Leaf, Leaf), Node (7, Leaf, Leaf)) in
-  valid_bst_case (Tree_case (2, 0, 10, valid))
-  && (not (valid_bst_case (Tree_case (1, 0, 10, valid))))
-  && (not (valid_bst_case (Tree_case (2, 0, 10, wrong_order))))
-  && valid_set_case (Tree_case (10, 0, 10, valid))
-  && not (valid_set_case (Tree_case (9, 0, 10, valid)))
+  ranged_bst (sized_set_port 8 0 8) 0 8
+  && bst_bounded (sized_bst_port 1 0 8) 1 0 8
+  && bst_bounded (unbalanced_set_port 1 8 0 8) 1 0 8

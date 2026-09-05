@@ -1012,7 +1012,9 @@ let typed_outcome_coverage_obligation (program : Typed_core.program) analysis
   let buffer = Buffer.create 4096 in
   Buffer.add_string buffer
     "(set-option :produce-models true)\n(set-logic ALL)\n";
-  Buffer.add_string buffer (typed_datatype_prelude program function_def);
+  Buffer.add_string buffer
+    (typed_datatype_prelude ~extra_sorts:(List.map snd choices) program
+       function_def);
   List.iter
     (fun ((symbol : Typed_core.symbol), sort) ->
       let sort =

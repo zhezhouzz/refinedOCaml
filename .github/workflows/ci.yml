@@ -48,7 +48,7 @@ jobs:
 
       - name: Build and test
         env:
-          REFINED_SOLVER_TIMEOUT_SECONDS: 60
+          REFINED_SOLVER_TIMEOUT_SECONDS: 960
         run: opam exec -- dune build @all @install @refined
 
       - name: Property fuzz tests

@@ -373,6 +373,7 @@ let integration_suite () =
   compile "../examples/higher_order_subtyping.ml" "typed_higher_order_subtyping";
   compile "../examples/higher_order_nested.ml" "typed_higher_order_nested";
   compile "../examples/summary_sequence.ml" "typed_summary_sequence";
+  compile "../examples/summary_state_sequence.ml" "typed_summary_state_sequence";
   compile "../examples/higher_order_mismatch.ml" "typed_higher_order_mismatch";
   compile "../examples/higher_order_coverage_indexed.ml"
     "typed_higher_order_coverage_indexed";
@@ -543,6 +544,19 @@ let integration_suite () =
       | "symbolic_self_justification" ->
           require `Invalid obligation
       | name -> failwith ("unexpected summary sequence obligation " ^ name));
+  let state_sequence = obligations_of_cmt "typed_summary_state_sequence.cmt" in
+  if List.length state_sequence <> 8 then
+    failwith "missing state sequence obligation";
+  List.iter
+    (fun obligation ->
+      match obligation.name with
+      | "put_one" | "positive" | "guarded_put" | "earlier_state"
+      | "branch_state" ->
+          require `Valid obligation
+      | "self_state" | "future_state" | "bad_branch_state" ->
+          require `Invalid obligation
+      | name -> failwith ("unexpected state sequence obligation " ^ name))
+    state_sequence;
   obligations_of_cmt "typed_higher_order_mismatch.cmt"
   |> List.iter (fun obligation ->
       match obligation.name with
