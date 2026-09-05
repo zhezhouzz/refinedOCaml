@@ -1,5 +1,5 @@
 (* SPDX-License-Identifier: MIT
-   Semantic port of data/PLDI23/elrond/LeftistHeap.ml at the revision pinned in
+   Recursive generator port of data/PLDI23/elrond/LeftistHeap.ml at the revision pinned in
    ../manifest.tsv. The executable predicate and the logical axioms describe
    the same rank/depth invariant. *)
 
@@ -47,94 +47,49 @@ let[@refined.logic] heap_right (value : heap) : heap =
 }]
 
 [@@@refined.axiom
-{ name = "leftist_empty"; quantifiers = []; body = "leftist Empty" }]
-
-[@@@refined.axiom
 {
-  name = "leftist_depth_nonnegative";
+  name = "leftist_depth_elim";
   quantifiers = [ ("forall", "value", "heap"); ("forall", "expected", "int") ];
-  body = "implies (leftist_depth value expected) (expected >= 0)";
-}]
-
-[@@@refined.axiom
-{
-  name = "leftist_zero_is_empty";
-  quantifiers = [ ("forall", "value", "heap") ];
-  body = "implies (leftist_depth value 0) (value = Empty)";
-}]
-
-[@@@refined.axiom
-{
-  name = "leftist_depth_is_leftist";
-  quantifiers = [ ("forall", "value", "heap"); ("forall", "expected", "int") ];
-  body = "implies (leftist_depth value expected) (leftist value)";
-}]
-
-[@@@refined.axiom
-{
-  name = "leftist_node_intro";
-  quantifiers =
-    [
-      ("forall", "rank", "int");
-      ("forall", "key", "int");
-      ("forall", "left", "heap");
-      ("forall", "right", "heap");
-      ("forall", "left_depth", "int");
-      ("forall", "right_depth", "int");
-    ];
   body =
-    "implies (leftist_depth left left_depth && leftist_depth right right_depth \
-     && left_depth >= right_depth && rank = right_depth + 1) (leftist_depth \
-     (Node (rank, key, left, right)) (left_depth + 1))";
+    "implies (leftist_depth value expected) ((expected = 0 && value = Empty) \
+     || (expected > 0 && value = Node (heap_rank value, heap_key value, \
+     heap_left value, heap_right value) && leftist_depth (heap_left value) \
+     (expected - 1) && leftist_depth (heap_right value) (heap_depth \
+     (heap_right value)) && 0 <= heap_depth (heap_right value) && heap_depth \
+     (heap_right value) < expected && heap_rank value = heap_depth (heap_right \
+     value) + 1))";
 }]
 
-[@@@refined.axiom
-{
-  name = "leftist_node_wellformed";
-  quantifiers =
-    [
-      ("forall", "rank", "int");
-      ("forall", "key", "int");
-      ("forall", "left", "heap");
-      ("forall", "right", "heap");
-      ("forall", "left_depth", "int");
-      ("forall", "right_depth", "int");
-    ];
-  body =
-    "implies (leftist_depth left left_depth && leftist_depth right right_depth \
-     && left_depth >= right_depth && rank = right_depth + 1) (leftist (Node \
-     (rank, key, left, right)))";
-}]
+let[@refined.choose] int_gen (_unit : unit) : int = 0
 
-[@@@refined.axiom
-{
-  name = "leftist_elim";
-  quantifiers = [ ("forall", "value", "heap") ];
-  body =
-    "implies (leftist value) (value = Empty || (value = Node (heap_rank value, \
-     heap_key value, heap_left value, heap_right value) && leftist_depth \
-     (heap_left value) (heap_depth (heap_left value)) && leftist_depth \
-     (heap_right value) (heap_depth (heap_right value)) && heap_depth \
-     (heap_left value) >= heap_depth (heap_right value) && heap_rank value = \
-     heap_depth (heap_right value) + 1))";
-}]
-
-let[@refined.choose] choose (left : heap) (_right : heap) : heap = left
+(* Clamping havoc preserves the output set of upstream int_range_inc. *)
+let[@refined.coverage
+     {
+       type_ =
+         "lower:int -> upper:{upper:int | upper >= lower} -> {r:int | lower <= \
+          r && r <= upper}";
+       universals = [ "lower"; "upper" ];
+     }] int_range_inc (lower : int) (upper : int) : int =
+  let candidate = int_gen () in
+  if candidate < lower then lower
+  else if candidate > upper then upper
+  else candidate
 
 let[@refined.coverage
      {
        type_ =
-         "expected:{expected:int | expected >= 0} -> rank:int -> key:int -> \
-          left:heap -> right:heap -> left_depth:int -> right_depth:int -> \
-          {result:heap | leftist result}";
-       witness_relation =
-         "(expected = 0 && result = Empty) || (expected > 0 && result = Node \
-          (rank, key, left, right) && leftist_depth left left_depth && \
-          leftist_depth right right_depth && left_depth >= right_depth && rank \
-          = right_depth + 1 && expected = left_depth + 1)";
-     }] generate (expected : int) (rank : int) (key : int) (left : heap)
-    (right : heap) (left_depth : int) (right_depth : int) : heap =
-  choose Empty (Node (rank, key, left, right))
+         "expected:{expected:int | expected >= 0} -> {result:heap | \
+          leftist_depth result expected}";
+       universals = [ "expected" ];
+     }]
+   [@refined.measure "expected"] rec generate (expected : int) : heap =
+  if expected = 0 then Empty
+  else
+    let left_depth = expected - 1 in
+    let left = generate left_depth in
+    let right_depth = int_range_inc 0 left_depth in
+    let right = generate right_depth in
+    Node (right_depth + 1, int_gen (), left, right)
 
 let runtime_examples (_unit : unit) =
   let leaf = Empty in
@@ -143,6 +98,8 @@ let runtime_examples (_unit : unit) =
   let valid = Node (1, 5, left_child, leaf) in
   let invalid_rank = Node (2, 5, left_child, leaf) in
   let invalid_shape = Node (2, 5, leaf, left_child) in
-  leftist_depth leaf 0 && leftist_depth singleton 1 && leftist_depth valid 2
+  leftist_depth (generate 0) 0
+  && leftist_depth (generate 4) 4
+  && leftist_depth leaf 0 && leftist_depth singleton 1 && leftist_depth valid 2
   && (not (is_leftist invalid_rank))
   && not (is_leftist invalid_shape)

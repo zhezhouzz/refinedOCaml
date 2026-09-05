@@ -31,51 +31,135 @@ let rec wellformed value =
 let[@refined.predicate] sized_term (value : term) (expected : int) : bool =
   wellformed value && term_size value = expected
 
-let[@refined.predicate] valid_term_case (case : term_case) : bool =
-  match case with
-  | Term_case (expected, value) -> expected >= 1 && sized_term value expected
+let rec height (v : term) : int =
+  match v with
+  | Var _ -> 1
+  | App_one (_, x) -> 1 + height x
+  | App_two (_, x, y) -> 1 + max (height x) (height y)
+  | Ite (x, y, z) -> 1 + max (height x) (max (height y) (height z))
 
-let[@refined.logic] case_size (case : term_case) : int =
-  match case with Term_case (expected, _) -> expected
+let[@refined.predicate] fuel_target (v : term) (n : int) : bool =
+  wellformed v && height v <= n + 1
 
-let[@refined.logic] case_term (case : term_case) : term =
-  match case with Term_case (_, value) -> value
+let[@refined.logic] name (v : term) : int =
+  match v with
+  | Var n -> n
+  | App_one (n, _) -> n
+  | App_two (n, _, _) -> n
+  | Ite _ -> 0
+
+let[@refined.logic] first (v : term) : term =
+  match v with
+  | Var n -> Var n
+  | App_one (_, x) -> x
+  | App_two (_, x, _) -> x
+  | Ite (x, _, _) -> x
+
+let[@refined.logic] second (v : term) : term =
+  match v with App_two (_, _, y) -> y | Ite (_, y, _) -> y | _ -> Var 0
+
+let[@refined.logic] third (v : term) : term =
+  match v with Ite (_, _, z) -> z | _ -> Var 0
 
 [@@@refined.axiom
 {
-  name = "zipper_case_intro";
-  quantifiers = [ ("forall", "expected", "int"); ("forall", "value", "term") ];
+  name = "fuel_zero";
+  quantifiers = [ ("forall", "v", "term"); ("forall", "n", "int") ];
   body =
-    "implies (expected >= 1 && sized_term value expected) (valid_term_case \
-     (Term_case (expected, value)))";
+    "implies (fuel_target v n && n = 0) (v = Var (name v) && 0 <= name v && \
+     name v <= 7)";
 }]
 
 [@@@refined.axiom
 {
-  name = "zipper_case_elim";
-  quantifiers = [ ("forall", "case", "term_case") ];
+  name = "fuel_positive";
+  quantifiers = [ ("forall", "v", "term"); ("forall", "n", "int") ];
   body =
-    "implies (valid_term_case case) (case = Term_case (case_size case, \
-     case_term case) && case_size case >= 1 && sized_term (case_term case) \
-     (case_size case))";
+    "implies (fuel_target v n && n > 0) ((v = Var (name v) && 0 <= name v && \
+     name v <= 7) || (v = App_one (name v,first v) && (name v = 2 || name v = \
+     3) && fuel_target (first v) (n - 1)) || (v = App_two (name v,first \
+     v,second v) && (name v = 0 || name v = 1) && fuel_target (first v) (n - \
+     1) && fuel_target (second v) (n - 1)) || (v = Ite (first v,second v,third \
+     v) && fuel_target (first v) (n - 1) && fuel_target (second v) (n - 1) && \
+     fuel_target (third v) (n - 1)))";
 }]
+
+[@@@refined.axiom
+{
+  name = "size_implies_fuel";
+  quantifiers = [ ("forall", "v", "term"); ("forall", "n", "int") ];
+  body = "implies (sized_term v n && n >= 1) (fuel_target v n)";
+}]
+
+exception Reject
+
+let[@refined.choose] int_gen (_unit : unit) : int = 0
+let runtime_choices = ref []
+
+let[@refined.choose] bool_gen (_unit : unit) : bool =
+  match !runtime_choices with
+  | [] -> false
+  | h :: t ->
+      runtime_choices := t;
+      h
 
 let[@refined.coverage
      {
        type_ =
-         "expected:{expected:int | expected >= 1} -> value:{value:term | \
-          sized_term value expected} -> {result:term_case | valid_term_case \
-          result}";
-       witness_relation = "result = Term_case (expected, value)";
-     }] zipperposition (expected : int) (value : term) : term_case =
-  Term_case (expected, value)
+         "lower:int -> upper:{upper:int | lower <= upper} -> {r:int | lower <= \
+          r && r <= upper}";
+       universals = [ "lower"; "upper" ];
+     }] int_range_inc (lower : int) (upper : int) : int =
+  let x = int_gen () in
+  if x < lower then lower else if x > upper then upper else x
 
-let runtime_examples (_unit : unit) =
-  let left = App_one (2, Var 0) in
-  let valid = Ite (Var 1, left, App_two (0, Var 2, Var 3)) in
-  let invalid_name = App_one (2, Var 8) in
-  let invalid_symbol = App_two (4, Var 0, Var 1) in
-  sized_term valid 7
-  && (not (sized_term valid 6))
-  && (not (wellformed invalid_name))
-  && not (wellformed invalid_symbol)
+let[@refined.coverage
+     {
+       type_ = "fuel:{fuel:int | fuel >= 0} -> {r:term | fuel_target r fuel}";
+       universals = [ "fuel" ];
+       witness_relation = "true";
+     }]
+   [@refined.measure "fuel"] rec default_fuel (fuel : int) : term =
+  if fuel = 0 then Var (int_range_inc 0 7)
+  else if bool_gen () then Var (int_range_inc 0 7)
+  else if bool_gen () then
+    App_two
+      ( (if bool_gen () then 0 else 1),
+        default_fuel (fuel - 1),
+        default_fuel (fuel - 1) )
+  else if bool_gen () then
+    App_one ((if bool_gen () then 2 else 3), default_fuel (fuel - 1))
+  else
+    Ite
+      (default_fuel (fuel - 1), default_fuel (fuel - 1), default_fuel (fuel - 1))
+
+let[@refined.coverage
+     {
+       type_ =
+         "expected:{expected:int | expected >= 1} -> {r:term | sized_term r \
+          expected}";
+       universals = [ "expected" ];
+     }] zipperposition (expected : int) : term =
+  default_fuel expected
+
+let default_examples (_u : unit) =
+  fuel_target (default_fuel 0) 0
+  && fuel_target (default_fuel 4) 4
+  && wellformed (zipperposition 8)
+  && not (wellformed (App_one (4, Var 0)))
+
+let runtime_examples (_u : unit) =
+  runtime_choices := [];
+  let defaults = default_examples () in
+  runtime_choices := [ true ];
+  let variable = default_fuel 1 = Var 0 in
+  runtime_choices := [ false; true; true ];
+  let binary = default_fuel 1 = App_two (0, Var 0, Var 0) in
+  runtime_choices := [ false; true; false ];
+  let binary_other = default_fuel 1 = App_two (1, Var 0, Var 0) in
+  runtime_choices := [ false; false; true; true ];
+  let unary = default_fuel 1 = App_one (2, Var 0) in
+  runtime_choices := [ false; false; true; false ];
+  let unary_other = default_fuel 1 = App_one (3, Var 0) in
+  runtime_choices := [];
+  defaults && variable && binary && binary_other && unary && unary_other

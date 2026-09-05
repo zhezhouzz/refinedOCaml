@@ -1,6 +1,8 @@
 (* SPDX-License-Identifier: MIT
-   Semantic ports of the two STLC generator benchmarks. Application nodes
-   carry the argument type that the source generator computes internally. *)
+   Recursive ports of the two STLC generator benchmarks at the pinned revision.
+   Application nodes carry the argument type computed by the source generator.
+   Coverage needs decomposition, not recursive constructor introduction axioms;
+   the latter unnecessarily saturate the solver with new typed terms. *)
 
 type ty = Nat | Arr of ty * ty
 type context = Empty_context | Bind of ty * context
@@ -12,7 +14,6 @@ type term =
   | App of ty * term * term
 
 type inferred = No_type | Has_type of ty
-type term_case = Term_case of int * int * context * ty * term
 
 let rec type_equal left right =
   match left with
@@ -77,17 +78,6 @@ let[@refined.predicate] typed_apps (context : context) (value : term)
     (expected : ty) (apps : int) : bool =
   infer context value = Has_type expected && number_of_apps value = apps
 
-let[@refined.predicate] term_certificate (context : context) (value : term)
-    (expected : ty) (apps : int) : bool =
-  typed_apps context value expected apps
-
-let[@refined.predicate] valid_term_case (case : term_case) : bool =
-  match case with
-  | Term_case (measure, apps, context, expected, value) ->
-      measure >= 0 && apps >= 0
-      && number_of_arrows expected = measure
-      && typed_apps context value expected apps
-
 let[@refined.logic] arrow_count (value : ty) : int = number_of_arrows value
 let[@refined.logic] app_count (value : term) : int = number_of_apps value
 
@@ -117,21 +107,6 @@ let[@refined.logic] term_function (value : term) : term =
 let[@refined.logic] term_argument (value : term) : term =
   match value with App (_, _, argument_term) -> argument_term | _ -> Const 0
 
-let[@refined.logic] case_measure (case : term_case) : int =
-  match case with Term_case (measure, _, _, _, _) -> measure
-
-let[@refined.logic] case_apps (case : term_case) : int =
-  match case with Term_case (_, apps, _, _, _) -> apps
-
-let[@refined.logic] case_context (case : term_case) : context =
-  match case with Term_case (_, _, context, _, _) -> context
-
-let[@refined.logic] case_expected (case : term_case) : ty =
-  match case with Term_case (_, _, _, expected, _) -> expected
-
-let[@refined.logic] case_term (case : term_case) : term =
-  match case with Term_case (_, _, _, _, value) -> value
-
 [@@@refined.axiom
 { name = "nat_arrows"; quantifiers = []; body = "arrow_count Nat = 0" }]
 
@@ -142,66 +117,6 @@ let[@refined.logic] case_term (case : term_case) : term =
   body =
     "arrow_count (Arr (argument, result)) = 1 + arrow_count argument + \
      arrow_count result";
-}]
-
-[@@@refined.axiom
-{
-  name = "const_typed";
-  quantifiers =
-    [ ("forall", "context", "context"); ("forall", "number", "int") ];
-  body = "typed_apps context (Const number) Nat 0";
-}]
-
-[@@@refined.axiom
-{
-  name = "var_typed";
-  quantifiers =
-    [
-      ("forall", "context", "context");
-      ("forall", "index", "int");
-      ("forall", "expected", "ty");
-    ];
-  body =
-    "implies (context_has context index expected) (typed_apps context (Var \
-     index) expected 0)";
-}]
-
-[@@@refined.axiom
-{
-  name = "abs_typed";
-  quantifiers =
-    [
-      ("forall", "context", "context");
-      ("forall", "argument_type", "ty");
-      ("forall", "result_type", "ty");
-      ("forall", "body", "term");
-      ("forall", "apps", "int");
-    ];
-  body =
-    "implies (typed_apps (Bind (argument_type, context)) body result_type \
-     apps) (typed_apps context (Abs (argument_type, body)) (Arr \
-     (argument_type, result_type)) apps)";
-}]
-
-[@@@refined.axiom
-{
-  name = "app_typed";
-  quantifiers =
-    [
-      ("forall", "context", "context");
-      ("forall", "argument_type", "ty");
-      ("forall", "result_type", "ty");
-      ("forall", "function_term", "term");
-      ("forall", "argument_term", "term");
-      ("forall", "function_apps", "int");
-      ("forall", "argument_apps", "int");
-    ];
-  body =
-    "implies (typed_apps context function_term (Arr (argument_type, \
-     result_type)) function_apps && typed_apps context argument_term \
-     argument_type argument_apps) (typed_apps context (App (argument_type, \
-     function_term, argument_term)) result_type (function_apps + argument_apps \
-     + 1))";
 }]
 
 [@@@refined.axiom
@@ -227,74 +142,159 @@ let[@refined.logic] case_term (case : term_case) : term =
      (app_count (term_function value)) && typed_apps context (term_argument \
      value) (term_argument_type value) (app_count (term_argument value)) && \
      apps = app_count (term_function value) + app_count (term_argument value) \
-     + 1))";
+     + 1 && app_count (term_function value) >= 0 && app_count (term_function \
+     value) < apps && app_count (term_argument value) >= 0 && app_count \
+     (term_argument value) < apps - app_count (term_function value)))";
 }]
 
 [@@@refined.axiom
 {
-  name = "term_case_intro";
+  name = "arrows_nonnegative";
+  quantifiers = [ ("forall", "value", "ty") ];
+  body = "arrow_count value >= 0";
+}]
+
+[@@@refined.axiom
+{
+  name = "apps_nonnegative";
+  quantifiers = [ ("forall", "value", "term") ];
+  body = "app_count value >= 0";
+}]
+
+[@@@refined.axiom
+{
+  name = "typed_app_count";
   quantifiers =
     [
-      ("forall", "measure", "int");
-      ("forall", "apps", "int");
       ("forall", "context", "context");
-      ("forall", "expected", "ty");
       ("forall", "value", "term");
+      ("forall", "expected", "ty");
+      ("forall", "apps", "int");
     ];
   body =
-    "implies (measure >= 0 && apps >= 0 && arrow_count expected = measure && \
-     term_certificate context value expected apps) (valid_term_case (Term_case \
-     (measure, apps, context, expected, value)))";
+    "implies (typed_apps context value expected apps) (app_count value = apps \
+     && apps >= 0)";
 }]
 
-[@@@refined.axiom
-{
-  name = "term_case_elim";
-  quantifiers = [ ("forall", "case", "term_case") ];
-  body =
-    "implies (valid_term_case case) (case = Term_case (case_measure case, \
-     case_apps case, case_context case, case_expected case, case_term case) && \
-     case_measure case >= 0 && case_apps case >= 0 && arrow_count \
-     (case_expected case) = case_measure case && term_certificate \
-     (case_context case) (case_term case) (case_expected case) (case_apps \
-     case))";
-}]
+exception Reject
+
+let[@refined.choose] int_gen (_unit : unit) : int = 0
+let[@refined.choose] bool_gen (_unit : unit) : bool = true
+
+(* gen_type is an explicit library primitive in upstream gen_term_size.ml.
+   The choice marker models its complete type image, as it models int_gen. *)
+let[@refined.choose] gen_type (_unit : unit) : ty = Nat
+
+let[@refined.coverage
+     {
+       type_ =
+         "lower:int -> upper:{upper:int | lower < upper} -> {r:int | lower <= \
+          r && r < upper}";
+       witness_relation = "true";
+       universals = [ "lower"; "upper" ];
+     }] int_range_inex (lower : int) (upper : int) : int =
+  let candidate = int_gen () in
+  if candidate < lower then lower
+  else if candidate >= upper then upper - 1
+  else candidate
+
+(* A nondeterministic index plus the same lookup filter has the successful
+   image of upstream vars_with_type's nondeterministic context traversal. *)
+let[@refined.coverage
+     {
+       type_ =
+         "context:context -> expected:ty -> {r:term | typed_apps context r \
+          expected 0 && r = Var (term_number r)}";
+       witness_relation = "true";
+       universals = [ "context"; "expected" ];
+     }] vars_with_type (context : context) (expected : ty) : term =
+  let index = int_gen () in
+  if context_has context index expected then Var index else raise Reject
+
+let[@refined.coverage
+     {
+       type_ =
+         "measure:{measure:int | measure >= 0} -> context:context -> \
+          expected:{t:ty | arrow_count t = measure} -> {r:term | typed_apps \
+          context r expected 0}";
+       witness_relation = "true";
+       universals = [ "measure"; "context"; "expected" ];
+     }]
+   [@refined.measure "measure"] rec gen_term_no_app (measure : int)
+    (context : context) (expected : ty) : term =
+  if bool_gen () then
+    match expected with
+    | Nat -> Const (int_gen ())
+    | Arr (argument_type, result_type) ->
+        Abs
+          ( argument_type,
+            gen_term_no_app (arrow_count result_type)
+              (Bind (argument_type, context))
+              result_type )
+  else vars_with_type context expected
 
 let[@refined.coverage
      {
        type_ =
          "measure:{measure:int | measure >= 0} -> apps:{apps:int | apps >= 0} \
-          -> context:context -> expected:ty -> value:term -> {result:term_case \
-          | valid_term_case result}";
-       witness_relation =
-         "result = Term_case (measure, apps, context, expected, value) && \
-          arrow_count expected = measure && term_certificate context value \
-          expected apps";
-     }] gen_term_size_port (measure : int) (apps : int) (context : context)
-    (expected : ty) (value : term) : term_case =
-  Term_case (measure, apps, context, expected, value)
+          -> context:context -> expected:{t:ty | arrow_count t = measure} -> \
+          {r:term | typed_apps context r expected apps}";
+       witness_relation = "true";
+       universals = [ "measure"; "apps"; "context"; "expected" ];
+     }]
+   [@refined.measure "apps, measure"] rec gen_term_size_port (measure : int)
+    (apps : int) (context : context) (expected : ty) : term =
+  if apps = 0 then gen_term_no_app measure context expected
+  else if bool_gen () then
+    let argument_type = gen_type () in
+    let function_apps = int_range_inex 0 apps in
+    let argument_apps = int_range_inex 0 (apps - function_apps) in
+    let function_type = Arr (argument_type, expected) in
+    let function_term =
+      gen_term_size_port
+        (arrow_count function_type)
+        function_apps context function_type
+    in
+    let argument_term =
+      gen_term_size_port
+        (arrow_count argument_type)
+        argument_apps context argument_type
+    in
+    App (argument_type, function_term, argument_term)
+  else
+    match expected with
+    | Nat -> raise Reject
+    | Arr (argument_type, result_type) ->
+        Abs
+          ( argument_type,
+            gen_term_size_port (arrow_count result_type) apps
+              (Bind (argument_type, context))
+              result_type )
 
+(* The monadic artifact uses the same algorithm with a supplied measure.
+   A lexicographic (application count, arrow count) measure makes the descent
+   explicit without an additional trusted calculate_measure library. *)
 let[@refined.coverage
      {
        type_ =
          "measure:{measure:int | measure >= 0} -> apps:{apps:int | apps >= 0} \
-          -> context:context -> expected:ty -> value:term -> {result:term_case \
-          | valid_term_case result}";
-       witness_relation =
-         "result = Term_case (measure, apps, context, expected, value) && \
-          arrow_count expected = measure && term_certificate context value \
-          expected apps";
+          -> context:context -> expected:{t:ty | arrow_count t = measure} -> \
+          {r:term | typed_apps context r expected apps}";
+       witness_relation = "true";
+       universals = [ "measure"; "apps"; "context"; "expected" ];
      }] stlc_port (measure : int) (apps : int) (context : context)
-    (expected : ty) (value : term) : term_case =
-  Term_case (measure, apps, context, expected, value)
+    (expected : ty) : term =
+  gen_term_size_port measure apps context expected
 
-let runtime_examples (_unit : unit) =
-  let identity = Abs (Nat, Var 0) in
-  let application = App (Nat, identity, Const 4) in
-  typed_apps Empty_context identity (Arr (Nat, Nat)) 0
+let runtime_examples (_unit : unit) : bool =
+  let natural = gen_term_size_port 0 0 Empty_context Nat in
+  let identity_type = Arr (Nat, Nat) in
+  let abstraction = gen_term_no_app 1 Empty_context identity_type in
+  let application = gen_term_size_port 0 1 Empty_context Nat in
+  let deeper = stlc_port 1 2 Empty_context identity_type in
+  typed_apps Empty_context natural Nat 0
+  && typed_apps Empty_context abstraction identity_type 0
   && typed_apps Empty_context application Nat 1
-  && (not (typed_apps Empty_context application Nat 0))
-  && not
-       (typed_apps Empty_context
-          (App (Arr (Nat, Nat), identity, Const 4))
-          Nat 1)
+  && infer Empty_context deeper = Has_type identity_type
+  && number_of_apps deeper <= 2
+  && not (typed_apps Empty_context (App (Nat, Const 0, Const 1)) Nat 1)

@@ -1,147 +1,76 @@
 (* SPDX-License-Identifier: MIT
-   Semantic port of data/PLDI23/elrond/BatchedQueue.ml. *)
+   Recursive port; finite streams use strict spines. Bankers cached lengths are retained. *)
+type seq = Nil | Cons of int * seq
+type queue = Queue of seq * seq
 
-type ilist = Nil | Cons of int * ilist
-type queue_case = Queue_case of int * ilist * ilist
+let[@refined.logic] rec length (s : seq) : int =
+  match s with Nil -> 0 | Cons (_, t) -> 1 + length t
 
-let rec length value =
-  match value with Nil -> 0 | Cons (_, tail) -> 1 + length tail
+let[@refined.logic] head (s : seq) : int =
+  match s with Nil -> 0 | Cons (h, _) -> h
 
-let[@refined.predicate] exact_size (value : ilist) (size : int) : bool =
-  length value = size
-
-let[@refined.predicate] shorter (value : ilist) (bound : int) : bool =
-  length value < bound
-
-let[@refined.predicate] valid_batched_queue (case : queue_case) : bool =
-  match case with
-  | Queue_case (size, front, rear) ->
-      size >= 0 && exact_size front size && shorter rear size
-
-let[@refined.logic] list_head (value : ilist) : int =
-  match value with Nil -> 0 | Cons (head, _) -> head
-
-let[@refined.logic] list_tail (value : ilist) : ilist =
-  match value with Nil -> Nil | Cons (_, tail) -> tail
-
-let[@refined.logic] queue_size (case : queue_case) : int =
-  match case with Queue_case (size, _, _) -> size
-
-let[@refined.logic] queue_front (case : queue_case) : ilist =
-  match case with Queue_case (_, front, _) -> front
-
-let[@refined.logic] queue_rear (case : queue_case) : ilist =
-  match case with Queue_case (_, _, rear) -> rear
-
-[@@@refined.axiom
-{ name = "exact_nil"; quantifiers = []; body = "exact_size Nil 0" }]
+let[@refined.logic] tail (s : seq) : seq =
+  match s with Nil -> Nil | Cons (_, t) -> t
 
 [@@@refined.axiom
 {
-  name = "exact_cons_intro";
-  quantifiers =
-    [
-      ("forall", "head", "int");
-      ("forall", "tail", "ilist");
-      ("forall", "tail_size", "int");
-    ];
+  name = "length_elim";
+  quantifiers = [ ("forall", "s", "seq") ];
   body =
-    "implies (exact_size tail tail_size) (exact_size (Cons (head, tail)) \
-     (tail_size + 1))";
+    "(s = Nil && length s = 0) || (s = Cons (head s, tail s) && length s > 0 \
+     && length (tail s) = length s - 1)";
 }]
 
-[@@@refined.axiom
-{
-  name = "exact_elim";
-  quantifiers = [ ("forall", "value", "ilist"); ("forall", "size", "int") ];
-  body =
-    "implies (exact_size value size) ((size = 0 && value = Nil) || (size > 0 \
-     && value = Cons (list_head value, list_tail value) && exact_size \
-     (list_tail value) (size - 1)))";
-}]
+exception Reject
 
-[@@@refined.axiom
-{
-  name = "shorter_nil";
-  quantifiers = [ ("forall", "bound", "int") ];
-  body = "implies (bound > 0) (shorter Nil bound)";
-}]
-
-[@@@refined.axiom
-{
-  name = "shorter_cons_intro";
-  quantifiers =
-    [
-      ("forall", "head", "int");
-      ("forall", "tail", "ilist");
-      ("forall", "bound", "int");
-    ];
-  body =
-    "implies (bound > 1 && shorter tail (bound - 1)) (shorter (Cons (head, \
-     tail)) bound)";
-}]
-
-[@@@refined.axiom
-{
-  name = "shorter_elim";
-  quantifiers = [ ("forall", "value", "ilist"); ("forall", "bound", "int") ];
-  body =
-    "implies (shorter value bound) (bound > 0 && (value = Nil || (bound > 1 && \
-     value = Cons (list_head value, list_tail value) && shorter (list_tail \
-     value) (bound - 1))))";
-}]
-
-[@@@refined.axiom
-{
-  name = "batched_intro";
-  quantifiers =
-    [
-      ("forall", "size", "int");
-      ("forall", "front", "ilist");
-      ("forall", "rear", "ilist");
-    ];
-  body =
-    "implies (size >= 0 && exact_size front size && shorter rear size) \
-     (valid_batched_queue (Queue_case (size, front, rear)))";
-}]
-
-[@@@refined.axiom
-{
-  name = "batched_elim";
-  quantifiers = [ ("forall", "case", "queue_case") ];
-  body =
-    "implies (valid_batched_queue case) (case = Queue_case (queue_size case, \
-     queue_front case, queue_rear case) && queue_size case >= 0 && exact_size \
-     (queue_front case) (queue_size case) && shorter (queue_rear case) \
-     (queue_size case))";
-}]
-
-let[@refined.choose] choose_list (left : ilist) (_right : ilist) : ilist = left
+let[@refined.choose] int_gen (_unit : unit) : int = 0
+let[@refined.choose] bool_gen (_unit : unit) : bool = false
 
 let[@refined.coverage
      {
        type_ =
-         "size:{size:int | size >= 0} -> front_head:int -> front_tail:ilist -> \
-          rear_head:int -> rear_tail:ilist -> {result:queue_case | \
-          valid_batched_queue result}";
-       witness_relation =
-         "result = Queue_case (size, queue_front result, queue_rear result) && \
-          ((size = 0 && queue_front result = Nil) || (size > 0 && queue_front \
-          result = Cons (front_head, front_tail) && exact_size front_tail \
-          (size - 1))) && (queue_rear result = Nil || (size > 1 && queue_rear \
-          result = Cons (rear_head, rear_tail) && shorter rear_tail (size - \
-          1)))";
-     }] batched_queue_port (size : int) (front_head : int) (front_tail : ilist)
-    (rear_head : int) (rear_tail : ilist) : queue_case =
-  Queue_case
-    ( size,
-      choose_list Nil (Cons (front_head, front_tail)),
-      choose_list Nil (Cons (rear_head, rear_tail)) )
+         "lower:int -> upper:{upper:int | lower <= upper} -> {r:int | lower <= \
+          r && r <= upper}";
+       universals = [ "lower"; "upper" ];
+       witness_relation = "true";
+     }] int_range_inc (lower : int) (upper : int) : int =
+  let x = int_gen () in
+  if x < lower then lower else if x > upper then upper else x
+
+let[@refined.coverage
+     {
+       type_ = "size:{size:int | size >= 0} -> {r:seq | length r = size}";
+       universals = [ "size" ];
+       witness_relation = "true";
+     }]
+   [@refined.measure "size"] rec seq_gen (size : int) : seq =
+  if size = 0 then Nil else Cons (int_gen (), seq_gen (size - 1))
+
+let[@refined.predicate] target (q : queue) (size : int) : bool =
+  match q with Queue (f, r) -> length f = size && length r < size
+
+let[@refined.logic] front (q : queue) : seq = match q with Queue (f, _) -> f
+let[@refined.logic] rear (q : queue) : seq = match q with Queue (_, r) -> r
+
+[@@@refined.axiom
+{
+  name = "queue_elim";
+  quantifiers = [ ("forall", "q", "queue"); ("forall", "size", "int") ];
+  body =
+    "implies (target q size) (q = Queue (front q, rear q) && length (front q) \
+     = size && 0 <= length (rear q) && length (rear q) < size)";
+}]
+
+let[@refined.coverage
+     {
+       type_ = "size:{size:int | size >= 0} -> {r:queue | target r size}";
+       universals = [ "size" ];
+       witness_relation = "true";
+     }] batched_queue_port (size : int) : queue =
+  let nr = int_range_inc 0 size in
+  let f = seq_gen size in
+  let r = seq_gen nr in
+  Queue (f, r)
 
 let runtime_examples (_unit : unit) =
-  let front = Cons (1, Cons (2, Cons (3, Nil))) in
-  let valid_rear = Cons (4, Cons (5, Nil)) in
-  let long_rear = Cons (4, Cons (5, Cons (6, Nil))) in
-  valid_batched_queue (Queue_case (3, front, valid_rear))
-  && (not (valid_batched_queue (Queue_case (2, front, valid_rear))))
-  && not (valid_batched_queue (Queue_case (3, front, long_rear)))
+  target (batched_queue_port 4) 4 && not (target (batched_queue_port 0) 0)

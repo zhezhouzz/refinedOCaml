@@ -9,6 +9,9 @@
   ../examples/residual_subtyping.ml
   ../examples/higher_order.ml
   ../examples/higher_order_subtyping.ml
+  ../examples/higher_order_nested.ml
+  ../examples/summary_sequence.ml
+  ../examples/summary_state_sequence.ml
   ../examples/higher_order_mismatch.ml
   ../examples/higher_order_coverage_indexed.ml
   ../examples/higher_order_coverage.ml

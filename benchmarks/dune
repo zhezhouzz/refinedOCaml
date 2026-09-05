@@ -2,6 +2,6 @@
  (name benchmark_runner)
  (libraries refined_core)
  (deps
-  liquidhaskell/classics.ml
+  (glob_files liquidhaskell/*.ml)
   (glob_files coveragetype/*.ml)
   manifest.tsv))

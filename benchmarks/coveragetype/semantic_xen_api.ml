@@ -6,9 +6,6 @@ type specs = No_specs | More_specs of select_fd_spec * specs
 type delay = No_delay | Delay of int
 type fd = Fd of int * delay * delay * int
 
-type xen_report =
-  | Xen_report of bool * bool * bool * bool * bool * bool * bool * bool * bool
-
 let wf_fd_size value =
   value = 0 || value = 1 || value = 100 || value = 4096 || value = 65535
   || value = 65536 || value = 65537 || value = 131072 || value = 655363
@@ -54,71 +51,241 @@ let wf_fd value total source_size =
       if kind = 0 then size = 512 && valid_delay delay_read total 512
       else size = source_size && valid_delay delay_read total source_size
 
-let build_report (_unit : unit) =
-  let spec = Select_fd_spec (2, 100) in
-  let files = More_specs (spec, More_specs (Select_fd_spec (0, 0), No_specs)) in
-  let generated_fd = Fd (4096, Delay 10, Delay 10, 2) in
-  Xen_report
-    ( wf_fd_size 65536,
-      wf_file_kind 6,
-      wf_timeout 300,
-      wf_total_delay 400,
-      wf_size_bound 10,
-      is_testable_kind 5,
-      wf_select_fd_spec spec,
-      wf_spec_list files 2,
-      wf_fd generated_fd 100 4096 )
+exception Reject
 
-let[@refined.predicate] valid_xen_report (report : xen_report) : bool =
-  match report with
-  | Xen_report (a, b, c, d, e, f, g, h, i) ->
-      a && b && c && d && e && f && g && h && i
+let[@refined.choose] int_gen (_unit : unit) : int = 0
+let[@refined.choose] bool_gen (_unit : unit) : bool = false
+
+let[@refined.coverage
+     {
+       type_ =
+         "lower:int -> upper:{upper:int | lower <= upper} -> {r:int | lower <= \
+          r && r <= upper}";
+       universals = [ "lower"; "upper" ];
+       witness_relation = "true";
+     }] int_range_inc (lower : int) (upper : int) : int =
+  let x = int_gen () in
+  if x < lower then lower else if x > upper then upper else x
+
+let[@refined.coverage
+     {
+       type_ =
+         "unit_value:unit -> {r:int | r = 0 || r = 1 || r = 100 || r = 4096 || \
+          r = 65535 || r = 65536 || r = 65537 || r = 131072 || r = 655363}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] fd_size_gen (unit_value : unit) : int =
+  let i = int_range_inc 0 8 in
+  if i = 0 then 0
+  else if i = 1 then 1
+  else if i = 2 then 100
+  else if i = 3 then 4096
+  else if i = 4 then 65535
+  else if i = 5 then 65536
+  else if i = 6 then 65537
+  else if i = 7 then 131072
+  else 655363
+
+let[@refined.coverage
+     {
+       type_ =
+         "unit_value:unit -> {r:int | r = 0 || r = 1 || r = 2 || r = 3 || r = \
+          4 || r = 5 || r = 6}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] file_kind_gen (unit_value : unit) : int =
+  let i = int_range_inc 0 6 in
+  if i = 0 then 0
+  else if i = 1 then 1
+  else if i = 2 then 2
+  else if i = 3 then 3
+  else if i = 4 then 4
+  else if i = 5 then 5
+  else 6
+
+let[@refined.coverage
+     {
+       type_ =
+         "unit_value:unit -> {r:int | r = 0 || r = 1 || r = 100 || r = 300}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] timeout_gen (unit_value : unit) : int =
+  let i = int_range_inc 0 3 in
+  if i = 0 then 0 else if i = 1 then 1 else if i = 2 then 100 else 300
+
+let[@refined.coverage
+     {
+       type_ =
+         "unit_value:unit -> {r:int | r = 1 || r = 10 || r = 100 || r = 400}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] total_delay_gen (unit_value : unit) : int =
+  let i = int_range_inc 0 3 in
+  if i = 0 then 1 else if i = 1 then 10 else if i = 2 then 100 else 400
+
+let[@refined.coverage
+     {
+       type_ =
+         "unit_value:unit -> {r:int | r = 0 || r = 2 || r = 10 || r = 100}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] size_bound_gen (unit_value : unit) : int =
+  let i = int_range_inc 0 3 in
+  if i = 0 then 0 else if i = 1 then 2 else if i = 2 then 10 else 100
+
+let[@refined.coverage
+     {
+       type_ = "unit_value:unit -> {r:int | 0 <= r && r <= 5}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] testable_file_kind_gen (unit_value : unit) : int =
+  let k = file_kind_gen () in
+  if is_testable_kind k then k else raise Reject
+
+let[@refined.predicate] select_target (v : select_fd_spec) : bool =
+  wf_select_fd_spec v
+
+let[@refined.logic] spec_kind (v : select_fd_spec) : int =
+  match v with Select_fd_spec (k, _) -> k
+
+let[@refined.logic] spec_wait (v : select_fd_spec) : int =
+  match v with Select_fd_spec (_, w) -> w
 
 [@@@refined.axiom
 {
-  name = "xen_report_intro";
-  quantifiers = [];
+  name = "select_elim";
+  quantifiers = [ ("forall", "v", "select_fd_spec") ];
   body =
-    "valid_xen_report (Xen_report (true, true, true, true, true, true, true, \
-     true, true))";
+    "implies (select_target v) (v = Select_fd_spec (spec_kind v,spec_wait v) \
+     && 0 <= spec_kind v && spec_kind v <= 5 && ((spec_kind v = 0 && spec_wait \
+     v = 0) || (spec_kind v > 0 && (spec_wait v = 0 || spec_wait v = 1 || \
+     spec_wait v = 100 || spec_wait v = 300))))";
 }]
 
+let[@refined.coverage
+     {
+       type_ = "unit_value:unit -> {r:select_fd_spec | select_target r}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] select_fd_spec_gen (unit_value : unit) : select_fd_spec =
+  let kind = testable_file_kind_gen () in
+  let wait = timeout_gen () in
+  Select_fd_spec (kind, if has_immediate_timeout kind then 0 else wait)
+
+let[@refined.predicate] sized_specs (v : specs) (n : int) : bool =
+  spec_count v = n && all_specs_valid v
+
+let[@refined.logic] specs_head (v : specs) : select_fd_spec =
+  match v with No_specs -> Select_fd_spec (0, 0) | More_specs (h, _) -> h
+
+let[@refined.logic] specs_tail (v : specs) : specs =
+  match v with No_specs -> No_specs | More_specs (_, t) -> t
+
+let[@refined.logic] specs_count (v : specs) : int = spec_count v
+
 [@@@refined.axiom
 {
-  name = "xen_report_elim";
-  quantifiers = [ ("forall", "report", "xen_report") ];
+  name = "specs_elim";
+  quantifiers = [ ("forall", "v", "specs"); ("forall", "n", "int") ];
   body =
-    "implies (valid_xen_report report) (report = Xen_report (true, true, true, \
-     true, true, true, true, true, true))";
+    "implies (sized_specs v n) ((n = 0 && v = No_specs) || (n > 0 && v = \
+     More_specs (specs_head v,specs_tail v) && select_target (specs_head v) && \
+     sized_specs (specs_tail v) (n - 1)))";
+}]
+
+let[@refined.coverage
+     {
+       type_ = "size:{size:int | size >= 0} -> {r:specs | sized_specs r size}";
+       universals = [ "size" ];
+       witness_relation = "true";
+     }]
+   [@refined.measure "size"] rec list_repeat (size : int) : specs =
+  if size = 0 then No_specs
+  else More_specs (select_fd_spec_gen (), list_repeat (size - 1))
+
+let[@refined.coverage
+     {
+       type_ =
+         "unit_value:unit -> {r:specs | 0 <= specs_count r && specs_count r <= \
+          100 && sized_specs r (specs_count r)}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] file_list_gen (unit_value : unit) : specs =
+  let bound = size_bound_gen () in
+  let size = int_range_inc 0 bound in
+  if bool_gen () then list_repeat size else list_repeat size
+
+let[@refined.predicate] delay_target (v : delay) (total : int) (size : int) :
+    bool =
+  valid_delay v total size
+
+let[@refined.logic] delay_value (v : delay) : int =
+  match v with No_delay -> 0 | Delay d -> d
+
+[@@@refined.axiom
+{
+  name = "delay_elim";
+  quantifiers =
+    [
+      ("forall", "v", "delay");
+      ("forall", "total", "int");
+      ("forall", "size", "int");
+    ];
+  body =
+    "implies (delay_target v total size) ((v = No_delay && size = 0) || (v = \
+     Delay (delay_value v) && 0 <= delay_value v && delay_value v <= total))";
 }]
 
 let[@refined.coverage
      {
        type_ =
-         "unit_value:unit -> {result:xen_report | valid_xen_report result}";
-       witness_relation =
-         "result = Xen_report (true, true, true, true, true, true, true, true, \
-          true)";
-     }] xen_api (unit_value : unit) : xen_report =
-  let _unused_unit = unit_value in
-  Xen_report (true, true, true, true, true, true, true, true, true)
+         "total:{total:int | total = 1 || total = 10 || total = 100 || total = \
+          400} -> size:{size:int | size >= 0} -> {r:delay | delay_target r \
+          total size}";
+       universals = [ "total"; "size" ];
+       witness_relation = "true";
+     }] delay_of_size (total : int) (size : int) : delay =
+  if size = 0 && bool_gen () then No_delay else Delay (int_range_inc 0 total)
 
-let runtime_examples (_unit : unit) =
-  let (Xen_report (a, b, c, d, e, f, g, h, i)) = build_report _unit in
-  a && b && c && d && e && f && g && h && i
-  && (not (wf_fd_size 65534))
-  && (not (wf_file_kind 7))
-  && (not (wf_timeout 200))
-  && (not (wf_total_delay 0))
-  && (not (wf_size_bound 3))
-  && (not (is_testable_kind 6))
-  && (not (wf_select_fd_spec (Select_fd_spec (0, 100))))
-  && (not
-        (wf_spec_list
-           (More_specs
-              ( Select_fd_spec (1, 100),
-                More_specs
-                  ( Select_fd_spec (2, 100),
-                    More_specs (Select_fd_spec (3, 100), No_specs) ) ))
-           2))
-  && not (wf_fd (Fd (1, No_delay, Delay 0, 1)) 100 1)
+let[@refined.logic] fd_size (v : fd) : int = match v with Fd (s, _, _, _) -> s
+
+let[@refined.logic] fd_delay (v : fd) : delay =
+  match v with Fd (_, d, _, _) -> d
+
+let[@refined.logic] fd_kind (v : fd) : int = match v with Fd (_, _, _, k) -> k
+
+let[@refined.predicate] fd_target (v : fd) : bool =
+  wf_fd v 400 (if fd_kind v = 0 then 0 else fd_size v)
+
+[@@@refined.axiom
+{
+  name = "fd_elim";
+  quantifiers = [ ("forall", "v", "fd") ];
+  body =
+    "implies (fd_target v) (v = Fd (fd_size v,fd_delay v,fd_delay v,fd_kind v) \
+     && 0 <= fd_kind v && fd_kind v <= 5 && ((fd_kind v = 0 && fd_size v = \
+     512) || (fd_kind v > 0 && (fd_size v = 0 || fd_size v = 1 || fd_size v = \
+     100 || fd_size v = 4096 || fd_size v = 65535 || fd_size v = 65536 || \
+     fd_size v = 65537 || fd_size v = 131072 || fd_size v = 655363))) && \
+     delay_target (fd_delay v) 400 (fd_size v))";
+}]
+
+let[@refined.coverage
+     {
+       type_ = "unit_value:unit -> {r:fd | fd_target r}";
+       universals = [ "unit_value" ];
+       witness_relation = "true";
+     }] fd_gen (unit_value : unit) : fd =
+  let total = total_delay_gen () in
+  let source_size = fd_size_gen () in
+  let kind = testable_file_kind_gen () in
+  let size = if kind = 0 then 512 else source_size in
+  let delay = delay_of_size total size in
+  Fd (size, delay, delay, kind)
+
+let runtime_examples (_u : unit) =
+  select_target (select_fd_spec_gen ())
+  && sized_specs (list_repeat 3) 3
+  && fd_target (fd_gen ())
+  && (not (select_target (Select_fd_spec (0, 100))))
+  && not (fd_target (Fd (512, Delay 1, Delay 2, 0)))

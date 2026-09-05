@@ -45,30 +45,6 @@ let[@refined.logic] case_heap (case : heap_case) : heap =
 
 [@@@refined.axiom
 {
-  name = "heap_empty";
-  quantifiers = [ ("forall", "bound", "int"); ("forall", "maximum", "int") ];
-  body = "implies (bound >= 0) (bounded_heap Empty bound maximum)";
-}]
-
-[@@@refined.axiom
-{
-  name = "heap_node_intro";
-  quantifiers =
-    [
-      ("forall", "bound", "int");
-      ("forall", "maximum", "int");
-      ("forall", "key", "int");
-      ("forall", "left", "heap");
-      ("forall", "right", "heap");
-    ];
-  body =
-    "implies (bound > 0 && key < maximum && bounded_heap left (bound - 1) key \
-     && bounded_heap right (bound - 1) key) (bounded_heap (Heap_node (key, \
-     left, right)) bound maximum)";
-}]
-
-[@@@refined.axiom
-{
   name = "heap_elim";
   quantifiers =
     [
@@ -84,50 +60,35 @@ let[@refined.logic] case_heap (case : heap_case) : heap =
      (bound - 1) (heap_key value))))";
 }]
 
-[@@@refined.axiom
-{
-  name = "heap_case_intro";
-  quantifiers =
-    [
-      ("forall", "bound", "int");
-      ("forall", "maximum", "int");
-      ("forall", "value", "heap");
-    ];
-  body =
-    "implies (bounded_heap value bound maximum) (valid_heap_case (Heap_case \
-     (bound, maximum, value)))";
-}]
+exception Reject
 
-[@@@refined.axiom
-{
-  name = "heap_case_elim";
-  quantifiers = [ ("forall", "case", "heap_case") ];
-  body =
-    "implies (valid_heap_case case) (case = Heap_case (case_bound case, \
-     case_maximum case, case_heap case) && bounded_heap (case_heap case) \
-     (case_bound case) (case_maximum case))";
-}]
-
-let[@refined.choose] choose_heap (left : heap) (_right : heap) : heap = left
+let[@refined.choose] int_gen (_unit : unit) : int = 0
+let[@refined.choose] bool_gen (_unit : unit) : bool = false
 
 let[@refined.coverage
      {
        type_ =
-         "bound:{bound:int | bound >= 0} -> maximum:int -> key:int -> \
-          left:heap -> right:heap -> {result:heap_case | valid_heap_case \
-          result}";
-       witness_relation =
-         "result = Heap_case (bound, maximum, case_heap result) && (case_heap \
-          result = Empty || (bound > 0 && case_heap result = Heap_node (key, \
-          left, right) && key < maximum && bounded_heap left (bound - 1) key \
-          && bounded_heap right (bound - 1) key))";
-     }] sized_heap_port (bound : int) (maximum : int) (key : int) (left : heap)
-    (right : heap) : heap_case =
-  Heap_case (bound, maximum, choose_heap Empty (Heap_node (key, left, right)))
+         "bound:{bound:int | bound >= 0} -> maximum:int -> {r:heap | \
+          bounded_heap r bound maximum}";
+       universals = [ "bound"; "maximum" ];
+       witness_relation = "true";
+     }]
+   [@refined.measure "bound"] rec sized_heap_port (bound : int) (maximum : int)
+    : heap =
+  if bound = 0 then Empty
+  else if bool_gen () then Empty
+  else
+    let key = int_gen () in
+    if key < maximum then
+      let left = sized_heap_port (bound - 1) key in
+      let right = sized_heap_port (bound - 1) key in
+      Heap_node (key, left, right)
+    else raise Reject
 
 let runtime_examples (_unit : unit) =
-  let valid = Heap_node (7, Heap_node (3, Empty, Empty), Empty) in
-  let wrong_order = Heap_node (7, Heap_node (9, Empty, Empty), Empty) in
-  valid_heap_case (Heap_case (2, 10, valid))
-  && (not (valid_heap_case (Heap_case (1, 10, valid))))
-  && not (valid_heap_case (Heap_case (2, 10, wrong_order)))
+  bounded_heap (sized_heap_port 1 1) 1 1
+  &&
+    try
+      ignore (sized_heap_port 2 1);
+      false
+    with Reject -> true

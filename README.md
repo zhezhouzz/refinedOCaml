@@ -9,18 +9,21 @@
 每个 ADT 默认编码为 uninterpreted sort；
 constructor、recognizer 和 selector 都是 uninterpreted symbols，代数性质由可查看的 axioms 给出。
 
-当前 versioned frontend 针对 OCaml 5.5.0；运行验证还需要 `z3` 可执行文件。
+当前 versioned frontend 针对 OCaml 5.5.0；基准测试使用固定的 Z3 4.16.0。
 
 可复现环境：
 
 ```sh
+python3 -m venv /tmp/refined-z3
+/tmp/refined-z3/bin/python -m pip install --only-binary=:all: -r dev/z3-requirements.txt
+export PATH="/tmp/refined-z3/bin:$PATH"
 dev/setup-switch.sh .
 eval "$(opam env --switch=. --set-switch)"
-dune build @refined
+REFINED_SOLVER_TIMEOUT_SECONDS=60 dune build @refined
 ```
 
-脚本使用 `refined_ocaml.opam.locked` 安装经过测试的直接依赖。CI 在 Ubuntu/OCaml 5.5.0 上安装
-Z3，并运行 build、install、完整 refinement tests 和 formatting gate。compiler-libs 升级规则见
+脚本使用 `refined_ocaml.opam.locked` 安装经过测试的直接依赖。CI 在 Ubuntu/OCaml 5.5.0 上按
+`dev/z3-requirements.txt` 安装 Z3，并运行 build、install、完整 refinement tests 和 formatting gate。compiler-libs 升级规则见
 `docs/versioning.md`。
 
 Property fuzz tests：
@@ -107,6 +110,9 @@ base type 会与 Typedtree 推断出的参数和结果类型逐一核对。
 因此联合前置条件可以按 curry 顺序放进后续 domain：
 `x:int -> y:{y:int | P x y} -> C` 在应用到 `3` 后得到保留捕获环境的
 `y:{y:int | P 3 y} -> C[x := 3]`。
+
+符号函数参数再次接收 callback 时，也会检查 callback 的完整 refinement。调用链可以使用此前
+调用的结果合约检查后续 domain；尚未调用的函数合约不能反过来证明当前调用合法。
 
 ## 两种 refinement
 
@@ -629,6 +635,16 @@ constructor/field/pattern、logic call 和 function summary；命中 statement �
 dependencies。未使用的 logic declarations、statements、artifacts 和 ADT bundles 不进入 SMT；只有 ADT
 sort 流过时把它当 opaque sort，不生成代数 axioms。无 named theory symbol 的全局算术 axiom 会被保守
 切掉，除非被 artifact 显式依赖。
+
+## 上游验证案例
+
+`REFINED_SOLVER_TIMEOUT_SECONDS=60 opam exec -- dune runtest benchmarks` 检查固定版本的
+11 个 LiquidHaskell 教程章节代表算法和 29 个 CoverageType 源文件条目。清单中的语义适配器
+已替换为实际递归算法，133 个正向义务须全部有效，11 个 SMT 负例须无效；另运行全部
+27 个模块的具体示例、17 个算法变异反例及上游递归失败复现。
+`tree2list` 与 `zipperposition` 的原始问题和修正分别保留，清单明确标记修正版。
+逐条算法、证明性质及表示变化见 [benchmarks/PORTS.md](benchmarks/PORTS.md)，
+验证边界见 [benchmarks/README.md](benchmarks/README.md)。
 
 ## 支持范围
 

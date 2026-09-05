@@ -560,6 +560,13 @@ let typed_refinement_predicate program generic_calls ~loc environment
   |> List.iter (use_theory_symbol generic_calls);
   typed_formula program.registry environment formula
 
+(* A call may use facts established by earlier calls. Snapshot the environment
+   here: including later summaries would let a call justify its own domain. *)
+let add_call_side_condition state path predicate =
+  state.side_conditions <-
+    under_path (state.summary_assumptions @ path) predicate
+    :: state.side_conditions
+
 (* [actual <: expected] is a semantic judgment.  Base refinements generate an
    implication, while arrows are contravariant in their domain and covariant
    in their codomain.  A residual closure carries the environment for binders
@@ -582,9 +589,8 @@ let emit_refined_subtype program choices generic_calls path ~loc
         let value = fresh actual.base_sort in
         let actual = predicate actual_environment actual value in
         let expected = predicate expected_environment expected value in
-        generic_calls.side_conditions <-
-          under_path path (app "=>" [ actual; expected ])
-          :: generic_calls.side_conditions
+        add_call_side_condition generic_calls path
+          (app "=>" [ actual; expected ])
     | Typed_core.Refined_arrow actual, Typed_core.Refined_arrow expected ->
         if
           Typed_core.refined_sort actual.domain
@@ -726,11 +732,9 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
                           formula_theory_symbols program.registry predicate_env
                             predicate
                           |> List.iter (use_theory_symbol generic_calls);
-                          generic_calls.side_conditions <-
-                            under_path path
-                              (typed_formula program.registry predicate_env
-                                 predicate)
-                            :: generic_calls.side_conditions);
+                          add_call_side_condition generic_calls path
+                            (typed_formula program.registry predicate_env
+                               predicate));
                         ( argument_term,
                           (parameter, (argument_term, argument_sort))
                           :: environment )
@@ -741,7 +745,9 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
                               "higher-order argument `%s` is not a function \
                                value"
                               parameter
-                        | Some _ -> ());
+                        | Some closure ->
+                            ensure_closure_subtype path environment domain
+                              closure);
                         let identity =
                           "closure_argument_"
                           ^ string_of_int (List.length !choices)
@@ -906,8 +912,7 @@ let rec typed_expr_smt_with_choices (program : Typed_core.program) analysis mode
                 typed_refinement_predicate program generic_calls ~loc:body.loc
                   expected_environment expected term
               in
-              generic_calls.side_conditions <-
-                under_path path post :: generic_calls.side_conditions
+              add_call_side_condition generic_calls path post
           | [], (Typed_core.Refined_arrow _ as expected) -> (
               let result =
                 typed_expr_smt_with_choices program analysis mode
@@ -1374,10 +1379,8 @@ and typed_inline_call program analysis mode current_function path call_stack
                     formula_theory_symbols program.registry formula_env
                       predicate
                     |> List.iter (use_theory_symbol generic_calls);
-                    generic_calls.side_conditions <-
-                      under_path path
-                        (typed_formula program.registry formula_env predicate)
-                      :: generic_calls.side_conditions))
+                    add_call_side_condition generic_calls path
+                      (typed_formula program.registry formula_env predicate)))
             supplied
       | None -> ());
       if List.length captured < List.length function_def.arguments then
@@ -1507,12 +1510,10 @@ and typed_inline_call program analysis mode current_function path call_stack
                 typed_error_at expression.loc
                   "recursive caller and callee have incompatible lexicographic \
                    measures";
-              generic_calls.side_conditions <-
-                under_path path
-                  (termination_decrease ~loc:expression.loc function_def
-                     callee_measure ~callee:callee_measure_term
-                     ~caller:caller_measure_term)
-                :: generic_calls.side_conditions)
+              add_call_side_condition generic_calls path
+                (termination_decrease ~loc:expression.loc function_def
+                   callee_measure ~callee:callee_measure_term
+                   ~caller:caller_measure_term))
           in
           add_termination_condition ();
           match Typed_core.contract_result summary with
@@ -2103,6 +2104,20 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
   let choices = ref [] in
   let generic_calls = new_generic_call_state () in
   let continuations = Hashtbl.create 8 in
+  let bind relation continuation =
+    List.concat_map
+      (fun (prior : R.path) ->
+        let previous = generic_calls.side_conditions in
+        generic_calls.side_conditions <- [];
+        let result = R.bind [ prior ] continuation in
+        (* Only checks created by the continuation may use this outcome's
+           postcondition. The call's own preconditions remain outside it. *)
+        generic_calls.side_conditions <-
+          List.map (under_path [ prior.guard ]) generic_calls.side_conditions
+          @ previous;
+        result)
+      relation
+  in
   let continuation_counter = ref 0 in
   let allocated_references =
     ref
@@ -3225,7 +3240,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                 typed_error_at expression.loc
                   "effectful under-call `%s` has no constructive outcome"
                   symbol.display;
-              R.bind (List.rev !paths) continuation)
+              bind (List.rev !paths) continuation)
             else
               let contracts =
                 List.filter
@@ -3725,7 +3740,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                       })
                   summary.performs
               in
-              R.bind ((normal :: exceptional) @ performed) continuation)
+              bind ((normal :: exceptional) @ performed) continuation)
     | Choose [ left; right ]
       when left.Typed_core.sort = expression.sort
            && right.Typed_core.sort = expression.sort ->
@@ -3803,7 +3818,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   discharge generated))
             relation handlers
         in
-        R.bind (discharge (translate env state path body boundary)) continuation
+        bind (discharge (translate env state path body boundary)) continuation
     | If (condition, if_true, if_false) ->
         if typed_has_exception condition then
           typed_error_at condition.loc
@@ -3889,7 +3904,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
                   translate handler_env state path handler boundary
               | None -> R.raise_ ~state exception_)
         in
-        R.bind handled continuation
+        bind handled continuation
     | Ref (sort, initial) ->
         translate env state path initial (fun value state ->
             let identity =
@@ -3964,7 +3979,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
               typed_error_at expression.loc
                 "reference `%s` has no heap for its content sort" symbol.display
         in
-        R.bind (R.return ~state (app "select" [ heap; identity ])) continuation
+        bind (R.return ~state (app "select" [ heap; identity ])) continuation
     | Assign (symbol, value) ->
         let identity =
           match List.assoc_opt symbol.key env with
@@ -4070,7 +4085,7 @@ let typed_relational_expr program analysis mode function_def ~initial_state env
   in
   (relation, List.rev !choices, generic_calls)
 
-let typed_collect_sorts program function_def =
+let typed_collect_sorts ?(extra_sorts = []) program function_def =
   let module Set = Set.Make (String) in
   let rec closed = function
     | Typed_core.S_var _ -> false
@@ -4091,7 +4106,7 @@ let typed_collect_sorts program function_def =
       (fun set (_, sort) -> add set sort)
       Set.empty function_def.Typed_core.arguments
   in
-  let set = add set function_def.result in
+  let set = List.fold_left add (add set function_def.result) extra_sorts in
   let set =
     List.fold_left
       (fun set sort -> if closed sort then add set sort else set)
@@ -4146,7 +4161,7 @@ let typed_collect_sorts program function_def =
     set program.Typed_core.registry.datatypes
   |> Set.elements
 
-let typed_collect_sort_values program function_def =
+let typed_collect_sort_values ?(extra_sorts = []) program function_def =
   let values = Hashtbl.create 32 in
   let rec closed = function
     | Typed_core.S_var _ -> false
@@ -4165,6 +4180,7 @@ let typed_collect_sort_values program function_def =
   in
   List.iter (fun (_, sort) -> add sort) function_def.Typed_core.arguments;
   add function_def.result;
+  List.iter add extra_sorts;
   List.iter
     (fun sort -> if closed sort then add sort)
     (typed_expression_sorts function_def.body);
@@ -4205,7 +4221,7 @@ let typed_collect_sort_values program function_def =
     program.registry.checked_lemmas;
   Hashtbl.fold (fun _ sort result -> sort :: result) values []
 
-let typed_datatype_prelude program function_def =
+let typed_datatype_prelude ?(extra_sorts = []) program function_def =
   let buffer = Buffer.create 4096 in
   let line format =
     Printf.kbprintf (fun _ -> Buffer.add_char buffer '\n') buffer format
@@ -4221,7 +4237,9 @@ let typed_datatype_prelude program function_def =
       (fun (datatype : Typed_core.datatype) -> datatype.native_smt)
       program.registry.datatypes
   in
-  let sort_values = typed_collect_sort_values program function_def in
+  let sort_values =
+    typed_collect_sort_values ~extra_sorts program function_def
+  in
   let tuple_sorts =
     List.filter_map
       (function
@@ -4232,7 +4250,7 @@ let typed_datatype_prelude program function_def =
   let tuple_sort_names =
     List.map (fun (sort, _) -> typed_smt_sort sort) tuple_sorts
   in
-  let collected_sorts = typed_collect_sorts program function_def in
+  let collected_sorts = typed_collect_sorts ~extra_sorts program function_def in
   collected_sorts
   |> List.iter (fun sort ->
       if
