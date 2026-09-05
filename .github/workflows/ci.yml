@@ -26,10 +26,11 @@ jobs:
           restore-keys: |
             opam-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-5.5.0-
 
-      - name: Install Z3
+      - name: Install pinned Z3
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes z3
+          python3 -m venv "$RUNNER_TEMP/refined-z3"
+          "$RUNNER_TEMP/refined-z3/bin/python" -m pip install --only-binary=:all: -r dev/z3-requirements.txt
+          echo "$RUNNER_TEMP/refined-z3/bin" >> "$GITHUB_PATH"
 
       - name: Install locked dependencies
         run: opam install . --deps-only --with-test --locked --yes
@@ -44,12 +45,23 @@ jobs:
           key: ${{ steps.opam-deps-cache.outputs.cache-primary-key }}
 
       - name: Verify compiler boundary
-        run: test "$(opam exec -- ocamlc -version)" = "5.5.0"
+        run: |
+          test "$(opam exec -- ocamlc -version)" = "5.5.0"
+          opam exec -- z3 --version
+          test "$(opam exec -- z3 --version)" = "Z3 version 4.16.0 - 64 bit"
 
       - name: Build and test
         env:
-          REFINED_SOLVER_TIMEOUT_SECONDS: 960
+          REFINED_SOLVER_TIMEOUT_SECONDS: 60
         run: opam exec -- dune build @all @install @refined
+
+      - name: Upload failed benchmark obligation
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-failure
+          path: _build/default/benchmarks/benchmark-failure.smt2
+          if-no-files-found: ignore
 
       - name: Property fuzz tests
         env:

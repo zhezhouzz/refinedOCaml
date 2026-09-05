@@ -1,0 +1,2 @@
+# Keep the solver used by CI independent of Ubuntu's apt package version.
+z3-solver==4.16.0.0

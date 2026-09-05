@@ -14,16 +14,32 @@ let compile source output =
   in
   if Sys.command command <> 0 then failwith ("failed to compile " ^ source)
 
+let write_file path contents =
+  let channel = open_out path in
+  Fun.protect
+    ~finally:(fun () -> close_out channel)
+    (fun () -> output_string channel contents)
+
 let check_result expected obligation =
-  match (expected, solve obligation) with
+  let started = Unix.gettimeofday () in
+  let result = solve obligation in
+  let elapsed = Unix.gettimeofday () -. started in
+  let fail message =
+    write_file "benchmark-failure.smt2" obligation.smt;
+    failwith
+      (Printf.sprintf "%s (%.2fs; SMT saved to benchmark-failure.smt2)" message
+         elapsed)
+  in
+  if elapsed >= 1. then Printf.printf "  %s: %.2fs\n%!" obligation.name elapsed;
+  match (expected, result) with
   | `Valid, Valid -> ()
   | `Invalid, Invalid _ -> ()
   | `Valid, Invalid model ->
-      failwith (Printf.sprintf "%s is invalid:\n%s" obligation.name model)
+      fail (Printf.sprintf "%s is invalid:\n%s" obligation.name model)
   | `Invalid, Valid ->
-      failwith (Printf.sprintf "%s unexpectedly passed" obligation.name)
+      fail (Printf.sprintf "%s unexpectedly passed" obligation.name)
   | _, Unknown reason ->
-      failwith (Printf.sprintf "%s is unknown:\n%s" obligation.name reason)
+      fail (Printf.sprintf "%s is unknown:\n%s" obligation.name reason)
 
 let verify_named source output expected_names expected_result =
   compile source output;
@@ -574,12 +590,6 @@ let runtime_mutations =
       "Const 0" );
   ]
 
-let write_file path contents =
-  let channel = open_out path in
-  Fun.protect
-    ~finally:(fun () -> close_out channel)
-    (fun () -> output_string channel contents)
-
 let run_runtime_mutation (name, source, before, after) =
   let contents = read_file source in
   let compact text =
@@ -662,6 +672,9 @@ let negative_fixtures =
 
 let () =
   try
+    Printf.printf "Solver timeout: %ds per obligation\n%!"
+      solver_timeout_seconds;
+    if Sys.command "z3 --version" <> 0 then failwith "cannot run Z3";
     validate_manifest ();
     let positive_count =
       List.fold_left

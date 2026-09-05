@@ -9,18 +9,21 @@
 每个 ADT 默认编码为 uninterpreted sort；
 constructor、recognizer 和 selector 都是 uninterpreted symbols，代数性质由可查看的 axioms 给出。
 
-当前 versioned frontend 针对 OCaml 5.5.0；运行验证还需要 `z3` 可执行文件。
+当前 versioned frontend 针对 OCaml 5.5.0；基准测试使用固定的 Z3 4.16.0。
 
 可复现环境：
 
 ```sh
+python3 -m venv /tmp/refined-z3
+/tmp/refined-z3/bin/python -m pip install --only-binary=:all: -r dev/z3-requirements.txt
+export PATH="/tmp/refined-z3/bin:$PATH"
 dev/setup-switch.sh .
 eval "$(opam env --switch=. --set-switch)"
-dune build @refined
+REFINED_SOLVER_TIMEOUT_SECONDS=60 dune build @refined
 ```
 
-脚本使用 `refined_ocaml.opam.locked` 安装经过测试的直接依赖。CI 在 Ubuntu/OCaml 5.5.0 上安装
-Z3，并运行 build、install、完整 refinement tests 和 formatting gate。compiler-libs 升级规则见
+脚本使用 `refined_ocaml.opam.locked` 安装经过测试的直接依赖。CI 在 Ubuntu/OCaml 5.5.0 上按
+`dev/z3-requirements.txt` 安装 Z3，并运行 build、install、完整 refinement tests 和 formatting gate。compiler-libs 升级规则见
 `docs/versioning.md`。
 
 Property fuzz tests：

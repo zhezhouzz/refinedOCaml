@@ -19,6 +19,21 @@ timeouts fail the suite.
 
 Run `REFINED_SOLVER_TIMEOUT_SECONDS=60 opam exec -- dune runtest benchmarks`.
 The timeout is a per-obligation ceiling, not permission to accept an unknown.
+CI pins Z3 4.16.0 through `dev/z3-requirements.txt` and checks the executable
+visible inside `opam exec`. Ubuntu's Z3 4.13.3 package times out on the red-black
+tree obligation even with a 960-second limit; that limit applies to one solver
+process, not the complete suite. To reproduce CI locally:
+
+```sh
+python3 -m venv /tmp/refined-z3
+/tmp/refined-z3/bin/python -m pip install --only-binary=:all: -r dev/z3-requirements.txt
+PATH="/tmp/refined-z3/bin:$PATH" REFINED_SOLVER_TIMEOUT_SECONDS=60 opam exec -- dune runtest benchmarks
+```
+
+The runner prints the solver version, per-obligation timeout, and timings for
+obligations taking at least a second. Unexpected solver results also write
+`benchmark-failure.smt2` in the runner's working directory; CI uploads that
+file for reproduction with `z3 -T:60 benchmark-failure.smt2`.
 
 Logical predicates have executable definitions. Their explicit trusted axioms
 are decomposition and measure laws; this verifier does not automatically prove
